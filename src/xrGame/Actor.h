@@ -17,6 +17,7 @@
 #include "xrUICore/ui_defs.h"
 
 #include "step_manager.h"
+#include "game_type.h"
 
 using namespace ACTOR_DEFS;
 
@@ -474,7 +475,7 @@ private:
 public:
     virtual void g_WeaponBones(int& L, int& R1, int& R2);
     virtual void g_fireParams(const CHudItem* pHudItem, Fvector& P, Fvector& D);
-    virtual bool g_stateFire() { return !((mstate_wishful & mcLookout) && !IsGameTypeSingle()); }
+    virtual bool g_stateFire() { return !((mstate_wishful & mcLookout) && CheckGameFlag(F_DISABLE_LEANING)); }
     virtual BOOL g_State(SEntityState& state) const;
     virtual float GetWeaponAccuracy() const;
     float GetFireDispertion() const { return m_fdisp_controller.GetCurrentDispertion(); }
