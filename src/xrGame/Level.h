@@ -443,8 +443,8 @@ public:
 private:
     xr_deque<NET_Packet> script_client_events;
 public:
-    NET_Packet* GetLastClientScriptEvent();
-    void PopLastClientScriptEvent();
+    NET_Packet* GetFrontClientScriptEvent();
+    void PopFrontClientScriptEvent();
     u32 GetSizeClientScriptEvent();
 
 #ifdef DEBUG
