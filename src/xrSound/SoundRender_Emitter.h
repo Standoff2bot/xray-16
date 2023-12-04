@@ -40,6 +40,26 @@ public:
     [[nodiscard]]
     CSoundRender_Source* source() const { return (CSoundRender_Source*)owner_data->handle; }
 
+#ifdef USE_STEAMAUDIO
+private:
+    IPLSource m_ipl_source{};
+
+    struct
+    {
+        IPLDirectEffect direct{};
+        IPLReflectionEffect reflection{};
+        IPLPathEffect path{};
+    } ipl_effects{};
+    struct
+    {
+        IPLAudioBuffer direct_input{};
+        IPLAudioBuffer direct_output{};
+    } ipl_buffers{};
+
+public:
+    auto ipl_source() const { return m_ipl_source; }
+#endif
+
     [[nodiscard]]
     u32 get_bytes_total() const;
     [[nodiscard]]

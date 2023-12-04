@@ -78,6 +78,12 @@ protected:
 
     CSoundRender_Effects* m_effects{};
 
+#ifdef USE_STEAMAUDIO
+    IPLContext m_ipl_context{};
+    IPLHRTF m_ipl_hrtf{};
+    IPLAudioSettings m_ipl_settings{};
+#endif
+
 public:
     bool supports_float_pcm{};
 
@@ -116,6 +122,13 @@ public:
     virtual void update_listener(const Fvector& P, const Fvector& D, const Fvector& N, const Fvector& R, float dt);
 
     void refresh_sources() override;
+
+#ifdef USE_STEAMAUDIO
+    [[nodiscard]]
+    auto ipl_context() const { return m_ipl_context; }
+    const auto& ipl_settings() const { return m_ipl_settings; }
+    auto ipl_hrtf() const { return m_ipl_hrtf; }
+#endif
 
 public:
     CSoundRender_Source* i_create_source(pcstr name);
