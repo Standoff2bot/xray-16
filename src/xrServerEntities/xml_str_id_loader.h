@@ -74,6 +74,9 @@ LPCSTR CSXML_IdToIndex::tag_name = nullptr;
 TEMPLATE_SPECIALIZATION
 const ITEM_DATA* CSXML_IdToIndex::GetById(const shared_str& str_id, bool no_assert)
 {
+    if (!m_pItemDataVector)
+        return nullptr;
+
     T_INIT::InitXmlIdToIndex();
     T_VECTOR::iterator it;
     for (it = m_pItemDataVector->begin(); m_pItemDataVector->end() != it; ++it)
