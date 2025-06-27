@@ -15,7 +15,8 @@ UITeamPanels::UITeamPanels() : CUIWindow("UITeamPanels")
 
 UITeamPanels::~UITeamPanels()
 {
-    CUIStatsIcon::FreeTexInfo();
+    // XXX: causes crash when quitting multiplayer modes
+    //CUIStatsIcon::FreeTexInfo();
 }
 
 void UITeamPanels::Init(LPCSTR xmlName, LPCSTR panelsRootNode)
