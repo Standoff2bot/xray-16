@@ -156,10 +156,6 @@ void game_cl_Single::OnConnected()
         return;
 
     inherited::OnConnected();
-
-    luabind::functor<void>	funct;
-    R_ASSERT(GEnv.ScriptEngine->functor("coop_game_cl.on_connected", funct));
-    funct();
 }
 
 void game_cl_Single::net_import_state(NET_Packet& P)
