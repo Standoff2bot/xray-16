@@ -152,8 +152,8 @@ void CLevel::net_Stop()
 	if (!IsGameTypeSingle())
 	{
 		luabind::functor<void> funct;
-		R_ASSERT(GEnv.ScriptEngine->functor("mp_disconnect.before_remove_objects", funct));
-		funct();
+		if (GEnv.ScriptEngine->functor("mp_disconnect.before_remove_objects", funct))
+		    funct();
 	}
 
 	remove_objects();
@@ -161,8 +161,8 @@ void CLevel::net_Stop()
 	if (!IsGameTypeSingle())
 	{
 		luabind::functor<void> funct2;
-		R_ASSERT(GEnv.ScriptEngine->functor("mp_disconnect.after_remove_objects", funct2));
-		funct2();
+        if (GEnv.ScriptEngine->functor("mp_disconnect.after_remove_objects", funct2))
+		    funct2();
 	}
 
     // WARNING ! remove_objects() uses this flag, so position of this line must e here ..
@@ -429,24 +429,24 @@ bool CLevel::Connect2Server(const char* options)
 
 	Msg ("%c client : connection %s - <%s>", m_bConnectResult ?'*':'!', m_bConnectResult ? "accepted" : "rejected", m_sConnectResult.c_str());
 
-	if(!m_bConnectResult) 
+	if(!m_bConnectResult)
 	{
 		if(Server)
 		{
 			Server->Disconnect		();
 			xr_delete				(Server);
 		}
-		OnConnectRejected			();	
+		OnConnectRejected			();
 		Disconnect					();
 		return FALSE		;
 	};
-	
+
 	if (psNET_direct_connect)
 		net_Syncronised = TRUE;
 	else
 		net_Syncronize(); // parallel
 
-	while (!net_IsSyncronised()) 
+	while (!net_IsSyncronised())
     {
 		Sleep(1);
 		if (net_Disconnected)
