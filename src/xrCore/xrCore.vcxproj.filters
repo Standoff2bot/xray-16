@@ -336,6 +336,12 @@
     <ClCompile Include="..\..\Externals\tracy\public\TracyClient.cpp">
       <Filter>Profiler</Filter>
     </ClCompile>
+    <ClCompile Include="Containers\shared_string.cpp">
+      <Filter>Containers</Filter>
+    </ClCompile>
+    <ClCompile Include="Containers\shared_string_pool.cpp">
+      <Filter>Containers</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="FTimer.h">
@@ -715,6 +721,12 @@
     </ClInclude>
     <ClInclude Include="Math\fast_lc16.hpp">
       <Filter>Math\RNG</Filter>
+    </ClInclude>
+    <ClInclude Include="Containers\shared_string.hpp">
+      <Filter>Containers</Filter>
+    </ClInclude>
+    <ClInclude Include="Containers\shared_string_pool.hpp">
+      <Filter>Containers</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

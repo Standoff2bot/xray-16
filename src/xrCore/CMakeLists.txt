@@ -110,6 +110,10 @@ target_sources_grouped(
     Containers/AssociativeVectorComparer.hpp
     Containers/AssociativeVector.hpp
     Containers/FixedMap.h
+    Containers/shared_string.cpp
+    Containers/shared_string.hpp
+    Containers/shared_string_pool.cpp
+    Containers/shared_string_pool.hpp
 )
 
 target_sources_grouped(
