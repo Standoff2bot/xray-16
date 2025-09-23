@@ -28,12 +28,8 @@
 
 #ifdef XR_PLATFORM_WINDOWS
 #include <locale>
-
-#ifdef XR_PLATFORM_WINDOWS
 #include "DiscordGameSDK/discord.h"
 #define USE_DISCORD_INTEGRATION
-#endif
-
 #include "xrCore/Text/StringConversion.hpp"
 #endif
 
