@@ -137,6 +137,7 @@ target_sources_grouped(
     xrDebug_macros.h
 )
 
+if (WIN32)
 target_sources_grouped(
     TARGET xrCore
     NAME "Debug core\\DxErr"
@@ -147,6 +148,7 @@ target_sources_grouped(
     Debug/DXGetErrorString.inl
     Debug/DXTrace.inl
 )
+endif()
 
 target_sources_grouped(
     TARGET xrCore
