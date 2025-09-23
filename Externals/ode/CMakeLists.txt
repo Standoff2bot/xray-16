@@ -89,6 +89,9 @@ target_compile_definitions(xrODE
     PUBLIC
     dSINGLE
     "$<$<CONFIG:Release,ReleaseMasterGold>:dNODEBUG>"
+    PRIVATE
+    $<$<BOOL:${BUILD_SHARED_LIBS}>:ODE_DLL>
+    $<$<BOOL:${BUILD_SHARED_LIBS}>:ODE_PLATFORM_WINDOWS>
 )
 
 set_target_properties(xrODE PROPERTIES
@@ -97,7 +100,10 @@ set_target_properties(xrODE PROPERTIES
 )
 
 if (MSVC AND BUILD_SHARED_LIBS)
-    set_target_properties(xrODE PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    set_target_properties(xrODE PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+    # Provide explicit export list and disable IPO to keep /DEF helper stable.
+    target_link_options(xrODE PRIVATE "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/config/msvcdefs.def")
+    set_property(TARGET xrODE PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
 endif()
 
 if (BUILD_SHARED_LIBS)
