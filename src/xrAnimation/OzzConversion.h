@@ -18,7 +18,7 @@ namespace detail
 using Matrix4 = std::array<std::array<float, 4>, 4>;
 
 constexpr Matrix4 kXrayToOzz = {
-    std::array<float, 4>{ 1.f, 0.f,  0.f, 0.f },
+    std::array<float, 4>{ -1.f, 0.f,  0.f, 0.f },
     std::array<float, 4>{ 0.f, 1.f,  0.f, 0.f },
     std::array<float, 4>{ 0.f, 0.f, -1.f, 0.f },
     std::array<float, 4>{ 0.f, 0.f,  0.f, 1.f }
@@ -104,7 +104,9 @@ inline ozz::math::Quaternion ExtractQuaternion(const Matrix4& matrix)
         qz = 0.25f * s;
     }
 
-    return ozz::math::Quaternion(qx, qy, qz, qw);
+    const float length_sq = qx * qx + qy * qy + qz * qz + qw * qw;
+    const float inv_length = length_sq > 0.f ? 1.f / std::sqrt(length_sq) : 1.f;
+    return ozz::math::Quaternion(qx * inv_length, qy * inv_length, qz * inv_length, qw * inv_length);
 }
 
 inline Matrix4 LoadOzzMatrix(const ozz::math::Float4x4& matrix)

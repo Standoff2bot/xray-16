@@ -35,14 +35,15 @@ struct OzzGpuVertex
 
 static inline Fvector ConvertOzzVectorToXRayBasis(Fvector value)
 {
+    value.x = -value.x;
     value.z = -value.z;
     return value;
 }
 
 static inline Fvector4 ConvertOzzTangentToXRayBasis(Fvector4 value)
 {
+    value.x = -value.x;
     value.z = -value.z;
-    value.w = -value.w;
     return value;
 }
 
@@ -219,9 +220,7 @@ void COzzSkinnedSurface::InitializeGeometry(const ozz::sample::Mesh& mesh)
 
     indices_.assign(mesh.triangle_indices.begin(), mesh.triangle_indices.end());
 
-    // Converter stores Ozz meshes with flipped winding (handedness change). Restore XRay ordering.
-    for (size_t tri = 0; tri + 2 < indices_.size(); tri += 3)
-        std::swap(indices_[tri + 1], indices_[tri + 2]);
+    // Winding is preserved by using a pure rotation basis in conversion; no swap needed here.
 
     vertex_buffer_ = xr_make_unique<VertexStreamBuffer>();
     vertex_buffer_->Create(static_cast<size_t>(vertex_count_) * sizeof(OzzGpuVertex));

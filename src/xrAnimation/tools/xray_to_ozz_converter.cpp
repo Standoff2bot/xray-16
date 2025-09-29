@@ -72,7 +72,7 @@ namespace detail
 using Matrix4 = std::array<std::array<float, 4>, 4>;
 
 constexpr Matrix4 kXrayToOzz = {
-    std::array<float, 4>{ 1.f, 0.f,  0.f, 0.f },
+    std::array<float, 4>{ -1.f, 0.f,  0.f, 0.f },
     std::array<float, 4>{ 0.f, 1.f,  0.f, 0.f },
     std::array<float, 4>{ 0.f, 0.f, -1.f, 0.f },
     std::array<float, 4>{ 0.f, 0.f,  0.f, 1.f }
@@ -1513,9 +1513,6 @@ ozz::sample::Mesh build_mesh(const std::vector<MeshVertex>& vertices, const std:
             throw std::runtime_error("remapped vertex index exceeds 16-bit range");
         mesh.triangle_indices[idx] = static_cast<uint16_t>(remapped);
     }
-
-    for (size_t tri = 0; tri + 2 < mesh.triangle_indices.size(); tri += 3)
-        std::swap(mesh.triangle_indices[tri + 1], mesh.triangle_indices[tri + 2]);
 
     mesh.joint_remaps.resize(joint_remaps.size());
     std::copy(joint_remaps.begin(), joint_remaps.end(), mesh.joint_remaps.begin());
