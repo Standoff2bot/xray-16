@@ -1,8 +1,3 @@
-add_compile_definitions(
-    $<$<CONFIG:ReleaseMasterGold>:MASTER_GOLD>
-    $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:XRAY_STATIC_BUILD>
-)
-
 add_compile_options(${XRAY_ENABLE_WARNINGS})
 
 add_subdirectory(utils)

@@ -11,6 +11,8 @@
 #include <sys/utime.h>
 #elif defined(XR_PLATFORM_POSIX)
 #include <glob.h>
+#include <SDL.h>
+#include <SDL_filesystem.h>
 #endif
 
 #include "FS_internal.h"

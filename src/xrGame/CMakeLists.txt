@@ -247,8 +247,8 @@ target_sources(xrGame PRIVATE
     animation_script_callback.h
     animation_utils.cpp
     animation_utils.h
-    #AnselManager.cpp
-    #AnselManager.h
+    $<$<STREQUAL:$<PLATFORM_ID>,Windows>:AnselManager.cpp>
+    $<$<STREQUAL:$<PLATFORM_ID>,Windows>:AnselManager.h>
     anticheat_dumpable_object.h
     antirad.cpp
     antirad.h
@@ -2496,10 +2496,24 @@ target_link_libraries(xrGame
     xrSound
     xrScriptEngine
     xrGameSpy
+    GameSpy-oxr
     xrCDB
     xrPhysics
     xrNetServer
 )
+
+if (MSVC)
+    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(_xr_ansel_lib "${CMAKE_SOURCE_DIR}/sdk/libraries/x64/AnselSDK64.lib")
+    else()
+        set(_xr_ansel_lib "${CMAKE_SOURCE_DIR}/sdk/libraries/x86/AnselSDK32.lib")
+    endif()
+
+    target_link_libraries(xrGame
+        PRIVATE
+        ${_xr_ansel_lib}
+    )
+endif()
 
 target_compile_definitions(xrGame
     PUBLIC
