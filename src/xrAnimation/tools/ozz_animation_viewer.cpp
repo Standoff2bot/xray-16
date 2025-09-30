@@ -852,6 +852,31 @@ protected:
         }
         space_was_down_ = space_down;
 
+        if (window)
+        {
+            const bool mouse_down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            if (mouse_down && !mouse_left_was_down_)
+            {
+                ImGuiContext* context = ImGui::GetCurrentContext();
+                bool mouse_captured = false;
+                if (context)
+                {
+                    const ImGuiIO& io = ImGui::GetIO();
+                    mouse_captured = io.WantCaptureMouse;
+                }
+
+                if (!mouse_captured)
+                {
+                    double cursor_x = 0.0;
+                    double cursor_y = 0.0;
+                    glfwGetCursorPos(window, &cursor_x, &cursor_y);
+                    pending_pick_pos_ = ImVec2(static_cast<float>(cursor_x), static_cast<float>(cursor_y));
+                    pending_pick_ = true;
+                }
+            }
+            mouse_left_was_down_ = mouse_down;
+        }
+
         if (HasAnimationSelected() && animations_[ui_state_.current_animation].duration() > 0.0f)
         {
             // Updates current animation time.
@@ -907,6 +932,37 @@ protected:
             success &= _renderer->DrawPosture(skeleton_, make_span(models_), transform);
         }
 
+        SelectedVertex best_pick{};
+        float best_pick_distance_sq = 0.f;
+        bool pick_found = false;
+        bool request_pick = false;
+        float pick_x = 0.f;
+        float pick_y_bottom = 0.f;
+        float viewport_width = 0.f;
+        float viewport_height = 0.f;
+        if (pending_pick_ && !meshes_.empty())
+        {
+            GLFWwindow* window = nullptr;
+            if (ozz::sample::Application::GetCurrent())
+            {
+                window = ozz::sample::Application::GetCurrent()->GetWindow();
+            }
+            if (window)
+            {
+                int fb_width = 0;
+                int fb_height = 0;
+                glfwGetFramebufferSize(window, &fb_width, &fb_height);
+                viewport_width = static_cast<float>(fb_width);
+                viewport_height = static_cast<float>(fb_height);
+                pick_x = pending_pick_pos_.x;
+                pick_y_bottom = viewport_height - pending_pick_pos_.y;
+                const float threshold_pixels = 15.f;
+                best_pick_distance_sq = threshold_pixels * threshold_pixels;
+                request_pick = true;
+            }
+            pending_pick_ = false;
+        }
+
         if (ui_state_.draw_mesh && !meshes_.empty())
         {
             const bool visibility_missing = ui_state_.mesh_visibility.size() != meshes_.size();
@@ -939,6 +995,53 @@ protected:
                 }
 
                 success &= _renderer->DrawSkinnedMesh(mesh, skinning_span, transform, draw_options);
+
+                if (request_pick)
+                {
+                    EvaluateMeshForPick(mesh_index, mesh, skinning_span, pick_x, pick_y_bottom, viewport_width, viewport_height, best_pick_distance_sq,
+                        pick_found, best_pick);
+                }
+            }
+        }
+
+        if (request_pick)
+        {
+            if (pick_found)
+            {
+                selected_vertex_ = best_pick;
+            }
+            else
+            {
+                selected_vertex_ = SelectedVertex{};
+            }
+        }
+
+        if (selected_vertex_.valid)
+        {
+            const float highlight_position[] = {
+                selected_vertex_.world_position.x,
+                selected_vertex_.world_position.y,
+                selected_vertex_.world_position.z,
+            };
+            const float highlight_size = 12.f;
+            const ozz::sample::Color highlight_color = ozz::sample::kYellow;
+
+            success &= _renderer->DrawPoints(ozz::span<const float>(highlight_position, 3), ozz::span<const float>(&highlight_size, 1),
+                ozz::span<const ozz::sample::Color>(&highlight_color, 1), ozz::math::Float4x4::identity());
+
+            const float normal_length = selected_vertex_.world_normal.x * selected_vertex_.world_normal.x +
+                selected_vertex_.world_normal.y * selected_vertex_.world_normal.y +
+                selected_vertex_.world_normal.z * selected_vertex_.world_normal.z;
+            if (normal_length > std::numeric_limits<float>::epsilon())
+            {
+                const float display_length = 0.08f;
+                ozz::math::Float3 end_point = {
+                    selected_vertex_.world_position.x + selected_vertex_.world_normal.x * display_length,
+                    selected_vertex_.world_position.y + selected_vertex_.world_normal.y * display_length,
+                    selected_vertex_.world_position.z + selected_vertex_.world_normal.z * display_length,
+                };
+                std::array<ozz::math::Float3, 2> line_points = { selected_vertex_.world_position, end_point };
+                success &= _renderer->DrawLines(ozz::make_span(line_points), ozz::sample::kCyan, ozz::math::Float4x4::identity());
             }
         }
 
@@ -1251,6 +1354,35 @@ private:
     bool use_forced_time_ratio_ = false;
 
     bool space_was_down_ = false;
+    bool mouse_left_was_down_ = false;
+
+    struct SelectedVertex
+    {
+        bool valid = false;
+        size_t mesh_index = 0;
+        int part_index = 0;
+        int local_vertex = 0;
+        uint32_t global_vertex = 0;
+        int influence_count = 0;
+        ozz::math::Float3 local_position = { 0.f, 0.f, 0.f };
+        ozz::math::Float3 world_position = { 0.f, 0.f, 0.f };
+        ozz::math::Float3 world_normal = { 0.f, 0.f, 0.f };
+        ozz::math::Float3 local_normal = { 0.f, 0.f, 0.f };
+        ozz::math::Float2 uv = { 0.f, 0.f };
+        std::array<uint16_t, 4> palette_indices{
+            { 0, 0, 0, 0 }
+        };
+        std::array<uint16_t, 4> skeleton_joints{
+            { 0, 0, 0, 0 }
+        };
+        std::array<float, 4> weights{
+            { 0.f, 0.f, 0.f, 0.f }
+        };
+    };
+
+    SelectedVertex selected_vertex_{};
+    bool pending_pick_ = false;
+    ImVec2 pending_pick_pos_{ 0.f, 0.f };
 
     // Cached lowercase joint names for lookup.
     std::vector<std::string> joint_names_lower_;
@@ -1386,6 +1518,191 @@ private:
         }
     }
 
+    void EvaluateMeshForPick(size_t mesh_index, const ozz::sample::Mesh& mesh, ozz::span<const ozz::math::Float4x4> skinning_span, float pick_x,
+        float pick_y_bottom, float viewport_width, float viewport_height, float& best_distance_sq, bool& pick_found, SelectedVertex& best_pick)
+    {
+        if (viewport_width <= 0.f || viewport_height <= 0.f)
+        {
+            return;
+        }
+
+        const bool apply_skinning = mesh.skinned() && !ui_state_.renderer_options.skip_skinning && !skinning_span.empty();
+
+        uint32_t global_vertex = 0;
+        for (size_t part_index = 0; part_index < mesh.parts.size(); ++part_index)
+        {
+            const ozz::sample::Mesh::Part& part = mesh.parts[part_index];
+            const int vertex_count = part.vertex_count();
+            if (vertex_count <= 0)
+            {
+                continue;
+            }
+
+            const int influences = std::max(1, part.influences_count());
+            const bool part_has_skinning = apply_skinning && part.joint_indices.size() >= static_cast<size_t>(vertex_count * influences);
+            const bool part_has_weights = influences > 1 && part.joint_weights.size() >= static_cast<size_t>(vertex_count * (influences - 1));
+
+            for (int local_index = 0; local_index < vertex_count; ++local_index, ++global_vertex)
+            {
+                const float* position_ptr = &part.positions[local_index * ozz::sample::Mesh::Part::kPositionsCpnts];
+                const ozz::math::Float3 local_position = { position_ptr[0], position_ptr[1], position_ptr[2] };
+                const ozz::math::SimdFloat4 local_pos_simd = ozz::math::simd_float4::Load(position_ptr[0], position_ptr[1], position_ptr[2], 1.f);
+
+                ozz::math::SimdFloat4 world_pos_simd = local_pos_simd;
+                std::array<uint16_t, 4> palette_indices{
+                    { 0, 0, 0, 0 }
+                };
+                std::array<float, 4> weights{
+                    { 0.f, 0.f, 0.f, 0.f }
+                };
+
+                if (part_has_skinning)
+                {
+                    world_pos_simd = ozz::math::simd_float4::zero();
+                    float accumulated = 0.f;
+                    for (int influence = 0; influence < influences && influence < 4; ++influence)
+                    {
+                        float weight = 1.f;
+                        if (influences > 1)
+                        {
+                            if (influence < influences - 1)
+                            {
+                                const size_t weight_index =
+                                    static_cast<size_t>(local_index) * static_cast<size_t>(influences - 1) + static_cast<size_t>(influence);
+                                weight = part_has_weights && weight_index < part.joint_weights.size() ? part.joint_weights[weight_index] : 0.f;
+                                accumulated += weight;
+                            }
+                            else
+                            {
+                                weight = std::max(0.f, 1.f - accumulated);
+                            }
+                        }
+
+                        const size_t joint_index = static_cast<size_t>(local_index) * static_cast<size_t>(influences) + static_cast<size_t>(influence);
+                        const uint16_t palette_index = joint_index < part.joint_indices.size() ? part.joint_indices[joint_index] : uint16_t{ 0 };
+
+                        palette_indices[static_cast<size_t>(influence)] = palette_index;
+                        weights[static_cast<size_t>(influence)] = weight;
+
+                        if (weight <= 0.f || palette_index >= skinning_span.size())
+                        {
+                            continue;
+                        }
+
+                        const ozz::math::SimdFloat4 transformed = ozz::math::TransformPoint(skinning_span[palette_index], local_pos_simd);
+                        world_pos_simd = ozz::math::MAdd(transformed, ozz::math::simd_float4::Load1(weight), world_pos_simd);
+                    }
+                }
+                else
+                {
+                    weights[0] = 1.f;
+                }
+
+                ozz::math::Float3 world_position;
+                ozz::math::Store3PtrU(world_pos_simd, &world_position.x);
+
+                if (!std::isfinite(world_position.x) || !std::isfinite(world_position.y) || !std::isfinite(world_position.z))
+                {
+                    continue;
+                }
+
+                const ozz::math::Float2 screen = WorldToScreen(world_position);
+                const float screen_x = screen.x;
+                const float screen_y = screen.y;
+
+                if (screen_x < 0.f || screen_y < 0.f || screen_x > viewport_width || screen_y > viewport_height)
+                {
+                    continue;
+                }
+
+                const float dx = screen_x - pick_x;
+                const float dy = screen_y - pick_y_bottom;
+                const float distance_sq = dx * dx + dy * dy;
+
+                if (distance_sq >= best_distance_sq)
+                {
+                    continue;
+                }
+
+                SelectedVertex candidate;
+                candidate.valid = true;
+                candidate.mesh_index = mesh_index;
+                candidate.part_index = static_cast<int>(part_index);
+                candidate.local_vertex = local_index;
+                candidate.global_vertex = global_vertex;
+                candidate.influence_count = influences;
+                candidate.local_position = local_position;
+                candidate.world_position = world_position;
+                candidate.palette_indices = palette_indices;
+                candidate.weights = weights;
+
+                if (!part.normals.empty())
+                {
+                    const float* normal_ptr = &part.normals[local_index * ozz::sample::Mesh::Part::kNormalsCpnts];
+                    candidate.local_normal = { normal_ptr[0], normal_ptr[1], normal_ptr[2] };
+
+                    ozz::math::SimdFloat4 local_normal_simd = ozz::math::simd_float4::Load(normal_ptr[0], normal_ptr[1], normal_ptr[2], 0.f);
+                    ozz::math::SimdFloat4 world_normal_simd = local_normal_simd;
+
+                    if (part_has_skinning)
+                    {
+                        world_normal_simd = ozz::math::simd_float4::zero();
+                        for (int influence = 0; influence < influences && influence < 4; ++influence)
+                        {
+                            const float weight = weights[static_cast<size_t>(influence)];
+                            if (weight <= 0.f)
+                            {
+                                continue;
+                            }
+                            const uint16_t palette_index = palette_indices[static_cast<size_t>(influence)];
+                            if (palette_index >= skinning_span.size())
+                            {
+                                continue;
+                            }
+                            const ozz::math::SimdFloat4 transformed = ozz::math::TransformVector(skinning_span[palette_index], local_normal_simd);
+                            world_normal_simd = ozz::math::MAdd(transformed, ozz::math::simd_float4::Load1(weight), world_normal_simd);
+                        }
+                    }
+
+                    ozz::math::Float3 world_normal;
+                    ozz::math::Store3PtrU(world_normal_simd, &world_normal.x);
+                    const float length_sq = world_normal.x * world_normal.x + world_normal.y * world_normal.y + world_normal.z * world_normal.z;
+                    if (length_sq > std::numeric_limits<float>::epsilon())
+                    {
+                        const float inv_len = 1.f / std::sqrt(length_sq);
+                        world_normal.x *= inv_len;
+                        world_normal.y *= inv_len;
+                        world_normal.z *= inv_len;
+                    }
+                    candidate.world_normal = world_normal;
+                }
+
+                if (!part.uvs.empty())
+                {
+                    const float* uv_ptr = &part.uvs[local_index * ozz::sample::Mesh::Part::kUVsCpnts];
+                    candidate.uv = { uv_ptr[0], uv_ptr[1] };
+                }
+
+                for (size_t influence = 0; influence < 4; ++influence)
+                {
+                    const uint16_t palette_index = candidate.palette_indices[influence];
+                    if (influence < static_cast<size_t>(candidate.influence_count) && palette_index < mesh.joint_remaps.size())
+                    {
+                        candidate.skeleton_joints[influence] = mesh.joint_remaps[palette_index];
+                    }
+                    else
+                    {
+                        candidate.skeleton_joints[influence] = std::numeric_limits<uint16_t>::max();
+                    }
+                }
+
+                best_pick = candidate;
+                best_distance_sq = distance_sq;
+                pick_found = true;
+            }
+        }
+    }
+
     void SetCurrentAnimation(int index)
     {
         int resolved = index;
@@ -1455,6 +1772,7 @@ private:
                     ImGui::DockBuilderDockWindow("Inverse Kinematics", dock_right_id);
                     ImGui::DockBuilderDockWindow("Rendering", dock_right_id);
                     ImGui::DockBuilderDockWindow("Metadata", dock_right_id);
+                    ImGui::DockBuilderDockWindow("Vertex Inspector", dock_right_id);
                     ImGui::DockBuilderDockWindow("Logging", dock_right_bottom_id);
                     ImGui::DockBuilderDockWindow("Bone Transforms", dock_right_bottom_id);
 
@@ -1471,6 +1789,7 @@ private:
         DrawFootIkPanel();
         DrawBoneTransformsPanel();
         DrawMetadataPanel();
+        DrawVertexInspectorPanel();
     }
 
     void DrawPerformancePanel()
@@ -1935,6 +2254,69 @@ private:
             ImGui::Separator();
             ImGui::Text("Mesh file: %s", mesh_label_.c_str());
             ImGui::Text("Loaded meshes: %zu", meshes_.size());
+        }
+
+        ImGui::End();
+    }
+
+    void DrawVertexInspectorPanel()
+    {
+        if (!ImGui::Begin("Vertex Inspector"))
+        {
+            ImGui::End();
+            return;
+        }
+
+        if (!selected_vertex_.valid)
+        {
+            ImGui::TextUnformatted("Click a vertex in the viewport to inspect it.");
+            ImGui::End();
+            return;
+        }
+
+        if (ImGui::Button("Clear selection"))
+        {
+            selected_vertex_ = SelectedVertex{};
+            ImGui::End();
+            return;
+        }
+
+        ImGui::Separator();
+
+        const size_t mesh_index = selected_vertex_.mesh_index;
+        const char* mesh_label = (mesh_index < mesh_names_.size()) ? mesh_names_[mesh_index].c_str() : "(mesh)";
+        ImGui::Text("Mesh: %s (index %zu)", mesh_label, mesh_index);
+        ImGui::Text("Part: %d", selected_vertex_.part_index);
+        ImGui::Text("Vertex (local/global): %d / %u", selected_vertex_.local_vertex, selected_vertex_.global_vertex);
+        ImGui::Text("Influences: %d", selected_vertex_.influence_count);
+
+        ImGui::Separator();
+        ImGui::Text("World position: (%.4f, %.4f, %.4f)", selected_vertex_.world_position.x, selected_vertex_.world_position.y,
+            selected_vertex_.world_position.z);
+        ImGui::Text("Local position: (%.4f, %.4f, %.4f)", selected_vertex_.local_position.x, selected_vertex_.local_position.y,
+            selected_vertex_.local_position.z);
+
+        if (selected_vertex_.world_normal.x != 0.f || selected_vertex_.world_normal.y != 0.f || selected_vertex_.world_normal.z != 0.f)
+        {
+            ImGui::Text("World normal: (%.4f, %.4f, %.4f)", selected_vertex_.world_normal.x, selected_vertex_.world_normal.y, selected_vertex_.world_normal.z);
+        }
+        if (selected_vertex_.local_normal.x != 0.f || selected_vertex_.local_normal.y != 0.f || selected_vertex_.local_normal.z != 0.f)
+        {
+            ImGui::Text("Local normal: (%.4f, %.4f, %.4f)", selected_vertex_.local_normal.x, selected_vertex_.local_normal.y, selected_vertex_.local_normal.z);
+        }
+        ImGui::Text("UV: (%.4f, %.4f)", selected_vertex_.uv.x, selected_vertex_.uv.y);
+
+        auto joint_names = skeleton_.joint_names();
+        ImGui::Separator();
+        ImGui::TextUnformatted("Bone influences:");
+        for (int influence = 0; influence < selected_vertex_.influence_count && influence < 4; ++influence)
+        {
+            const uint16_t palette_index = selected_vertex_.palette_indices[static_cast<size_t>(influence)];
+            const uint16_t joint_index = selected_vertex_.skeleton_joints[static_cast<size_t>(influence)];
+            const float weight = selected_vertex_.weights[static_cast<size_t>(influence)];
+            const bool joint_valid = joint_index != std::numeric_limits<uint16_t>::max() && static_cast<size_t>(joint_index) < joint_names.size();
+            const char* joint_name = joint_valid ? joint_names[joint_index] : "(invalid)";
+            ImGui::Text("%d: palette %u, joint %u (%s), weight %.4f", influence, palette_index, static_cast<unsigned>(joint_index), joint_name, weight);
         }
 
         ImGui::End();
