@@ -1736,6 +1736,12 @@ private:
     bool space_was_down_ = false;
     bool mouse_left_was_down_ = false;
 
+    struct VertexReference
+    {
+        size_t part_index = 0;
+        int local_index = 0;
+    };
+
     struct SelectedTriangle
     {
         bool valid = false;
@@ -1743,6 +1749,9 @@ private:
         uint32_t triangle_index = 0;
         std::array<uint32_t, 3> vertex_indices{
             { 0u, 0u, 0u }
+        };
+        std::array<VertexReference, 3> vertex_refs{
+            { VertexReference{}, VertexReference{}, VertexReference{} }
         };
         std::array<ozz::math::Float3, 3> world_positions{
             { ozz::math::Float3{ 0.f, 0.f, 0.f }, ozz::math::Float3{ 0.f, 0.f, 0.f }, ozz::math::Float3{ 0.f, 0.f, 0.f } }
@@ -1757,12 +1766,6 @@ private:
         float view_depth = std::numeric_limits<float>::infinity();
         float ray_distance = std::numeric_limits<float>::infinity();
         float screen_distance_sq = std::numeric_limits<float>::infinity();
-    };
-
-    struct VertexReference
-    {
-        size_t part_index = 0;
-        int local_index = 0;
     };
 
     SelectedTriangle selected_triangle_{};
@@ -2642,6 +2645,8 @@ private:
             for (size_t corner = 0; corner < 3; ++corner)
             {
                 const uint32_t vertex_index = candidate.vertex_indices[corner];
+                candidate.vertex_refs[corner] = (vertex_index < vertex_refs.size()) ? vertex_refs[vertex_index] : VertexReference{};
+
                 ozz::math::Float2 uv{ 0.f, 0.f };
                 if (vertex_index < vertex_refs.size())
                 {
@@ -2710,11 +2715,98 @@ private:
 
         ImGui::Separator();
         ImGui::TextUnformatted("Vertices:");
+        const auto joint_names_span = skeleton_.joint_names();
+        const int joint_count = skeleton_.num_joints();
+        const ozz::sample::Mesh* mesh_ptr = mesh_index < meshes_.size() ? &meshes_[mesh_index] : nullptr;
         for (size_t i = 0; i < selected_triangle_.world_positions.size(); ++i)
         {
             const ozz::math::Float3& pos = selected_triangle_.world_positions[i];
             const ozz::math::Float2& uv = selected_triangle_.uvs[i];
             ImGui::Text("%zu: index %u, world (%.4f, %.4f, %.4f), uv (%.4f, %.4f)", i, selected_triangle_.vertex_indices[i], pos.x, pos.y, pos.z, uv.x, uv.y);
+
+            const VertexReference& vref = selected_triangle_.vertex_refs[i];
+            ImGui::Indent();
+            ImGui::Text("Part %zu, local %d", vref.part_index, vref.local_index);
+
+            if (mesh_ptr && vref.part_index < mesh_ptr->parts.size() && vref.local_index >= 0)
+            {
+                const ozz::sample::Mesh::Part& part = mesh_ptr->parts[vref.part_index];
+                const int influences = std::max(1, part.influences_count());
+                const size_t vertex_local = static_cast<size_t>(vref.local_index);
+
+                if (influences > 0 && vertex_local < part.positions.size() / ozz::sample::Mesh::Part::kPositionsCpnts)
+                {
+                    std::vector<float> weight_values(static_cast<size_t>(influences), 0.f);
+                    std::vector<uint16_t> palette_indices(static_cast<size_t>(influences), uint16_t{ 0 });
+
+                    float accumulated = 0.f;
+                    for (int influence = 0; influence < influences; ++influence)
+                    {
+                        float weight = 1.f;
+                        if (influences > 1)
+                        {
+                            if (influence < influences - 1)
+                            {
+                                const size_t weight_index = vertex_local * static_cast<size_t>(influences - 1) + static_cast<size_t>(influence);
+                                if (weight_index < part.joint_weights.size())
+                                {
+                                    weight = part.joint_weights[weight_index];
+                                }
+                                else
+                                {
+                                    weight = 0.f;
+                                }
+                                accumulated += weight;
+                            }
+                            else
+                            {
+                                weight = std::max(0.f, 1.f - accumulated);
+                            }
+                        }
+
+                        const size_t joint_offset = vertex_local * static_cast<size_t>(influences) + static_cast<size_t>(influence);
+                        const uint16_t palette_index = joint_offset < part.joint_indices.size() ? part.joint_indices[joint_offset] : uint16_t{ 0 };
+
+                        weight_values[static_cast<size_t>(influence)] = weight;
+                        palette_indices[static_cast<size_t>(influence)] = palette_index;
+                    }
+
+                    for (size_t influence = 0; influence < weight_values.size(); ++influence)
+                    {
+                        const uint16_t palette_index = palette_indices[influence];
+                        int skeleton_joint = -1;
+                        if (palette_index < mesh_ptr->joint_remaps.size())
+                        {
+                            skeleton_joint = mesh_ptr->joint_remaps[palette_index];
+                        }
+
+                        const char* joint_name = "(unknown)";
+                        if (skeleton_joint >= 0 && skeleton_joint < joint_count)
+                        {
+                            joint_name = joint_names_span[static_cast<size_t>(skeleton_joint)];
+                        }
+
+                        const float weight = weight_values[influence];
+                        ImGui::BulletText("Influence %zu: palette %u, joint %d (%s), weight %.4f", influence, palette_index, skeleton_joint, joint_name, weight);
+                    }
+                }
+                else
+                {
+                    ImGui::BulletText("No skinning data available for this vertex.");
+                }
+            }
+            else
+            {
+                if (!mesh_ptr)
+                {
+                    ImGui::BulletText("Mesh data unavailable to resolve this vertex.");
+                }
+                else
+                {
+                    ImGui::BulletText("Invalid vertex reference (part %zu, local %d).", vref.part_index, vref.local_index);
+                }
+            }
+            ImGui::Unindent();
         }
 
         ImGui::End();
