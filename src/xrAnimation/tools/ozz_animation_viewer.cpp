@@ -930,12 +930,15 @@ protected:
         bool success = true;
         const ozz::math::Float4x4 transform = ozz::math::Float4x4::identity();
 
+        ozz::sample::internal::RendererImpl* renderer_impl = dynamic_cast<ozz::sample::internal::RendererImpl*>(_renderer);
         const ozz::math::Float4x4* view_projection = nullptr;
-        if (auto* renderer_impl = dynamic_cast<ozz::sample::internal::RendererImpl*>(_renderer))
+        ozz::sample::internal::Camera* renderer_camera = nullptr;
+        if (renderer_impl)
         {
-            if (renderer_impl->camera())
+            renderer_camera = renderer_impl->camera();
+            if (renderer_camera)
             {
-                view_projection = &renderer_impl->camera()->view_proj();
+                view_projection = &renderer_camera->view_proj();
             }
         }
 
@@ -972,6 +975,87 @@ protected:
                 request_pick = true;
             }
             pending_pick_ = false;
+        }
+
+        if (request_pick)
+        {
+            if (renderer_camera && viewport_width > 0.f && viewport_height > 0.f)
+            {
+                const float ndc_x = (pick_x / viewport_width) * 2.f - 1.f;
+                const float ndc_y = (pick_y / viewport_height) * 2.f - 1.f;
+
+                const ozz::math::Float4x4 inv_proj = ozz::math::Invert(renderer_camera->projection());
+                const ozz::math::Float4x4 inv_view = ozz::math::Invert(renderer_camera->view());
+
+                const ozz::math::SimdFloat4 near_ndc = ozz::math::simd_float4::Load(ndc_x, ndc_y, -1.f, 1.f);
+                const ozz::math::SimdFloat4 far_ndc = ozz::math::simd_float4::Load(ndc_x, ndc_y, 1.f, 1.f);
+
+                ozz::math::SimdFloat4 view_near = ozz::math::TransformPoint(inv_proj, near_ndc);
+                ozz::math::SimdFloat4 view_far = ozz::math::TransformPoint(inv_proj, far_ndc);
+
+                float view_near_components[4];
+                float view_far_components[4];
+                ozz::math::StorePtrU(view_near, view_near_components);
+                ozz::math::StorePtrU(view_far, view_far_components);
+
+                const float near_w = view_near_components[3];
+                const float far_w = view_far_components[3];
+                const float epsilon = std::numeric_limits<float>::epsilon();
+
+                if (std::fabs(near_w) <= epsilon || std::fabs(far_w) <= epsilon)
+                {
+                    pick_ray_valid_ = false;
+                }
+                else
+                {
+                    ozz::math::Float3 view_origin = {
+                        view_near_components[0] / near_w,
+                        view_near_components[1] / near_w,
+                        view_near_components[2] / near_w,
+                    };
+
+                    ozz::math::Float3 view_point = {
+                        view_far_components[0] / far_w,
+                        view_far_components[1] / far_w,
+                        view_far_components[2] / far_w,
+                    };
+
+                    ozz::math::Float3 view_dir = {
+                        view_point.x - view_origin.x,
+                        view_point.y - view_origin.y,
+                        view_point.z - view_origin.z,
+                    };
+
+                    const float dir_length_sq = view_dir.x * view_dir.x + view_dir.y * view_dir.y + view_dir.z * view_dir.z;
+                    if (dir_length_sq <= epsilon)
+                    {
+                        pick_ray_valid_ = false;
+                    }
+                    else
+                    {
+                        const float inv_dir_length = 1.f / std::sqrt(dir_length_sq);
+                        view_dir.x *= inv_dir_length;
+                        view_dir.y *= inv_dir_length;
+                        view_dir.z *= inv_dir_length;
+
+                        const ozz::math::SimdFloat4 view_origin_simd = ozz::math::simd_float4::Load(view_origin.x, view_origin.y, view_origin.z, 1.f);
+                        const ozz::math::SimdFloat4 view_dir_simd = ozz::math::simd_float4::Load(view_dir.x, view_dir.y, view_dir.z, 0.f);
+
+                        const ozz::math::SimdFloat4 world_origin_simd = ozz::math::TransformPoint(inv_view, view_origin_simd);
+                        ozz::math::SimdFloat4 world_dir_simd = ozz::math::TransformVector(inv_view, view_dir_simd);
+                        world_dir_simd = ozz::math::Normalize3(world_dir_simd);
+
+                        ozz::math::Store3PtrU(world_origin_simd, &pick_ray_origin_.x);
+                        ozz::math::Store3PtrU(world_dir_simd, &pick_ray_direction_.x);
+                        pick_ray_length_ = 200.f;
+                        pick_ray_valid_ = true;
+                    }
+                }
+            }
+            else
+            {
+                pick_ray_valid_ = false;
+            }
         }
 
         if (ui_state_.draw_mesh && !meshes_.empty())
@@ -1051,7 +1135,6 @@ protected:
                         for (int local_index = 0; local_index < vertex_count_in_part; ++local_index, ++global_vertex)
                         {
                             const float* position_ptr = &part.positions[local_index * ozz::sample::Mesh::Part::kPositionsCpnts];
-                            const ozz::math::Float3 local_position = { position_ptr[0], position_ptr[1], position_ptr[2] };
                             const ozz::math::SimdFloat4 local_pos_simd = ozz::math::simd_float4::Load(position_ptr[0], position_ptr[1], position_ptr[2], 1.f);
 
                             ozz::math::SimdFloat4 world_pos_simd = local_pos_simd;
@@ -1260,6 +1343,16 @@ protected:
         if (request_pick && triangle_pick_found)
         {
             selected_triangle_ = best_triangle_candidate;
+        }
+
+        if (pick_ray_valid_)
+        {
+            std::array<ozz::math::Float3, 2> ray_points;
+            ray_points[0] = pick_ray_origin_;
+            ray_points[1] = { pick_ray_origin_.x + pick_ray_direction_.x * pick_ray_length_, pick_ray_origin_.y + pick_ray_direction_.y * pick_ray_length_,
+                pick_ray_origin_.z + pick_ray_direction_.z * pick_ray_length_ };
+
+            success &= _renderer->DrawLines(ozz::make_span(ray_points), ozz::sample::kYellow, transform);
         }
 
         if (selected_triangle_.valid)
@@ -1487,6 +1580,7 @@ protected:
             LoadMeshTextures(reference_path.c_str());
             RefreshMeshDisplayState();
             BuildTriangleDebugMeshes();
+            pick_ray_valid_ = false;
             return true;
         };
 
@@ -1506,6 +1600,7 @@ protected:
             ui_state_.mesh_visibility.clear();
             ReleaseMeshTextures();
             triangle_debug_meshes_.clear();
+            pick_ray_valid_ = false;
         }
 
         if (!ComputeBindPoseModelMatrices())
@@ -1669,6 +1764,11 @@ private:
     SelectedTriangle selected_triangle_{};
     bool pending_pick_ = false;
     ImVec2 pending_pick_pos_{ 0.f, 0.f };
+
+    bool pick_ray_valid_ = false;
+    ozz::math::Float3 pick_ray_origin_{ 0.f, 0.f, 0.f };
+    ozz::math::Float3 pick_ray_direction_{ 0.f, 0.f, -1.f };
+    float pick_ray_length_ = 100.f;
 
     struct TriangleDebugMesh
     {
