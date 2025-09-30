@@ -78,6 +78,7 @@ target_sources(xrODE PRIVATE
     include/ode/timer.h
     contrib/msvc7/ode_default/de_padf_integration.cpp
     contrib/msvc7/ode_default/de_padf_integration.h
+    config/msvcdefs.def
 )
 
 target_include_directories(xrODE
@@ -89,22 +90,12 @@ target_compile_definitions(xrODE
     PUBLIC
     dSINGLE
     "$<$<CONFIG:Release,ReleaseMasterGold>:dNODEBUG>"
-    PRIVATE
-    $<$<BOOL:${BUILD_SHARED_LIBS}>:ODE_DLL>
-    $<$<BOOL:${BUILD_SHARED_LIBS}>:ODE_PLATFORM_WINDOWS>
 )
 
 set_target_properties(xrODE PROPERTIES
     PREFIX ""
     UNITY_BUILD OFF
 )
-
-if (MSVC AND BUILD_SHARED_LIBS)
-    set_target_properties(xrODE PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS OFF)
-    # Provide explicit export list and disable IPO to keep /DEF helper stable.
-    target_link_options(xrODE PRIVATE "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/config/msvcdefs.def")
-    set_property(TARGET xrODE PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
-endif()
 
 if (BUILD_SHARED_LIBS)
     install(TARGETS xrODE LIBRARY
