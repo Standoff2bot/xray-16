@@ -1058,6 +1058,9 @@ protected:
             }
         }
 
+        const ozz::math::Float3* pick_ray_origin_ptr = (request_pick && pick_ray_valid_) ? &pick_ray_origin_ : nullptr;
+        const ozz::math::Float3* pick_ray_direction_ptr = (request_pick && pick_ray_valid_) ? &pick_ray_direction_ : nullptr;
+
         if (ui_state_.draw_mesh && !meshes_.empty())
         {
             const bool visibility_missing = ui_state_.mesh_visibility.size() != meshes_.size();
@@ -1235,7 +1238,7 @@ protected:
                     {
                         SelectedTriangle candidate;
                         if (EvaluateTrianglePick(mesh_index, mesh, world_positions, vertex_refs, pick_x, pick_y, viewport_width, viewport_height,
-                                view_projection, candidate))
+                                view_projection, pick_ray_origin_ptr, pick_ray_direction_ptr, candidate))
                         {
                             if (!triangle_pick_found || IsBetterTrianglePick(candidate, best_triangle_candidate))
                             {
@@ -1752,6 +1755,7 @@ private:
         float area = 0.f;
         bool has_view_depth = false;
         float view_depth = std::numeric_limits<float>::infinity();
+        float ray_distance = std::numeric_limits<float>::infinity();
         float screen_distance_sq = std::numeric_limits<float>::infinity();
     };
 
@@ -1790,6 +1794,25 @@ private:
         if (!candidate.valid)
         {
             return false;
+        }
+
+        const bool candidate_has_ray = std::isfinite(candidate.ray_distance);
+        const bool current_has_ray = std::isfinite(current.ray_distance);
+
+        if (candidate_has_ray && current_has_ray)
+        {
+            if (candidate.ray_distance + depth_epsilon < current.ray_distance)
+            {
+                return true;
+            }
+            if (current.ray_distance + depth_epsilon < candidate.ray_distance)
+            {
+                return false;
+            }
+        }
+        else if (candidate_has_ray != current_has_ray)
+        {
+            return candidate_has_ray;
         }
 
         const bool candidate_has_depth = candidate.has_view_depth && std::isfinite(candidate.view_depth);
@@ -2509,10 +2532,11 @@ private:
     }
 
     bool EvaluateTrianglePick(size_t mesh_index, const ozz::sample::Mesh& mesh, const std::vector<ozz::math::Float3>& world_positions,
-        const std::vector<VertexReference>& vertex_refs, float pick_x, float pick_y, float viewport_width, float viewport_height,
-        const ozz::math::Float4x4* view_projection, SelectedTriangle& out_triangle) const
+        const std::vector<VertexReference>& vertex_refs, [[maybe_unused]] float pick_x, [[maybe_unused]] float pick_y, [[maybe_unused]] float viewport_width,
+        [[maybe_unused]] float viewport_height, const ozz::math::Float4x4*, const ozz::math::Float3* ray_origin, const ozz::math::Float3* ray_direction,
+        SelectedTriangle& out_triangle) const
     {
-        if (world_positions.empty())
+        if (world_positions.empty() || !ray_origin || !ray_direction)
         {
             return false;
         }
@@ -2523,38 +2547,18 @@ private:
             return false;
         }
 
-        const bool use_depth = view_projection != nullptr;
+        const ozz::math::Float3 origin = *ray_origin;
+        const ozz::math::Float3 direction = *ray_direction;
+        const float ray_length = pick_ray_length_;
 
-        struct PerspectiveInfo
+        auto Cross = [](const ozz::math::Float3& a, const ozz::math::Float3& b) -> ozz::math::Float3
         {
-            bool valid = false;
-            float inv_w = 0.f;
-            float ndc_z = 0.f;
+            return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };
         };
-
-        std::vector<PerspectiveInfo> perspective;
-        if (use_depth)
+        auto Dot = [](const ozz::math::Float3& a, const ozz::math::Float3& b) -> float
         {
-            perspective.resize(world_positions.size());
-            for (size_t vertex = 0; vertex < world_positions.size(); ++vertex)
-            {
-                const ozz::math::Float3& pos = world_positions[vertex];
-                const ozz::math::SimdFloat4 local = ozz::math::simd_float4::Load(pos.x, pos.y, pos.z, 1.f);
-                const ozz::math::SimdFloat4 clip = ozz::math::TransformPoint(*view_projection, local);
-                const float clip_w = ozz::math::GetW(clip);
-                if (std::fabs(clip_w) <= std::numeric_limits<float>::epsilon())
-                {
-                    perspective[vertex] = PerspectiveInfo{};
-                    continue;
-                }
-
-                PerspectiveInfo info;
-                info.valid = true;
-                info.inv_w = 1.f / clip_w;
-                info.ndc_z = ozz::math::GetZ(clip) * info.inv_w;
-                perspective[vertex] = info;
-            }
-        }
+            return a.x * b.x + a.y * b.y + a.z * b.z;
+        };
 
         bool found = false;
         SelectedTriangle best_triangle;
@@ -2576,45 +2580,37 @@ private:
             const ozz::math::Float3& p1 = world_positions[idx1];
             const ozz::math::Float3& p2 = world_positions[idx2];
 
-            const ozz::math::Float2 screen0 = WorldToScreen(p0);
-            const ozz::math::Float2 screen1 = WorldToScreen(p1);
-            const ozz::math::Float2 screen2 = WorldToScreen(p2);
+            const ozz::math::Float3 edge0{ p1.x - p0.x, p1.y - p0.y, p1.z - p0.z };
+            const ozz::math::Float3 edge1{ p2.x - p0.x, p2.y - p0.y, p2.z - p0.z };
 
-            if (!std::isfinite(screen0.x) ||
-                !std::isfinite(screen0.y) ||
-                !std::isfinite(screen1.x) ||
-                !std::isfinite(screen1.y) ||
-                !std::isfinite(screen2.x) ||
-                !std::isfinite(screen2.y))
+            const ozz::math::Float3 pvec = Cross(direction, edge1);
+            const float det = Dot(edge0, pvec);
+            if (std::fabs(det) <= epsilon)
             {
                 continue;
             }
 
-            const float ax = screen0.x;
-            const float ay = viewport_height - screen0.y;
-            const float bx = screen1.x;
-            const float by = viewport_height - screen1.y;
-            const float cx = screen2.x;
-            const float cy = viewport_height - screen2.y;
-
-            const float area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-            if (std::fabs(area) <= epsilon)
+            const float inv_det = 1.f / det;
+            const ozz::math::Float3 s{ origin.x - p0.x, origin.y - p0.y, origin.z - p0.z };
+            const float u = Dot(s, pvec) * inv_det;
+            if (u < 0.f || u > 1.f)
             {
                 continue;
             }
 
-            const float w0 = ((bx - cx) * (pick_y - cy) + (cy - by) * (pick_x - cx)) / area;
-            const float w1 = ((cx - ax) * (pick_y - ay) + (ay - cy) * (pick_x - ax)) / area;
-            const float w2 = 1.f - w0 - w1;
-
-            if (w0 < -epsilon || w1 < -epsilon || w2 < -epsilon)
+            const ozz::math::Float3 qvec = Cross(s, edge0);
+            const float v = Dot(direction, qvec) * inv_det;
+            if (v < 0.f || u + v > 1.f)
             {
                 continue;
             }
 
-            const float centroid_x = (ax + bx + cx) * (1.f / 3.f);
-            const float centroid_y = (ay + by + cy) * (1.f / 3.f);
-            const float screen_distance_sq = (centroid_x - pick_x) * (centroid_x - pick_x) + (centroid_y - pick_y) * (centroid_y - pick_y);
+            const float t = Dot(edge1, qvec) * inv_det;
+            if (t < epsilon || t > ray_length)
+            {
+                continue;
+            }
+
             SelectedTriangle candidate;
             candidate.valid = true;
             candidate.mesh_index = mesh_index;
@@ -2622,16 +2618,16 @@ private:
             candidate.vertex_indices = { idx0, idx1, idx2 };
             candidate.world_positions = { p0, p1, p2 };
             candidate.centroid = { (p0.x + p1.x + p2.x) * (1.f / 3.f), (p0.y + p1.y + p2.y) * (1.f / 3.f), (p0.z + p1.z + p2.z) * (1.f / 3.f) };
-            candidate.screen_distance_sq = screen_distance_sq;
+            candidate.screen_distance_sq = 0.f;
+            candidate.ray_distance = t;
 
-            const ozz::math::Float3 edge0 = { p1.x - p0.x, p1.y - p0.y, p1.z - p0.z };
-            const ozz::math::Float3 edge1 = { p2.x - p0.x, p2.y - p0.y, p2.z - p0.z };
-            ozz::math::Float3 normal = { edge0.y * edge1.z - edge0.z * edge1.y, edge0.z * edge1.x - edge0.x * edge1.z, edge0.x * edge1.y - edge0.y * edge1.x };
-            const float normal_length_sq = normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
+            const ozz::math::Float3 normal_raw = Cross(edge0, edge1);
+            const float normal_length_sq = Dot(normal_raw, normal_raw);
             if (normal_length_sq > epsilon)
             {
                 const float normal_length = std::sqrt(normal_length_sq);
-                candidate.world_normal = { normal.x / normal_length, normal.y / normal_length, normal.z / normal_length };
+                const float inv_normal_length = 1.f / normal_length;
+                candidate.world_normal = { normal_raw.x * inv_normal_length, normal_raw.y * inv_normal_length, normal_raw.z * inv_normal_length };
                 candidate.area = 0.5f * normal_length;
             }
             else
@@ -2640,33 +2636,8 @@ private:
                 candidate.area = 0.f;
             }
 
-            if (use_depth)
-            {
-                const PerspectiveInfo& info0 = perspective[idx0];
-                const PerspectiveInfo& info1 = perspective[idx1];
-                const PerspectiveInfo& info2 = perspective[idx2];
-                if (info0.valid && info1.valid && info2.valid)
-                {
-                    const float w0_corr = w0 * info0.inv_w;
-                    const float w1_corr = w1 * info1.inv_w;
-                    const float w2_corr = w2 * info2.inv_w;
-                    const float weight_sum = w0_corr + w1_corr + w2_corr;
-                    if (std::fabs(weight_sum) > epsilon)
-                    {
-                        const float inv_sum = 1.f / weight_sum;
-                        const float b0 = w0_corr * inv_sum;
-                        const float b1 = w1_corr * inv_sum;
-                        const float b2 = w2_corr * inv_sum;
-                        const float ndc_depth = b0 * info0.ndc_z + b1 * info1.ndc_z + b2 * info2.ndc_z;
-                        const float depth = ndc_depth * 0.5f + 0.5f;
-                        if (std::isfinite(depth))
-                        {
-                            candidate.has_view_depth = true;
-                            candidate.view_depth = depth;
-                        }
-                    }
-                }
-            }
+            candidate.has_view_depth = false;
+            candidate.view_depth = t;
 
             for (size_t corner = 0; corner < 3; ++corner)
             {
