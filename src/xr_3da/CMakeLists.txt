@@ -39,10 +39,6 @@ if (WIN32)
         xrRenderPC_R4
     )
 
-    set_target_properties(xr_3da PROPERTIES
-        WIN32_EXECUTABLE ON
-    )
-
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)
         set(_xr_runtime_dir "${CMAKE_SOURCE_DIR}/sdk/binaries/x64")
     else()
@@ -60,6 +56,7 @@ endif()
 
 set_target_properties(xr_3da PROPERTIES
     PREFIX ""
+    WIN32_EXECUTABLE ON
 )
 
 install(TARGETS xr_3da RUNTIME

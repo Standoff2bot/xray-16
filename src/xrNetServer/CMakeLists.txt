@@ -1,22 +1,7 @@
 add_library(xrNetServer)
 
-set(XR_NETSERVER_PLATFORM_SOURCES
-    empty/NET_Client.cpp
-    empty/NET_Client.h
-    empty/NET_Server.cpp
-    empty/NET_Server.h
-)
-
-if (WIN32)
-    set(XR_NETSERVER_PLATFORM_SOURCES
-        NET_Client.cpp
-        NET_Client.h
-        NET_Server.cpp
-        NET_Server.h
-    )
-endif()
-
-target_sources(xrNetServer PRIVATE
+target_sources(xrNetServer
+    PRIVATE
     guids.cpp
     ip_filter.cpp
     ip_filter.h
@@ -33,8 +18,23 @@ target_sources(xrNetServer PRIVATE
     NET_Shared.h
     stdafx.cpp
     stdafx.h
-    ${XR_NETSERVER_PLATFORM_SOURCES}
 )
+
+if (WIN32)
+    target_sources(xrNetServer PRIVATE
+        NET_Client.cpp
+        NET_Client.h
+        NET_Server.cpp
+        NET_Server.h
+    )
+else()
+    target_sources(xrNetServer PRIVATE
+        empty/NET_Client.cpp
+        empty/NET_Client.h
+        empty/NET_Server.cpp
+        empty/NET_Server.h
+    )
+endif()
 
 target_include_directories(xrNetServer
     PRIVATE
