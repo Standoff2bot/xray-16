@@ -42,6 +42,7 @@
 #include <limits>
 #include <locale>
 #include <memory>
+#include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -49,6 +50,10 @@
 #include "../Externals/ozz-animation/samples/framework/application.h"
 #include "../Externals/ozz-animation/samples/framework/mesh.h"
 #include "../Externals/ozz-animation/samples/framework/renderer.h"
+#define OZZ_INCLUDE_PRIVATE_HEADER
+#include "../Externals/ozz-animation/samples/framework/internal/camera.h"
+#include "../Externals/ozz-animation/samples/framework/internal/renderer_impl.h"
+#undef OZZ_INCLUDE_PRIVATE_HEADER
 #include "../Externals/ozz-animation/samples/framework/utils.h"
 #include "ozz/animation/runtime/animation.h"
 #include "ozz/animation/runtime/ik_two_bone_job.h"
@@ -925,6 +930,15 @@ protected:
         bool success = true;
         const ozz::math::Float4x4 transform = ozz::math::Float4x4::identity();
 
+        const ozz::math::Float4x4* view_projection = nullptr;
+        if (auto* renderer_impl = dynamic_cast<ozz::sample::internal::RendererImpl*>(_renderer))
+        {
+            if (renderer_impl->camera())
+            {
+                view_projection = &renderer_impl->camera()->view_proj();
+            }
+        }
+
         imgui_frame_ready_ = false;
 
         if (ui_state_.draw_skeleton)
@@ -934,7 +948,7 @@ protected:
 
         bool request_pick = false;
         float pick_x = 0.f;
-        float pick_y_bottom = 0.f;
+        float pick_y = 0.f;
         float viewport_width = 0.f;
         float viewport_height = 0.f;
         SelectedTriangle best_triangle_candidate{};
@@ -954,7 +968,7 @@ protected:
                 viewport_width = static_cast<float>(fb_width);
                 viewport_height = static_cast<float>(fb_height);
                 pick_x = pending_pick_pos_.x;
-                pick_y_bottom = viewport_height - pending_pick_pos_.y;
+                pick_y = viewport_height - pending_pick_pos_.y;
                 request_pick = true;
             }
             pending_pick_ = false;
@@ -985,7 +999,17 @@ protected:
                 auto skinning_span = ozz::make_span(skinning_matrices_);
                 skinning_span = skinning_span.first(palette_size);
 
+                const bool triangle_debug_requested =
+                    ui_state_.renderer_options.triangles && mesh_index < triangle_debug_meshes_.size() && !triangle_debug_meshes_[mesh_index].empty();
+
                 ozz::sample::Renderer::Options draw_options = ui_state_.renderer_options;
+                if (triangle_debug_requested)
+                {
+                    draw_options.triangles = false;
+                    draw_options.colors = false;
+                    draw_options.texture = false;
+                }
+
                 if (draw_options.texture && mesh_index < mesh_textures_.size())
                 {
                     draw_options.texture_override = mesh_textures_[mesh_index];
@@ -995,7 +1019,7 @@ protected:
 
                 const bool triangle_mode_pick = request_pick;
                 const bool needs_triangle_refresh = selected_triangle_.valid && selected_triangle_.mesh_index == mesh_index;
-                const bool compute_selection_data = triangle_mode_pick || needs_triangle_refresh;
+                const bool compute_selection_data = triangle_mode_pick || needs_triangle_refresh || triangle_debug_requested;
 
                 if (compute_selection_data)
                 {
@@ -1023,7 +1047,6 @@ protected:
                         const bool part_has_skinning = mesh.skinned() && part.joint_indices.size() >= static_cast<size_t>(vertex_count_in_part * influences);
                         const bool part_has_weights = influences > 1 && part.joint_weights.size() >= static_cast<size_t>(vertex_count_in_part * (influences - 1));
                         const bool part_has_normals = !part.normals.empty();
-                        const bool part_has_uvs = !part.uvs.empty();
 
                         for (int local_index = 0; local_index < vertex_count_in_part; ++local_index, ++global_vertex)
                         {
@@ -1128,10 +1151,10 @@ protected:
                     if (triangle_mode_pick)
                     {
                         SelectedTriangle candidate;
-                        if (EvaluateTrianglePick(mesh_index, mesh, world_positions, vertex_refs, pick_x, pick_y_bottom, viewport_width, viewport_height,
-                                candidate))
+                        if (EvaluateTrianglePick(mesh_index, mesh, world_positions, vertex_refs, pick_x, pick_y, viewport_width, viewport_height,
+                                view_projection, candidate))
                         {
-                            if (!triangle_pick_found || candidate.screen_distance_sq < best_triangle_candidate.screen_distance_sq)
+                            if (!triangle_pick_found || IsBetterTrianglePick(candidate, best_triangle_candidate))
                             {
                                 best_triangle_candidate = candidate;
                                 triangle_pick_found = true;
@@ -1204,6 +1227,32 @@ protected:
                             selected_triangle_ = SelectedTriangle{};
                         }
                     }
+
+                    if (triangle_debug_requested && mesh_index < triangle_debug_meshes_.size())
+                    {
+                        for (TriangleDebugMesh& segment : triangle_debug_meshes_[mesh_index])
+                        {
+                            UpdateTriangleDebugMesh(world_positions, segment);
+                        }
+                    }
+                }
+
+                if (triangle_debug_requested && mesh_index < triangle_debug_meshes_.size())
+                {
+                    ozz::sample::Renderer::Options triangle_options;
+                    triangle_options.triangles = true;
+                    triangle_options.colors = true;
+                    triangle_options.texture = false;
+                    triangle_options.skip_skinning = true;
+                    triangle_options.wireframe = ui_state_.renderer_options.wireframe;
+
+                    for (const TriangleDebugMesh& segment : triangle_debug_meshes_[mesh_index])
+                    {
+                        if (!segment.mesh.parts.empty())
+                        {
+                            success &= _renderer->DrawMesh(segment.mesh, ozz::math::Float4x4::identity(), triangle_options);
+                        }
+                    }
                 }
             }
         }
@@ -1215,9 +1264,65 @@ protected:
 
         if (selected_triangle_.valid)
         {
-            std::array<ozz::math::Float3, 4> triangle_loop = { selected_triangle_.world_positions[0], selected_triangle_.world_positions[1],
-                selected_triangle_.world_positions[2], selected_triangle_.world_positions[0] };
-            success &= _renderer->DrawLineStrip(ozz::make_span(triangle_loop), ozz::sample::kMagenta, ozz::math::Float4x4::identity());
+            const float surface_offset = 0.001f;
+            const ozz::math::Float3 offset = {
+                selected_triangle_.world_normal.x * surface_offset,
+                selected_triangle_.world_normal.y * surface_offset,
+                selected_triangle_.world_normal.z * surface_offset,
+            };
+
+            ozz::sample::Mesh highlight_mesh;
+            ozz::sample::Mesh::Part part;
+            part.positions.reserve(3 * ozz::sample::Mesh::Part::kPositionsCpnts);
+            part.normals.reserve(3 * ozz::sample::Mesh::Part::kNormalsCpnts);
+            part.tangents.reserve(3 * ozz::sample::Mesh::Part::kTangentsCpnts);
+
+            static const uint8_t kColorR = 255;
+            static const uint8_t kColorG = 32;
+            static const uint8_t kColorB = 255;
+            static const uint8_t kColorA = 96;
+
+            for (size_t i = 0; i < 3; ++i)
+            {
+                const ozz::math::Float3& base = selected_triangle_.world_positions[i];
+                const ozz::math::Float3 elevated = { base.x + offset.x, base.y + offset.y, base.z + offset.z };
+                part.positions.push_back(elevated.x);
+                part.positions.push_back(elevated.y);
+                part.positions.push_back(elevated.z);
+
+                part.normals.push_back(selected_triangle_.world_normal.x);
+                part.normals.push_back(selected_triangle_.world_normal.y);
+                part.normals.push_back(selected_triangle_.world_normal.z);
+
+                part.tangents.push_back(selected_triangle_.world_normal.x);
+                part.tangents.push_back(selected_triangle_.world_normal.y);
+                part.tangents.push_back(selected_triangle_.world_normal.z);
+                part.tangents.push_back(1.f);
+
+                part.colors.push_back(kColorR);
+                part.colors.push_back(kColorG);
+                part.colors.push_back(kColorB);
+                part.colors.push_back(kColorA);
+            }
+
+            highlight_mesh.parts.push_back(std::move(part));
+            highlight_mesh.triangle_indices = { 0, 1, 2 };
+
+            ozz::sample::Renderer::Options highlight_options;
+            highlight_options.triangles = true;
+            highlight_options.texture = false;
+            highlight_options.vertices = false;
+            highlight_options.normals = false;
+            highlight_options.tangents = false;
+            highlight_options.binormals = false;
+            highlight_options.colors = true;
+            highlight_options.wireframe = false;
+            highlight_options.skip_skinning = true;
+            highlight_options.triangles = true;
+            highlight_options.colors = true;
+            highlight_options.texture = false;
+
+            success &= _renderer->DrawMesh(highlight_mesh, ozz::math::Float4x4::identity(), highlight_options);
         }
 
         if (imgui_layer_)
@@ -1381,6 +1486,7 @@ protected:
             ui_state_.draw_mesh = true;
             LoadMeshTextures(reference_path.c_str());
             RefreshMeshDisplayState();
+            BuildTriangleDebugMeshes();
             return true;
         };
 
@@ -1399,6 +1505,7 @@ protected:
             mesh_names_.clear();
             ui_state_.mesh_visibility.clear();
             ReleaseMeshTextures();
+            triangle_debug_meshes_.clear();
         }
 
         if (!ComputeBindPoseModelMatrices())
@@ -1548,7 +1655,9 @@ private:
         ozz::math::Float3 centroid{ 0.f, 0.f, 0.f };
         ozz::math::Float3 world_normal{ 0.f, 0.f, 0.f };
         float area = 0.f;
-        float screen_distance_sq = 0.f;
+        bool has_view_depth = false;
+        float view_depth = std::numeric_limits<float>::infinity();
+        float screen_distance_sq = std::numeric_limits<float>::infinity();
     };
 
     struct VertexReference
@@ -1561,6 +1670,50 @@ private:
     bool pending_pick_ = false;
     ImVec2 pending_pick_pos_{ 0.f, 0.f };
 
+    struct TriangleDebugMesh
+    {
+        ozz::sample::Mesh mesh;
+        std::vector<uint32_t> vertex_remap;
+    };
+
+    std::vector<std::vector<TriangleDebugMesh>> triangle_debug_meshes_;
+
+    static bool IsBetterTrianglePick(const SelectedTriangle& candidate, const SelectedTriangle& current)
+    {
+        constexpr float depth_epsilon = 1e-5f;
+
+        if (candidate.valid && !current.valid)
+        {
+            return true;
+        }
+
+        if (!candidate.valid)
+        {
+            return false;
+        }
+
+        const bool candidate_has_depth = candidate.has_view_depth && std::isfinite(candidate.view_depth);
+        const bool current_has_depth = current.has_view_depth && std::isfinite(current.view_depth);
+
+        if (candidate_has_depth && current_has_depth)
+        {
+            if (candidate.view_depth + depth_epsilon < current.view_depth)
+            {
+                return true;
+            }
+            if (current.view_depth + depth_epsilon < candidate.view_depth)
+            {
+                return false;
+            }
+        }
+        else if (candidate_has_depth != current_has_depth)
+        {
+            return candidate_has_depth;
+        }
+
+        return candidate.screen_distance_sq < current.screen_distance_sq;
+    }
+
     // Cached lowercase joint names for lookup.
     std::vector<std::string> joint_names_lower_;
 
@@ -1569,6 +1722,9 @@ private:
     bool foot_ik_available_ = false;
     FootIkChain left_foot_chain_{};
     FootIkChain right_foot_chain_{};
+
+    void BuildTriangleDebugMeshes();
+    void UpdateTriangleDebugMesh(const std::vector<ozz::math::Float3>& world_positions, TriangleDebugMesh& debug_mesh);
 
     void ReleaseMeshTextures()
     {
@@ -2253,8 +2409,8 @@ private:
     }
 
     bool EvaluateTrianglePick(size_t mesh_index, const ozz::sample::Mesh& mesh, const std::vector<ozz::math::Float3>& world_positions,
-        const std::vector<VertexReference>& vertex_refs, float pick_x, float pick_y_bottom, float viewport_width, float viewport_height,
-        SelectedTriangle& out_triangle) const
+        const std::vector<VertexReference>& vertex_refs, float pick_x, float pick_y, float viewport_width, float viewport_height,
+        const ozz::math::Float4x4* view_projection, SelectedTriangle& out_triangle) const
     {
         if (world_positions.empty())
         {
@@ -2267,9 +2423,41 @@ private:
             return false;
         }
 
-        bool found = false;
-        float best_distance_sq = std::numeric_limits<float>::max();
+        const bool use_depth = view_projection != nullptr;
 
+        struct PerspectiveInfo
+        {
+            bool valid = false;
+            float inv_w = 0.f;
+            float ndc_z = 0.f;
+        };
+
+        std::vector<PerspectiveInfo> perspective;
+        if (use_depth)
+        {
+            perspective.resize(world_positions.size());
+            for (size_t vertex = 0; vertex < world_positions.size(); ++vertex)
+            {
+                const ozz::math::Float3& pos = world_positions[vertex];
+                const ozz::math::SimdFloat4 local = ozz::math::simd_float4::Load(pos.x, pos.y, pos.z, 1.f);
+                const ozz::math::SimdFloat4 clip = ozz::math::TransformPoint(*view_projection, local);
+                const float clip_w = ozz::math::GetW(clip);
+                if (std::fabs(clip_w) <= std::numeric_limits<float>::epsilon())
+                {
+                    perspective[vertex] = PerspectiveInfo{};
+                    continue;
+                }
+
+                PerspectiveInfo info;
+                info.valid = true;
+                info.inv_w = 1.f / clip_w;
+                info.ndc_z = ozz::math::GetZ(clip) * info.inv_w;
+                perspective[vertex] = info;
+            }
+        }
+
+        bool found = false;
+        SelectedTriangle best_triangle;
         const size_t triangle_count = indices.size() / 3;
         const float epsilon = 1e-6f;
 
@@ -2315,8 +2503,8 @@ private:
                 continue;
             }
 
-            const float w0 = ((bx - cx) * (pick_y_bottom - cy) + (cy - by) * (pick_x - cx)) / area;
-            const float w1 = ((cx - ax) * (pick_y_bottom - ay) + (ay - cy) * (pick_x - ax)) / area;
+            const float w0 = ((bx - cx) * (pick_y - cy) + (cy - by) * (pick_x - cx)) / area;
+            const float w1 = ((cx - ax) * (pick_y - ay) + (ay - cy) * (pick_x - ax)) / area;
             const float w2 = 1.f - w0 - w1;
 
             if (w0 < -epsilon || w1 < -epsilon || w2 < -epsilon)
@@ -2326,62 +2514,93 @@ private:
 
             const float centroid_x = (ax + bx + cx) * (1.f / 3.f);
             const float centroid_y = (ay + by + cy) * (1.f / 3.f);
-            const float screen_distance_sq = (centroid_x - pick_x) * (centroid_x - pick_x) + (centroid_y - pick_y_bottom) * (centroid_y - pick_y_bottom);
+            const float screen_distance_sq = (centroid_x - pick_x) * (centroid_x - pick_x) + (centroid_y - pick_y) * (centroid_y - pick_y);
+            SelectedTriangle candidate;
+            candidate.valid = true;
+            candidate.mesh_index = mesh_index;
+            candidate.triangle_index = static_cast<uint32_t>(tri);
+            candidate.vertex_indices = { idx0, idx1, idx2 };
+            candidate.world_positions = { p0, p1, p2 };
+            candidate.centroid = { (p0.x + p1.x + p2.x) * (1.f / 3.f), (p0.y + p1.y + p2.y) * (1.f / 3.f), (p0.z + p1.z + p2.z) * (1.f / 3.f) };
+            candidate.screen_distance_sq = screen_distance_sq;
 
-            if (!found || screen_distance_sq < best_distance_sq)
+            const ozz::math::Float3 edge0 = { p1.x - p0.x, p1.y - p0.y, p1.z - p0.z };
+            const ozz::math::Float3 edge1 = { p2.x - p0.x, p2.y - p0.y, p2.z - p0.z };
+            ozz::math::Float3 normal = { edge0.y * edge1.z - edge0.z * edge1.y, edge0.z * edge1.x - edge0.x * edge1.z, edge0.x * edge1.y - edge0.y * edge1.x };
+            const float normal_length_sq = normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
+            if (normal_length_sq > epsilon)
             {
-                found = true;
-                best_distance_sq = screen_distance_sq;
+                const float normal_length = std::sqrt(normal_length_sq);
+                candidate.world_normal = { normal.x / normal_length, normal.y / normal_length, normal.z / normal_length };
+                candidate.area = 0.5f * normal_length;
+            }
+            else
+            {
+                candidate.world_normal = { 0.f, 0.f, 0.f };
+                candidate.area = 0.f;
+            }
 
-                out_triangle.valid = true;
-                out_triangle.mesh_index = mesh_index;
-                out_triangle.triangle_index = static_cast<uint32_t>(tri);
-                out_triangle.vertex_indices = { idx0, idx1, idx2 };
-                out_triangle.world_positions = { p0, p1, p2 };
-                out_triangle.centroid = { (p0.x + p1.x + p2.x) * (1.f / 3.f), (p0.y + p1.y + p2.y) * (1.f / 3.f), (p0.z + p1.z + p2.z) * (1.f / 3.f) };
-
-                const ozz::math::Float3 edge0 = { p1.x - p0.x, p1.y - p0.y, p1.z - p0.z };
-                const ozz::math::Float3 edge1 = { p2.x - p0.x, p2.y - p0.y, p2.z - p0.z };
-                ozz::math::Float3 normal = { edge0.y * edge1.z - edge0.z * edge1.y, edge0.z * edge1.x - edge0.x * edge1.z, edge0.x * edge1.y - edge0.y * edge1.x };
-                const float normal_length_sq = normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
-                if (normal_length_sq > epsilon)
+            if (use_depth)
+            {
+                const PerspectiveInfo& info0 = perspective[idx0];
+                const PerspectiveInfo& info1 = perspective[idx1];
+                const PerspectiveInfo& info2 = perspective[idx2];
+                if (info0.valid && info1.valid && info2.valid)
                 {
-                    const float normal_length = std::sqrt(normal_length_sq);
-                    out_triangle.world_normal = { normal.x / normal_length, normal.y / normal_length, normal.z / normal_length };
-                    out_triangle.area = 0.5f * normal_length;
-                }
-                else
-                {
-                    out_triangle.world_normal = { 0.f, 0.f, 0.f };
-                    out_triangle.area = 0.f;
-                }
-
-                for (size_t corner = 0; corner < 3; ++corner)
-                {
-                    const uint32_t vertex_index = out_triangle.vertex_indices[corner];
-                    ozz::math::Float2 uv{ 0.f, 0.f };
-                    if (vertex_index < vertex_refs.size())
+                    const float w0_corr = w0 * info0.inv_w;
+                    const float w1_corr = w1 * info1.inv_w;
+                    const float w2_corr = w2 * info2.inv_w;
+                    const float weight_sum = w0_corr + w1_corr + w2_corr;
+                    if (std::fabs(weight_sum) > epsilon)
                     {
-                        const VertexReference& ref = vertex_refs[vertex_index];
-                        if (ref.part_index < mesh.parts.size())
+                        const float inv_sum = 1.f / weight_sum;
+                        const float b0 = w0_corr * inv_sum;
+                        const float b1 = w1_corr * inv_sum;
+                        const float b2 = w2_corr * inv_sum;
+                        const float ndc_depth = b0 * info0.ndc_z + b1 * info1.ndc_z + b2 * info2.ndc_z;
+                        const float depth = ndc_depth * 0.5f + 0.5f;
+                        if (std::isfinite(depth))
                         {
-                            const ozz::sample::Mesh::Part& ref_part = mesh.parts[ref.part_index];
-                            if (!ref_part.uvs.empty() &&
-                                ref.local_index >= 0 &&
-                                static_cast<size_t>(ref.local_index * ozz::sample::Mesh::Part::kUVsCpnts + 1) < ref_part.uvs.size())
-                            {
-                                const float* uv_ptr = &ref_part.uvs[ref.local_index * ozz::sample::Mesh::Part::kUVsCpnts];
-                                uv = { uv_ptr[0], uv_ptr[1] };
-                            }
+                            candidate.has_view_depth = true;
+                            candidate.view_depth = depth;
                         }
                     }
-                    out_triangle.uvs[corner] = uv;
                 }
+            }
 
-                out_triangle.screen_distance_sq = screen_distance_sq;
+            for (size_t corner = 0; corner < 3; ++corner)
+            {
+                const uint32_t vertex_index = candidate.vertex_indices[corner];
+                ozz::math::Float2 uv{ 0.f, 0.f };
+                if (vertex_index < vertex_refs.size())
+                {
+                    const VertexReference& ref = vertex_refs[vertex_index];
+                    if (ref.part_index < mesh.parts.size())
+                    {
+                        const ozz::sample::Mesh::Part& ref_part = mesh.parts[ref.part_index];
+                        if (!ref_part.uvs.empty() &&
+                            ref.local_index >= 0 &&
+                            static_cast<size_t>(ref.local_index * ozz::sample::Mesh::Part::kUVsCpnts + 1) < ref_part.uvs.size())
+                        {
+                            const float* uv_ptr = &ref_part.uvs[ref.local_index * ozz::sample::Mesh::Part::kUVsCpnts];
+                            uv = { uv_ptr[0], uv_ptr[1] };
+                        }
+                    }
+                }
+                candidate.uvs[corner] = uv;
+            }
+
+            if (!found || IsBetterTrianglePick(candidate, best_triangle))
+            {
+                best_triangle = candidate;
+                found = true;
             }
         }
 
+        if (found)
+        {
+            out_triangle = best_triangle;
+        }
         return found;
     }
 
@@ -2848,6 +3067,171 @@ private:
         return true;
     }
 };
+
+void PlaybackSampleApplication::BuildTriangleDebugMeshes()
+{
+    triangle_debug_meshes_.clear();
+    triangle_debug_meshes_.resize(meshes_.size());
+
+    std::mt19937 base_rng(0x715517u);
+    std::uniform_real_distribution<float> color_distribution(0.25f, 0.95f);
+    const size_t max_triangles_per_segment = std::numeric_limits<uint16_t>::max() / 3;
+
+    for (size_t mesh_index = 0; mesh_index < meshes_.size(); ++mesh_index)
+    {
+        const ozz::sample::Mesh& mesh = meshes_[mesh_index];
+        auto& segments = triangle_debug_meshes_[mesh_index];
+        segments.clear();
+
+        const size_t triangle_count = mesh.triangle_indices.size() / 3;
+        if (triangle_count == 0)
+        {
+            continue;
+        }
+
+        std::mt19937 mesh_rng(base_rng());
+
+        size_t triangle_offset = 0;
+        while (triangle_offset < triangle_count)
+        {
+            const size_t segment_triangles = std::min(max_triangles_per_segment, triangle_count - triangle_offset);
+            TriangleDebugMesh segment;
+            segment.vertex_remap.resize(segment_triangles * 3);
+            segment.mesh.triangle_indices.clear();
+            segment.mesh.parts.clear();
+            segment.mesh.inverse_bind_poses.clear();
+            segment.mesh.joint_remaps.clear();
+
+            ozz::sample::Mesh::Part part;
+            part.positions.resize(segment_triangles * 3 * ozz::sample::Mesh::Part::kPositionsCpnts, 0.f);
+            part.normals.resize(segment_triangles * 3 * ozz::sample::Mesh::Part::kNormalsCpnts, 0.f);
+            part.tangents.clear();
+            part.uvs.clear();
+            part.colors.resize(segment_triangles * 3 * ozz::sample::Mesh::Part::kColorsCpnts);
+            part.joint_indices.clear();
+            part.joint_weights.clear();
+
+            for (size_t tri = 0; tri < segment_triangles; ++tri)
+            {
+                const size_t mesh_triangle = triangle_offset + tri;
+                const uint32_t idx0 = mesh.triangle_indices[mesh_triangle * 3 + 0];
+                const uint32_t idx1 = mesh.triangle_indices[mesh_triangle * 3 + 1];
+                const uint32_t idx2 = mesh.triangle_indices[mesh_triangle * 3 + 2];
+
+                const size_t base_vertex = tri * 3;
+                segment.vertex_remap[base_vertex + 0] = idx0;
+                segment.vertex_remap[base_vertex + 1] = idx1;
+                segment.vertex_remap[base_vertex + 2] = idx2;
+
+                segment.mesh.triangle_indices.push_back(static_cast<uint16_t>(base_vertex + 0));
+                segment.mesh.triangle_indices.push_back(static_cast<uint16_t>(base_vertex + 1));
+                segment.mesh.triangle_indices.push_back(static_cast<uint16_t>(base_vertex + 2));
+
+                const float r = color_distribution(mesh_rng);
+                const float g = color_distribution(mesh_rng);
+                const float b = color_distribution(mesh_rng);
+                const uint8_t r8 = static_cast<uint8_t>(std::clamp(r, 0.f, 1.f) * 255.f);
+                const uint8_t g8 = static_cast<uint8_t>(std::clamp(g, 0.f, 1.f) * 255.f);
+                const uint8_t b8 = static_cast<uint8_t>(std::clamp(b, 0.f, 1.f) * 255.f);
+                const uint8_t a8 = 255;
+
+                for (size_t corner = 0; corner < 3; ++corner)
+                {
+                    const size_t color_offset = (base_vertex + corner) * ozz::sample::Mesh::Part::kColorsCpnts;
+                    part.colors[color_offset + 0] = r8;
+                    part.colors[color_offset + 1] = g8;
+                    part.colors[color_offset + 2] = b8;
+                    part.colors[color_offset + 3] = a8;
+                }
+            }
+
+            segment.mesh.parts.push_back(std::move(part));
+            segments.push_back(std::move(segment));
+
+            triangle_offset += segment_triangles;
+        }
+    }
+}
+
+void PlaybackSampleApplication::UpdateTriangleDebugMesh(const std::vector<ozz::math::Float3>& world_positions, TriangleDebugMesh& debug_mesh)
+{
+    if (debug_mesh.vertex_remap.empty() || debug_mesh.mesh.parts.empty())
+    {
+        return;
+    }
+
+    ozz::sample::Mesh::Part& part = debug_mesh.mesh.parts[0];
+    if (part.positions.size() / ozz::sample::Mesh::Part::kPositionsCpnts != debug_mesh.vertex_remap.size())
+    {
+        return;
+    }
+
+    const float surface_offset = 0.001f;
+    const float epsilon = std::numeric_limits<float>::epsilon();
+
+    const size_t triangle_count = debug_mesh.vertex_remap.size() / 3;
+    for (size_t tri = 0; tri < triangle_count; ++tri)
+    {
+        const size_t base_vertex = tri * 3;
+        const uint32_t remap0 = debug_mesh.vertex_remap[base_vertex + 0];
+        const uint32_t remap1 = debug_mesh.vertex_remap[base_vertex + 1];
+        const uint32_t remap2 = debug_mesh.vertex_remap[base_vertex + 2];
+
+        if (remap0 >= world_positions.size() || remap1 >= world_positions.size() || remap2 >= world_positions.size())
+        {
+            continue;
+        }
+
+        const ozz::math::Float3& p0 = world_positions[remap0];
+        const ozz::math::Float3& p1 = world_positions[remap1];
+        const ozz::math::Float3& p2 = world_positions[remap2];
+
+        const ozz::math::Float3 edge0{ p1.x - p0.x, p1.y - p0.y, p1.z - p0.z };
+        const ozz::math::Float3 edge1{ p2.x - p0.x, p2.y - p0.y, p2.z - p0.z };
+        ozz::math::Float3 normal{
+            edge0.y * edge1.z - edge0.z * edge1.y,
+            edge0.z * edge1.x - edge0.x * edge1.z,
+            edge0.x * edge1.y - edge0.y * edge1.x,
+        };
+
+        float normal_length_sq = normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
+        if (normal_length_sq <= epsilon)
+        {
+            normal = { 0.f, 1.f, 0.f };
+            normal_length_sq = 1.f;
+        }
+        else
+        {
+            const float inv_length = 1.f / std::sqrt(normal_length_sq);
+            normal.x *= inv_length;
+            normal.y *= inv_length;
+            normal.z *= inv_length;
+        }
+
+        const ozz::math::Float3 offset{
+            normal.x * surface_offset,
+            normal.y * surface_offset,
+            normal.z * surface_offset,
+        };
+
+        auto store_vertex = [&](size_t vertex_index, const ozz::math::Float3& position)
+        {
+            const size_t position_offset = vertex_index * ozz::sample::Mesh::Part::kPositionsCpnts;
+            part.positions[position_offset + 0] = position.x + offset.x;
+            part.positions[position_offset + 1] = position.y + offset.y;
+            part.positions[position_offset + 2] = position.z + offset.z;
+
+            const size_t normal_offset = vertex_index * ozz::sample::Mesh::Part::kNormalsCpnts;
+            part.normals[normal_offset + 0] = normal.x;
+            part.normals[normal_offset + 1] = normal.y;
+            part.normals[normal_offset + 2] = normal.z;
+        };
+
+        store_vertex(base_vertex + 0, p0);
+        store_vertex(base_vertex + 1, p1);
+        store_vertex(base_vertex + 2, p2);
+    }
+}
 
 int main(int _argc, const char** _argv)
 {
