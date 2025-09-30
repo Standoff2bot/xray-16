@@ -932,14 +932,13 @@ protected:
             success &= _renderer->DrawPosture(skeleton_, make_span(models_), transform);
         }
 
-        SelectedVertex best_pick{};
-        float best_pick_distance_sq = 0.f;
-        bool pick_found = false;
         bool request_pick = false;
         float pick_x = 0.f;
         float pick_y_bottom = 0.f;
         float viewport_width = 0.f;
         float viewport_height = 0.f;
+        SelectedTriangle best_triangle_candidate{};
+        bool triangle_pick_found = false;
         if (pending_pick_ && !meshes_.empty())
         {
             GLFWwindow* window = nullptr;
@@ -956,8 +955,6 @@ protected:
                 viewport_height = static_cast<float>(fb_height);
                 pick_x = pending_pick_pos_.x;
                 pick_y_bottom = viewport_height - pending_pick_pos_.y;
-                const float threshold_pixels = 15.f;
-                best_pick_distance_sq = threshold_pixels * threshold_pixels;
                 request_pick = true;
             }
             pending_pick_ = false;
@@ -996,53 +993,231 @@ protected:
 
                 success &= _renderer->DrawSkinnedMesh(mesh, skinning_span, transform, draw_options);
 
-                if (request_pick)
+                const bool triangle_mode_pick = request_pick;
+                const bool needs_triangle_refresh = selected_triangle_.valid && selected_triangle_.mesh_index == mesh_index;
+                const bool compute_selection_data = triangle_mode_pick || needs_triangle_refresh;
+
+                if (compute_selection_data)
                 {
-                    EvaluateMeshForPick(mesh_index, mesh, skinning_span, pick_x, pick_y_bottom, viewport_width, viewport_height, best_pick_distance_sq,
-                        pick_found, best_pick);
+                    const size_t vertex_count = static_cast<size_t>(mesh.vertex_count());
+                    if (vertex_count == 0)
+                    {
+                        continue;
+                    }
+
+                    std::vector<ozz::math::Float3> world_positions(vertex_count);
+                    std::vector<VertexReference> vertex_refs(vertex_count);
+
+                    uint32_t global_vertex = 0;
+
+                    for (size_t part_index = 0; part_index < mesh.parts.size(); ++part_index)
+                    {
+                        const ozz::sample::Mesh::Part& part = mesh.parts[part_index];
+                        const int vertex_count_in_part = part.vertex_count();
+                        if (vertex_count_in_part <= 0)
+                        {
+                            continue;
+                        }
+
+                        const int influences = std::max(1, part.influences_count());
+                        const bool part_has_skinning = mesh.skinned() && part.joint_indices.size() >= static_cast<size_t>(vertex_count_in_part * influences);
+                        const bool part_has_weights = influences > 1 && part.joint_weights.size() >= static_cast<size_t>(vertex_count_in_part * (influences - 1));
+                        const bool part_has_normals = !part.normals.empty();
+                        const bool part_has_uvs = !part.uvs.empty();
+
+                        for (int local_index = 0; local_index < vertex_count_in_part; ++local_index, ++global_vertex)
+                        {
+                            const float* position_ptr = &part.positions[local_index * ozz::sample::Mesh::Part::kPositionsCpnts];
+                            const ozz::math::Float3 local_position = { position_ptr[0], position_ptr[1], position_ptr[2] };
+                            const ozz::math::SimdFloat4 local_pos_simd = ozz::math::simd_float4::Load(position_ptr[0], position_ptr[1], position_ptr[2], 1.f);
+
+                            ozz::math::SimdFloat4 world_pos_simd = local_pos_simd;
+                            std::array<uint16_t, 4> palette_indices{
+                                { 0, 0, 0, 0 }
+                            };
+                            std::array<float, 4> weights{
+                                { 0.f, 0.f, 0.f, 0.f }
+                            };
+
+                            if (part_has_skinning)
+                            {
+                                world_pos_simd = ozz::math::simd_float4::zero();
+                                float accumulated = 0.f;
+                                for (int influence = 0; influence < influences && influence < 4; ++influence)
+                                {
+                                    float weight = 1.f;
+                                    if (influences > 1)
+                                    {
+                                        if (influence < influences - 1)
+                                        {
+                                            const size_t weight_index =
+                                                static_cast<size_t>(local_index) * static_cast<size_t>(influences - 1) + static_cast<size_t>(influence);
+                                            weight = part_has_weights && weight_index < part.joint_weights.size() ? part.joint_weights[weight_index] : 0.f;
+                                            accumulated += weight;
+                                        }
+                                        else
+                                        {
+                                            weight = std::max(0.f, 1.f - accumulated);
+                                        }
+                                    }
+
+                                    const size_t joint_index =
+                                        static_cast<size_t>(local_index) * static_cast<size_t>(influences) + static_cast<size_t>(influence);
+                                    const uint16_t palette_index = joint_index < part.joint_indices.size() ? part.joint_indices[joint_index] : uint16_t{ 0 };
+                                    palette_indices[static_cast<size_t>(influence)] = palette_index;
+                                    weights[static_cast<size_t>(influence)] = weight;
+
+                                    if (weight <= 0.f || palette_index >= skinning_span.size())
+                                    {
+                                        continue;
+                                    }
+
+                                    const ozz::math::SimdFloat4 transformed = ozz::math::TransformPoint(skinning_span[palette_index], local_pos_simd);
+                                    world_pos_simd = ozz::math::MAdd(transformed, ozz::math::simd_float4::Load1(weight), world_pos_simd);
+                                }
+                            }
+                            else
+                            {
+                                weights[0] = 1.f;
+                            }
+
+                            ozz::math::Float3 world_position;
+                            ozz::math::Store3PtrU(world_pos_simd, &world_position.x);
+                            world_positions[global_vertex] = world_position;
+                            vertex_refs[global_vertex] = VertexReference{ part_index, local_index };
+
+                            ozz::math::Float3 world_normal{ 0.f, 0.f, 0.f };
+                            if (part_has_normals)
+                            {
+                                const float* normal_ptr = &part.normals[local_index * ozz::sample::Mesh::Part::kNormalsCpnts];
+                                const ozz::math::SimdFloat4 local_normal_simd = ozz::math::simd_float4::Load(normal_ptr[0], normal_ptr[1], normal_ptr[2], 0.f);
+                                ozz::math::SimdFloat4 world_normal_simd = local_normal_simd;
+                                if (part_has_skinning)
+                                {
+                                    world_normal_simd = ozz::math::simd_float4::zero();
+                                    for (int influence = 0; influence < influences && influence < 4; ++influence)
+                                    {
+                                        const float weight = weights[static_cast<size_t>(influence)];
+                                        const uint16_t palette_index = palette_indices[static_cast<size_t>(influence)];
+                                        if (weight <= 0.f || palette_index >= skinning_span.size())
+                                        {
+                                            continue;
+                                        }
+                                        const ozz::math::SimdFloat4 transformed = ozz::math::TransformVector(skinning_span[palette_index], local_normal_simd);
+                                        world_normal_simd = ozz::math::MAdd(transformed, ozz::math::simd_float4::Load1(weight), world_normal_simd);
+                                    }
+                                }
+                                ozz::math::Store3PtrU(world_normal_simd, &world_normal.x);
+                                const float normal_length_sq =
+                                    world_normal.x * world_normal.x + world_normal.y * world_normal.y + world_normal.z * world_normal.z;
+                                if (normal_length_sq > std::numeric_limits<float>::epsilon())
+                                {
+                                    const float inv_length = 1.f / std::sqrt(normal_length_sq);
+                                    world_normal.x *= inv_length;
+                                    world_normal.y *= inv_length;
+                                    world_normal.z *= inv_length;
+                                }
+                                else
+                                {
+                                    world_normal = { 0.f, 0.f, 0.f };
+                                }
+                            }
+                        }
+                    }
+
+                    if (triangle_mode_pick)
+                    {
+                        SelectedTriangle candidate;
+                        if (EvaluateTrianglePick(mesh_index, mesh, world_positions, vertex_refs, pick_x, pick_y_bottom, viewport_width, viewport_height,
+                                candidate))
+                        {
+                            if (!triangle_pick_found || candidate.screen_distance_sq < best_triangle_candidate.screen_distance_sq)
+                            {
+                                best_triangle_candidate = candidate;
+                                triangle_pick_found = true;
+                            }
+                        }
+                    }
+
+                    if (needs_triangle_refresh)
+                    {
+                        bool valid = true;
+                        for (size_t i = 0; i < 3; ++i)
+                        {
+                            const uint32_t vertex_index = selected_triangle_.vertex_indices[i];
+                            if (vertex_index >= world_positions.size())
+                            {
+                                valid = false;
+                                break;
+                            }
+                            selected_triangle_.world_positions[i] = world_positions[vertex_index];
+                        }
+
+                        if (valid)
+                        {
+                            const ozz::math::Float3& a = selected_triangle_.world_positions[0];
+                            const ozz::math::Float3& b = selected_triangle_.world_positions[1];
+                            const ozz::math::Float3& c = selected_triangle_.world_positions[2];
+                            selected_triangle_.centroid = { (a.x + b.x + c.x) * (1.f / 3.f), (a.y + b.y + c.y) * (1.f / 3.f), (a.z + b.z + c.z) * (1.f / 3.f) };
+
+                            const ozz::math::Float3 edge0 = { b.x - a.x, b.y - a.y, b.z - a.z };
+                            const ozz::math::Float3 edge1 = { c.x - a.x, c.y - a.y, c.z - a.z };
+                            ozz::math::Float3 normal = { edge0.y * edge1.z - edge0.z * edge1.y, edge0.z * edge1.x - edge0.x * edge1.z,
+                                edge0.x * edge1.y - edge0.y * edge1.x };
+                            const float normal_length_sq = normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
+                            if (normal_length_sq > std::numeric_limits<float>::epsilon())
+                            {
+                                const float normal_length = std::sqrt(normal_length_sq);
+                                selected_triangle_.world_normal = { normal.x / normal_length, normal.y / normal_length, normal.z / normal_length };
+                                selected_triangle_.area = 0.5f * normal_length;
+                            }
+                            else
+                            {
+                                selected_triangle_.world_normal = { 0.f, 0.f, 0.f };
+                                selected_triangle_.area = 0.f;
+                            }
+
+                            for (size_t corner = 0; corner < 3; ++corner)
+                            {
+                                const uint32_t vertex_index = selected_triangle_.vertex_indices[corner];
+                                ozz::math::Float2 uv{ 0.f, 0.f };
+                                if (vertex_index < vertex_refs.size())
+                                {
+                                    const VertexReference& ref = vertex_refs[vertex_index];
+                                    if (ref.part_index < mesh.parts.size())
+                                    {
+                                        const ozz::sample::Mesh::Part& ref_part = mesh.parts[ref.part_index];
+                                        if (!ref_part.uvs.empty() &&
+                                            ref.local_index >= 0 &&
+                                            static_cast<size_t>(ref.local_index * ozz::sample::Mesh::Part::kUVsCpnts + 1) < ref_part.uvs.size())
+                                        {
+                                            const float* uv_ptr = &ref_part.uvs[ref.local_index * ozz::sample::Mesh::Part::kUVsCpnts];
+                                            uv = { uv_ptr[0], uv_ptr[1] };
+                                        }
+                                    }
+                                }
+                                selected_triangle_.uvs[corner] = uv;
+                            }
+                        }
+                        else
+                        {
+                            selected_triangle_ = SelectedTriangle{};
+                        }
+                    }
                 }
             }
         }
 
-        if (request_pick)
+        if (request_pick && triangle_pick_found)
         {
-            if (pick_found)
-            {
-                selected_vertex_ = best_pick;
-            }
-            else
-            {
-                selected_vertex_ = SelectedVertex{};
-            }
+            selected_triangle_ = best_triangle_candidate;
         }
 
-        if (selected_vertex_.valid)
+        if (selected_triangle_.valid)
         {
-            const float highlight_position[] = {
-                selected_vertex_.world_position.x,
-                selected_vertex_.world_position.y,
-                selected_vertex_.world_position.z,
-            };
-            const float highlight_size = 12.f;
-            const ozz::sample::Color highlight_color = ozz::sample::kYellow;
-
-            success &= _renderer->DrawPoints(ozz::span<const float>(highlight_position, 3), ozz::span<const float>(&highlight_size, 1),
-                ozz::span<const ozz::sample::Color>(&highlight_color, 1), ozz::math::Float4x4::identity());
-
-            const float normal_length = selected_vertex_.world_normal.x * selected_vertex_.world_normal.x +
-                selected_vertex_.world_normal.y * selected_vertex_.world_normal.y +
-                selected_vertex_.world_normal.z * selected_vertex_.world_normal.z;
-            if (normal_length > std::numeric_limits<float>::epsilon())
-            {
-                const float display_length = 0.08f;
-                ozz::math::Float3 end_point = {
-                    selected_vertex_.world_position.x + selected_vertex_.world_normal.x * display_length,
-                    selected_vertex_.world_position.y + selected_vertex_.world_normal.y * display_length,
-                    selected_vertex_.world_position.z + selected_vertex_.world_normal.z * display_length,
-                };
-                std::array<ozz::math::Float3, 2> line_points = { selected_vertex_.world_position, end_point };
-                success &= _renderer->DrawLines(ozz::make_span(line_points), ozz::sample::kCyan, ozz::math::Float4x4::identity());
-            }
+            std::array<ozz::math::Float3, 4> triangle_loop = { selected_triangle_.world_positions[0], selected_triangle_.world_positions[1],
+                selected_triangle_.world_positions[2], selected_triangle_.world_positions[0] };
+            success &= _renderer->DrawLineStrip(ozz::make_span(triangle_loop), ozz::sample::kMagenta, ozz::math::Float4x4::identity());
         }
 
         if (imgui_layer_)
@@ -1356,31 +1531,33 @@ private:
     bool space_was_down_ = false;
     bool mouse_left_was_down_ = false;
 
-    struct SelectedVertex
+    struct SelectedTriangle
     {
         bool valid = false;
         size_t mesh_index = 0;
-        int part_index = 0;
-        int local_vertex = 0;
-        uint32_t global_vertex = 0;
-        int influence_count = 0;
-        ozz::math::Float3 local_position = { 0.f, 0.f, 0.f };
-        ozz::math::Float3 world_position = { 0.f, 0.f, 0.f };
-        ozz::math::Float3 world_normal = { 0.f, 0.f, 0.f };
-        ozz::math::Float3 local_normal = { 0.f, 0.f, 0.f };
-        ozz::math::Float2 uv = { 0.f, 0.f };
-        std::array<uint16_t, 4> palette_indices{
-            { 0, 0, 0, 0 }
+        uint32_t triangle_index = 0;
+        std::array<uint32_t, 3> vertex_indices{
+            { 0u, 0u, 0u }
         };
-        std::array<uint16_t, 4> skeleton_joints{
-            { 0, 0, 0, 0 }
+        std::array<ozz::math::Float3, 3> world_positions{
+            { ozz::math::Float3{ 0.f, 0.f, 0.f }, ozz::math::Float3{ 0.f, 0.f, 0.f }, ozz::math::Float3{ 0.f, 0.f, 0.f } }
         };
-        std::array<float, 4> weights{
-            { 0.f, 0.f, 0.f, 0.f }
+        std::array<ozz::math::Float2, 3> uvs{
+            { ozz::math::Float2{ 0.f, 0.f }, ozz::math::Float2{ 0.f, 0.f }, ozz::math::Float2{ 0.f, 0.f } }
         };
+        ozz::math::Float3 centroid{ 0.f, 0.f, 0.f };
+        ozz::math::Float3 world_normal{ 0.f, 0.f, 0.f };
+        float area = 0.f;
+        float screen_distance_sq = 0.f;
     };
 
-    SelectedVertex selected_vertex_{};
+    struct VertexReference
+    {
+        size_t part_index = 0;
+        int local_index = 0;
+    };
+
+    SelectedTriangle selected_triangle_{};
     bool pending_pick_ = false;
     ImVec2 pending_pick_pos_{ 0.f, 0.f };
 
@@ -1484,6 +1661,7 @@ private:
     {
         mesh_names_.clear();
         ui_state_.mesh_visibility.assign(meshes_.size(), 1);
+        selected_triangle_ = SelectedTriangle{};
 
         mesh_names_.reserve(meshes_.size());
         const size_t mesh_count = meshes_.size();
@@ -1515,191 +1693,6 @@ private:
             }
 
             mesh_names_.push_back(std::move(display_name));
-        }
-    }
-
-    void EvaluateMeshForPick(size_t mesh_index, const ozz::sample::Mesh& mesh, ozz::span<const ozz::math::Float4x4> skinning_span, float pick_x,
-        float pick_y_bottom, float viewport_width, float viewport_height, float& best_distance_sq, bool& pick_found, SelectedVertex& best_pick)
-    {
-        if (viewport_width <= 0.f || viewport_height <= 0.f)
-        {
-            return;
-        }
-
-        const bool apply_skinning = mesh.skinned() && !ui_state_.renderer_options.skip_skinning && !skinning_span.empty();
-
-        uint32_t global_vertex = 0;
-        for (size_t part_index = 0; part_index < mesh.parts.size(); ++part_index)
-        {
-            const ozz::sample::Mesh::Part& part = mesh.parts[part_index];
-            const int vertex_count = part.vertex_count();
-            if (vertex_count <= 0)
-            {
-                continue;
-            }
-
-            const int influences = std::max(1, part.influences_count());
-            const bool part_has_skinning = apply_skinning && part.joint_indices.size() >= static_cast<size_t>(vertex_count * influences);
-            const bool part_has_weights = influences > 1 && part.joint_weights.size() >= static_cast<size_t>(vertex_count * (influences - 1));
-
-            for (int local_index = 0; local_index < vertex_count; ++local_index, ++global_vertex)
-            {
-                const float* position_ptr = &part.positions[local_index * ozz::sample::Mesh::Part::kPositionsCpnts];
-                const ozz::math::Float3 local_position = { position_ptr[0], position_ptr[1], position_ptr[2] };
-                const ozz::math::SimdFloat4 local_pos_simd = ozz::math::simd_float4::Load(position_ptr[0], position_ptr[1], position_ptr[2], 1.f);
-
-                ozz::math::SimdFloat4 world_pos_simd = local_pos_simd;
-                std::array<uint16_t, 4> palette_indices{
-                    { 0, 0, 0, 0 }
-                };
-                std::array<float, 4> weights{
-                    { 0.f, 0.f, 0.f, 0.f }
-                };
-
-                if (part_has_skinning)
-                {
-                    world_pos_simd = ozz::math::simd_float4::zero();
-                    float accumulated = 0.f;
-                    for (int influence = 0; influence < influences && influence < 4; ++influence)
-                    {
-                        float weight = 1.f;
-                        if (influences > 1)
-                        {
-                            if (influence < influences - 1)
-                            {
-                                const size_t weight_index =
-                                    static_cast<size_t>(local_index) * static_cast<size_t>(influences - 1) + static_cast<size_t>(influence);
-                                weight = part_has_weights && weight_index < part.joint_weights.size() ? part.joint_weights[weight_index] : 0.f;
-                                accumulated += weight;
-                            }
-                            else
-                            {
-                                weight = std::max(0.f, 1.f - accumulated);
-                            }
-                        }
-
-                        const size_t joint_index = static_cast<size_t>(local_index) * static_cast<size_t>(influences) + static_cast<size_t>(influence);
-                        const uint16_t palette_index = joint_index < part.joint_indices.size() ? part.joint_indices[joint_index] : uint16_t{ 0 };
-
-                        palette_indices[static_cast<size_t>(influence)] = palette_index;
-                        weights[static_cast<size_t>(influence)] = weight;
-
-                        if (weight <= 0.f || palette_index >= skinning_span.size())
-                        {
-                            continue;
-                        }
-
-                        const ozz::math::SimdFloat4 transformed = ozz::math::TransformPoint(skinning_span[palette_index], local_pos_simd);
-                        world_pos_simd = ozz::math::MAdd(transformed, ozz::math::simd_float4::Load1(weight), world_pos_simd);
-                    }
-                }
-                else
-                {
-                    weights[0] = 1.f;
-                }
-
-                ozz::math::Float3 world_position;
-                ozz::math::Store3PtrU(world_pos_simd, &world_position.x);
-
-                if (!std::isfinite(world_position.x) || !std::isfinite(world_position.y) || !std::isfinite(world_position.z))
-                {
-                    continue;
-                }
-
-                const ozz::math::Float2 screen = WorldToScreen(world_position);
-                const float screen_x = screen.x;
-                const float screen_y = screen.y;
-
-                if (screen_x < 0.f || screen_y < 0.f || screen_x > viewport_width || screen_y > viewport_height)
-                {
-                    continue;
-                }
-
-                const float dx = screen_x - pick_x;
-                const float dy = screen_y - pick_y_bottom;
-                const float distance_sq = dx * dx + dy * dy;
-
-                if (distance_sq >= best_distance_sq)
-                {
-                    continue;
-                }
-
-                SelectedVertex candidate;
-                candidate.valid = true;
-                candidate.mesh_index = mesh_index;
-                candidate.part_index = static_cast<int>(part_index);
-                candidate.local_vertex = local_index;
-                candidate.global_vertex = global_vertex;
-                candidate.influence_count = influences;
-                candidate.local_position = local_position;
-                candidate.world_position = world_position;
-                candidate.palette_indices = palette_indices;
-                candidate.weights = weights;
-
-                if (!part.normals.empty())
-                {
-                    const float* normal_ptr = &part.normals[local_index * ozz::sample::Mesh::Part::kNormalsCpnts];
-                    candidate.local_normal = { normal_ptr[0], normal_ptr[1], normal_ptr[2] };
-
-                    ozz::math::SimdFloat4 local_normal_simd = ozz::math::simd_float4::Load(normal_ptr[0], normal_ptr[1], normal_ptr[2], 0.f);
-                    ozz::math::SimdFloat4 world_normal_simd = local_normal_simd;
-
-                    if (part_has_skinning)
-                    {
-                        world_normal_simd = ozz::math::simd_float4::zero();
-                        for (int influence = 0; influence < influences && influence < 4; ++influence)
-                        {
-                            const float weight = weights[static_cast<size_t>(influence)];
-                            if (weight <= 0.f)
-                            {
-                                continue;
-                            }
-                            const uint16_t palette_index = palette_indices[static_cast<size_t>(influence)];
-                            if (palette_index >= skinning_span.size())
-                            {
-                                continue;
-                            }
-                            const ozz::math::SimdFloat4 transformed = ozz::math::TransformVector(skinning_span[palette_index], local_normal_simd);
-                            world_normal_simd = ozz::math::MAdd(transformed, ozz::math::simd_float4::Load1(weight), world_normal_simd);
-                        }
-                    }
-
-                    ozz::math::Float3 world_normal;
-                    ozz::math::Store3PtrU(world_normal_simd, &world_normal.x);
-                    const float length_sq = world_normal.x * world_normal.x + world_normal.y * world_normal.y + world_normal.z * world_normal.z;
-                    if (length_sq > std::numeric_limits<float>::epsilon())
-                    {
-                        const float inv_len = 1.f / std::sqrt(length_sq);
-                        world_normal.x *= inv_len;
-                        world_normal.y *= inv_len;
-                        world_normal.z *= inv_len;
-                    }
-                    candidate.world_normal = world_normal;
-                }
-
-                if (!part.uvs.empty())
-                {
-                    const float* uv_ptr = &part.uvs[local_index * ozz::sample::Mesh::Part::kUVsCpnts];
-                    candidate.uv = { uv_ptr[0], uv_ptr[1] };
-                }
-
-                for (size_t influence = 0; influence < 4; ++influence)
-                {
-                    const uint16_t palette_index = candidate.palette_indices[influence];
-                    if (influence < static_cast<size_t>(candidate.influence_count) && palette_index < mesh.joint_remaps.size())
-                    {
-                        candidate.skeleton_joints[influence] = mesh.joint_remaps[palette_index];
-                    }
-                    else
-                    {
-                        candidate.skeleton_joints[influence] = std::numeric_limits<uint16_t>::max();
-                    }
-                }
-
-                best_pick = candidate;
-                best_distance_sq = distance_sq;
-                pick_found = true;
-            }
         }
     }
 
@@ -1772,7 +1765,7 @@ private:
                     ImGui::DockBuilderDockWindow("Inverse Kinematics", dock_right_id);
                     ImGui::DockBuilderDockWindow("Rendering", dock_right_id);
                     ImGui::DockBuilderDockWindow("Metadata", dock_right_id);
-                    ImGui::DockBuilderDockWindow("Vertex Inspector", dock_right_id);
+                    ImGui::DockBuilderDockWindow("Triangle Inspector", dock_right_id);
                     ImGui::DockBuilderDockWindow("Logging", dock_right_bottom_id);
                     ImGui::DockBuilderDockWindow("Bone Transforms", dock_right_bottom_id);
 
@@ -1789,7 +1782,7 @@ private:
         DrawFootIkPanel();
         DrawBoneTransformsPanel();
         DrawMetadataPanel();
-        DrawVertexInspectorPanel();
+        DrawTriangleInspectorPanel();
     }
 
     void DrawPerformancePanel()
@@ -2259,64 +2252,179 @@ private:
         ImGui::End();
     }
 
-    void DrawVertexInspectorPanel()
+    bool EvaluateTrianglePick(size_t mesh_index, const ozz::sample::Mesh& mesh, const std::vector<ozz::math::Float3>& world_positions,
+        const std::vector<VertexReference>& vertex_refs, float pick_x, float pick_y_bottom, float viewport_width, float viewport_height,
+        SelectedTriangle& out_triangle) const
     {
-        if (!ImGui::Begin("Vertex Inspector"))
+        if (world_positions.empty())
+        {
+            return false;
+        }
+
+        const auto& indices = mesh.triangle_indices;
+        if (indices.empty())
+        {
+            return false;
+        }
+
+        bool found = false;
+        float best_distance_sq = std::numeric_limits<float>::max();
+
+        const size_t triangle_count = indices.size() / 3;
+        const float epsilon = 1e-6f;
+
+        for (size_t tri = 0; tri < triangle_count; ++tri)
+        {
+            const uint32_t idx0 = indices[tri * 3 + 0];
+            const uint32_t idx1 = indices[tri * 3 + 1];
+            const uint32_t idx2 = indices[tri * 3 + 2];
+
+            if (idx0 >= world_positions.size() || idx1 >= world_positions.size() || idx2 >= world_positions.size())
+            {
+                continue;
+            }
+
+            const ozz::math::Float3& p0 = world_positions[idx0];
+            const ozz::math::Float3& p1 = world_positions[idx1];
+            const ozz::math::Float3& p2 = world_positions[idx2];
+
+            const ozz::math::Float2 screen0 = WorldToScreen(p0);
+            const ozz::math::Float2 screen1 = WorldToScreen(p1);
+            const ozz::math::Float2 screen2 = WorldToScreen(p2);
+
+            if (!std::isfinite(screen0.x) ||
+                !std::isfinite(screen0.y) ||
+                !std::isfinite(screen1.x) ||
+                !std::isfinite(screen1.y) ||
+                !std::isfinite(screen2.x) ||
+                !std::isfinite(screen2.y))
+            {
+                continue;
+            }
+
+            const float ax = screen0.x;
+            const float ay = viewport_height - screen0.y;
+            const float bx = screen1.x;
+            const float by = viewport_height - screen1.y;
+            const float cx = screen2.x;
+            const float cy = viewport_height - screen2.y;
+
+            const float area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+            if (std::fabs(area) <= epsilon)
+            {
+                continue;
+            }
+
+            const float w0 = ((bx - cx) * (pick_y_bottom - cy) + (cy - by) * (pick_x - cx)) / area;
+            const float w1 = ((cx - ax) * (pick_y_bottom - ay) + (ay - cy) * (pick_x - ax)) / area;
+            const float w2 = 1.f - w0 - w1;
+
+            if (w0 < -epsilon || w1 < -epsilon || w2 < -epsilon)
+            {
+                continue;
+            }
+
+            const float centroid_x = (ax + bx + cx) * (1.f / 3.f);
+            const float centroid_y = (ay + by + cy) * (1.f / 3.f);
+            const float screen_distance_sq = (centroid_x - pick_x) * (centroid_x - pick_x) + (centroid_y - pick_y_bottom) * (centroid_y - pick_y_bottom);
+
+            if (!found || screen_distance_sq < best_distance_sq)
+            {
+                found = true;
+                best_distance_sq = screen_distance_sq;
+
+                out_triangle.valid = true;
+                out_triangle.mesh_index = mesh_index;
+                out_triangle.triangle_index = static_cast<uint32_t>(tri);
+                out_triangle.vertex_indices = { idx0, idx1, idx2 };
+                out_triangle.world_positions = { p0, p1, p2 };
+                out_triangle.centroid = { (p0.x + p1.x + p2.x) * (1.f / 3.f), (p0.y + p1.y + p2.y) * (1.f / 3.f), (p0.z + p1.z + p2.z) * (1.f / 3.f) };
+
+                const ozz::math::Float3 edge0 = { p1.x - p0.x, p1.y - p0.y, p1.z - p0.z };
+                const ozz::math::Float3 edge1 = { p2.x - p0.x, p2.y - p0.y, p2.z - p0.z };
+                ozz::math::Float3 normal = { edge0.y * edge1.z - edge0.z * edge1.y, edge0.z * edge1.x - edge0.x * edge1.z, edge0.x * edge1.y - edge0.y * edge1.x };
+                const float normal_length_sq = normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
+                if (normal_length_sq > epsilon)
+                {
+                    const float normal_length = std::sqrt(normal_length_sq);
+                    out_triangle.world_normal = { normal.x / normal_length, normal.y / normal_length, normal.z / normal_length };
+                    out_triangle.area = 0.5f * normal_length;
+                }
+                else
+                {
+                    out_triangle.world_normal = { 0.f, 0.f, 0.f };
+                    out_triangle.area = 0.f;
+                }
+
+                for (size_t corner = 0; corner < 3; ++corner)
+                {
+                    const uint32_t vertex_index = out_triangle.vertex_indices[corner];
+                    ozz::math::Float2 uv{ 0.f, 0.f };
+                    if (vertex_index < vertex_refs.size())
+                    {
+                        const VertexReference& ref = vertex_refs[vertex_index];
+                        if (ref.part_index < mesh.parts.size())
+                        {
+                            const ozz::sample::Mesh::Part& ref_part = mesh.parts[ref.part_index];
+                            if (!ref_part.uvs.empty() &&
+                                ref.local_index >= 0 &&
+                                static_cast<size_t>(ref.local_index * ozz::sample::Mesh::Part::kUVsCpnts + 1) < ref_part.uvs.size())
+                            {
+                                const float* uv_ptr = &ref_part.uvs[ref.local_index * ozz::sample::Mesh::Part::kUVsCpnts];
+                                uv = { uv_ptr[0], uv_ptr[1] };
+                            }
+                        }
+                    }
+                    out_triangle.uvs[corner] = uv;
+                }
+
+                out_triangle.screen_distance_sq = screen_distance_sq;
+            }
+        }
+
+        return found;
+    }
+
+    void DrawTriangleInspectorPanel()
+    {
+        if (!ImGui::Begin("Triangle Inspector"))
         {
             ImGui::End();
             return;
         }
 
-        if (!selected_vertex_.valid)
+        ImGui::TextUnformatted("Left-click a triangle in the viewport to inspect it.");
+        ImGui::Separator();
+
+        if (!selected_triangle_.valid)
         {
-            ImGui::TextUnformatted("Click a vertex in the viewport to inspect it.");
+            ImGui::TextUnformatted("No triangle selected.");
             ImGui::End();
             return;
         }
 
         if (ImGui::Button("Clear selection"))
         {
-            selected_vertex_ = SelectedVertex{};
+            selected_triangle_ = SelectedTriangle{};
             ImGui::End();
             return;
         }
 
-        ImGui::Separator();
-
-        const size_t mesh_index = selected_vertex_.mesh_index;
+        const size_t mesh_index = selected_triangle_.mesh_index;
         const char* mesh_label = (mesh_index < mesh_names_.size()) ? mesh_names_[mesh_index].c_str() : "(mesh)";
         ImGui::Text("Mesh: %s (index %zu)", mesh_label, mesh_index);
-        ImGui::Text("Part: %d", selected_vertex_.part_index);
-        ImGui::Text("Vertex (local/global): %d / %u", selected_vertex_.local_vertex, selected_vertex_.global_vertex);
-        ImGui::Text("Influences: %d", selected_vertex_.influence_count);
+        ImGui::Text("Triangle index: %u", selected_triangle_.triangle_index);
+        ImGui::Text("Area: %.6f", selected_triangle_.area);
+        ImGui::Text("Centroid: (%.4f, %.4f, %.4f)", selected_triangle_.centroid.x, selected_triangle_.centroid.y, selected_triangle_.centroid.z);
+        ImGui::Text("World normal: (%.4f, %.4f, %.4f)", selected_triangle_.world_normal.x, selected_triangle_.world_normal.y, selected_triangle_.world_normal.z);
 
         ImGui::Separator();
-        ImGui::Text("World position: (%.4f, %.4f, %.4f)", selected_vertex_.world_position.x, selected_vertex_.world_position.y,
-            selected_vertex_.world_position.z);
-        ImGui::Text("Local position: (%.4f, %.4f, %.4f)", selected_vertex_.local_position.x, selected_vertex_.local_position.y,
-            selected_vertex_.local_position.z);
-
-        if (selected_vertex_.world_normal.x != 0.f || selected_vertex_.world_normal.y != 0.f || selected_vertex_.world_normal.z != 0.f)
+        ImGui::TextUnformatted("Vertices:");
+        for (size_t i = 0; i < selected_triangle_.world_positions.size(); ++i)
         {
-            ImGui::Text("World normal: (%.4f, %.4f, %.4f)", selected_vertex_.world_normal.x, selected_vertex_.world_normal.y, selected_vertex_.world_normal.z);
-        }
-        if (selected_vertex_.local_normal.x != 0.f || selected_vertex_.local_normal.y != 0.f || selected_vertex_.local_normal.z != 0.f)
-        {
-            ImGui::Text("Local normal: (%.4f, %.4f, %.4f)", selected_vertex_.local_normal.x, selected_vertex_.local_normal.y, selected_vertex_.local_normal.z);
-        }
-        ImGui::Text("UV: (%.4f, %.4f)", selected_vertex_.uv.x, selected_vertex_.uv.y);
-
-        auto joint_names = skeleton_.joint_names();
-        ImGui::Separator();
-        ImGui::TextUnformatted("Bone influences:");
-        for (int influence = 0; influence < selected_vertex_.influence_count && influence < 4; ++influence)
-        {
-            const uint16_t palette_index = selected_vertex_.palette_indices[static_cast<size_t>(influence)];
-            const uint16_t joint_index = selected_vertex_.skeleton_joints[static_cast<size_t>(influence)];
-            const float weight = selected_vertex_.weights[static_cast<size_t>(influence)];
-            const bool joint_valid = joint_index != std::numeric_limits<uint16_t>::max() && static_cast<size_t>(joint_index) < joint_names.size();
-            const char* joint_name = joint_valid ? joint_names[joint_index] : "(invalid)";
-            ImGui::Text("%d: palette %u, joint %u (%s), weight %.4f", influence, palette_index, static_cast<unsigned>(joint_index), joint_name, weight);
+            const ozz::math::Float3& pos = selected_triangle_.world_positions[i];
+            const ozz::math::Float2& uv = selected_triangle_.uvs[i];
+            ImGui::Text("%zu: index %u, world (%.4f, %.4f, %.4f), uv (%.4f, %.4f)", i, selected_triangle_.vertex_indices[i], pos.x, pos.y, pos.z, uv.x, uv.y);
         }
 
         ImGui::End();
