@@ -74,7 +74,11 @@ target_sources_grouped(
     stdafx.h
 )
 
-set_source_files_properties(guids.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(guids.cpp
+    PROPERTIES
+    SKIP_PRECOMPILE_HEADERS ON
+    SKIP_UNITY_BUILD_INCLUSION ON
+)
 
 target_sources_grouped(
     TARGET xrSound
