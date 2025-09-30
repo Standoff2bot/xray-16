@@ -506,6 +506,7 @@ constexpr u32 kChunkSwidata = OGF_SWIDATA;
 
 std::vector<MeshVertex> read_mesh_vertices(const Chunk& chunk);
 std::vector<uint16_t> read_mesh_indices(const Chunk& chunk);
+void rebuild_tangent_frames(std::vector<MeshVertex>& vertices, const std::vector<uint16_t>& indices);
 
 struct SurfaceMetadata
 {
@@ -641,6 +642,8 @@ std::optional<SurfaceDefinition> build_surface_from_chunk_list(const std::vector
     surface.metadata.original_vertex_count = static_cast<uint32_t>(surface.vertices.size());
     surface.indices = read_mesh_indices(*indices_chunk);
     surface.metadata.original_face_count = static_cast<uint32_t>(surface.indices.size() / 3);
+
+    rebuild_tangent_frames(surface.vertices, surface.indices);
 
     return surface;
 }
@@ -1102,6 +1105,62 @@ std::vector<MeshVertex> read_mesh_vertices(const Chunk& chunk)
     if (link_type == 0 || link_type > 4)
         throw std::runtime_error("unsupported vertex influence count in OGF mesh");
 
+    const auto compute_vertex_size = [](uint32_t influences, bool include_tangent_basis) -> size_t
+    {
+        constexpr size_t kFloat3 = sizeof(float) * 3;
+        constexpr size_t kFloat2 = sizeof(float) * 2;
+        const size_t tangent_basis = include_tangent_basis ? kFloat3 * 2 : 0;
+
+        switch (influences)
+        {
+        case 1:            // single bone id (stored as u32)
+            return kFloat3 // position
+                +
+                kFloat3 // normal
+                +
+                tangent_basis +
+                kFloat2             // uv
+                + sizeof(uint32_t); // bone index
+        case 2:
+            return sizeof(uint16_t) * 2 // bone indices
+                +
+                kFloat3 // position
+                +
+                kFloat3 // normal
+                +
+                tangent_basis +
+                sizeof(float) // secondary weight (primary implied)
+                + kFloat2;    // uv
+        case 3:
+        case 4:
+            return sizeof(uint16_t) * influences +
+                kFloat3 // position
+                +
+                kFloat3                                                       // normal
+                + tangent_basis + sizeof(float) * (influences - 1) + kFloat2; // uv
+        default: return 0;
+        }
+    };
+
+    const size_t payload_bytes = reader.size > reader.offset ? reader.size - reader.offset : 0;
+    size_t bytes_per_vertex = 0;
+    if (vertex_count > 0)
+    {
+        if (payload_bytes % vertex_count != 0)
+            throw std::runtime_error("unexpected vertex payload size in OGF mesh");
+        bytes_per_vertex = payload_bytes / vertex_count;
+    }
+
+    const size_t min_expected = compute_vertex_size(link_type, false);
+    const size_t max_expected = compute_vertex_size(link_type, true);
+
+    if (bytes_per_vertex < min_expected)
+        throw std::runtime_error("vertex payload smaller than expected for OGF mesh");
+
+    const bool has_tangent_basis = bytes_per_vertex >= max_expected;
+    const size_t bytes_to_read = has_tangent_basis ? max_expected : min_expected;
+    const size_t extra_bytes_per_vertex = bytes_per_vertex > bytes_to_read ? bytes_per_vertex - bytes_to_read : 0;
+
     std::vector<MeshVertex> vertices;
     vertices.reserve(vertex_count);
 
@@ -1115,8 +1174,16 @@ std::vector<MeshVertex> read_mesh_vertices(const Chunk& chunk)
         {
             vertex.position = reader.read<Fvector>();
             vertex.normal = reader.read<Fvector>();
-            vertex.tangent = reader.read<Fvector>();
-            vertex.binormal = reader.read<Fvector>();
+            if (has_tangent_basis)
+            {
+                vertex.tangent = reader.read<Fvector>();
+                vertex.binormal = reader.read<Fvector>();
+            }
+            else
+            {
+                vertex.tangent.set(0.f, 0.f, 0.f);
+                vertex.binormal.set(0.f, 0.f, 0.f);
+            }
             vertex.uv = reader.read<Fvector2>();
             bone_ids[0] = static_cast<uint16_t>(reader.read<u32>());
             raw_weights[0] = 1.f;
@@ -1127,8 +1194,16 @@ std::vector<MeshVertex> read_mesh_vertices(const Chunk& chunk)
             bone_ids[1] = reader.read<u16>();
             vertex.position = reader.read<Fvector>();
             vertex.normal = reader.read<Fvector>();
-            vertex.tangent = reader.read<Fvector>();
-            vertex.binormal = reader.read<Fvector>();
+            if (has_tangent_basis)
+            {
+                vertex.tangent = reader.read<Fvector>();
+                vertex.binormal = reader.read<Fvector>();
+            }
+            else
+            {
+                vertex.tangent.set(0.f, 0.f, 0.f);
+                vertex.binormal.set(0.f, 0.f, 0.f);
+            }
             const float secondary = reader.read<float>();
             raw_weights[1] = secondary;
             raw_weights[0] = 1.f - secondary;
@@ -1141,8 +1216,16 @@ std::vector<MeshVertex> read_mesh_vertices(const Chunk& chunk)
 
             vertex.position = reader.read<Fvector>();
             vertex.normal = reader.read<Fvector>();
-            vertex.tangent = reader.read<Fvector>();
-            vertex.binormal = reader.read<Fvector>();
+            if (has_tangent_basis)
+            {
+                vertex.tangent = reader.read<Fvector>();
+                vertex.binormal = reader.read<Fvector>();
+            }
+            else
+            {
+                vertex.tangent.set(0.f, 0.f, 0.f);
+                vertex.binormal.set(0.f, 0.f, 0.f);
+            }
 
             float weight_sum = 0.f;
             for (uint32_t influence = 0; influence < link_type - 1; ++influence)
@@ -1162,6 +1245,16 @@ std::vector<MeshVertex> read_mesh_vertices(const Chunk& chunk)
 
         finalize_influences(vertex, bone_ids, raw_weights, link_type);
         vertices.emplace_back(vertex);
+
+        if (extra_bytes_per_vertex)
+            reader.skip(extra_bytes_per_vertex);
+    }
+
+    if (reader.offset != reader.size)
+    {
+        if (reader.offset > reader.size)
+            throw std::runtime_error("vertex reader advanced past end of chunk");
+        reader.skip(reader.size - reader.offset);
     }
 
     return vertices;
@@ -1176,6 +1269,105 @@ std::vector<uint16_t> read_mesh_indices(const Chunk& chunk)
     for (uint32_t idx = 0; idx < index_count; ++idx)
         indices.push_back(reader.read<u16>());
     return indices;
+}
+
+void rebuild_tangent_frames(std::vector<MeshVertex>& vertices, const std::vector<uint16_t>& indices)
+{
+    if (vertices.empty() || indices.empty())
+        return;
+
+    std::vector<Fvector> accumulated_tangents(vertices.size());
+    std::vector<Fvector> accumulated_binormals(vertices.size());
+
+    for (Fvector& value : accumulated_tangents)
+        value.set(0.f, 0.f, 0.f);
+    for (Fvector& value : accumulated_binormals)
+        value.set(0.f, 0.f, 0.f);
+
+    for (size_t tri = 0; tri + 2 < indices.size(); tri += 3)
+    {
+        const uint16_t i0 = indices[tri];
+        const uint16_t i1 = indices[tri + 1];
+        const uint16_t i2 = indices[tri + 2];
+
+        if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
+            continue;
+
+        const MeshVertex& v0 = vertices[i0];
+        const MeshVertex& v1 = vertices[i1];
+        const MeshVertex& v2 = vertices[i2];
+
+        Fvector edge1;
+        edge1.sub(v1.position, v0.position);
+        Fvector edge2;
+        edge2.sub(v2.position, v0.position);
+
+        const float du1 = v1.uv.x - v0.uv.x;
+        const float dv1 = v1.uv.y - v0.uv.y;
+        const float du2 = v2.uv.x - v0.uv.x;
+        const float dv2 = v2.uv.y - v0.uv.y;
+
+        const float determinant = du1 * dv2 - dv1 * du2;
+        if (std::fabs(determinant) <= std::numeric_limits<float>::epsilon())
+            continue;
+
+        const float inv = 1.f / determinant;
+
+        Fvector tangent;
+        tangent.mul(edge1, dv2);
+        Fvector temp;
+        temp.mul(edge2, dv1);
+        tangent.sub(temp);
+        tangent.mul(inv);
+
+        Fvector binormal;
+        binormal.mul(edge2, du1);
+        temp.mul(edge1, du2);
+        binormal.sub(temp);
+        binormal.mul(inv);
+
+        accumulated_tangents[i0].add(tangent);
+        accumulated_tangents[i1].add(tangent);
+        accumulated_tangents[i2].add(tangent);
+
+        accumulated_binormals[i0].add(binormal);
+        accumulated_binormals[i1].add(binormal);
+        accumulated_binormals[i2].add(binormal);
+    }
+
+    for (size_t idx = 0; idx < vertices.size(); ++idx)
+    {
+        Fvector& tangent = accumulated_tangents[idx];
+        Fvector& binormal = accumulated_binormals[idx];
+
+        const float tangent_length = tangent.magnitude();
+        if (tangent_length > std::numeric_limits<float>::epsilon())
+        {
+            tangent.mul(1.f / tangent_length);
+        }
+        else
+        {
+            tangent.set(0.f, 0.f, 0.f);
+        }
+
+        const float binormal_length = binormal.magnitude();
+        if (binormal_length > std::numeric_limits<float>::epsilon())
+        {
+            binormal.mul(1.f / binormal_length);
+        }
+        else
+        {
+            binormal.set(0.f, 0.f, 0.f);
+        }
+
+        if (!std::isfinite(tangent.x) || !std::isfinite(tangent.y) || !std::isfinite(tangent.z))
+            tangent.set(0.f, 0.f, 0.f);
+        if (!std::isfinite(binormal.x) || !std::isfinite(binormal.y) || !std::isfinite(binormal.z))
+            binormal.set(0.f, 0.f, 0.f);
+
+        vertices[idx].tangent = tangent;
+        vertices[idx].binormal = binormal;
+    }
 }
 
 constexpr float kPositionQuantizeScale = 100000.f;

@@ -94,7 +94,6 @@ private:
     COzzKinematicsVisual& owner_;
     xr_vector<SourceVertex> source_vertices_;
     xr_vector<u16> indices_;
-    xr_vector<Fmatrix> inverse_bind_poses_;
     xr_vector<u16> joint_remaps_;
     xr_unique_ptr<VertexStreamBuffer> vertex_buffer_;
     xr_unique_ptr<IndexStagingBuffer> index_buffer_;
@@ -130,7 +129,7 @@ static inline Fvector4 ReadVector4(const ozz::vector<float>& data, int index, in
 COzzSkinnedSurface::COzzSkinnedSurface(COzzKinematicsVisual& owner, const ozz::sample::Mesh& mesh)
     : owner_(owner)
 {
-    Type = MT_PROGRESSIVE;
+    Type = MT_OZZ_SKINNED;
     InitializeGeometry(mesh);
     dbg_name = mesh.xray_metadata.texture_path.c_str();
     Msg("Yohji debug - init COzzSkinnedSurface %s", dbg_name.c_str());
@@ -142,11 +141,6 @@ void COzzSkinnedSurface::InitializeGeometry(const ozz::sample::Mesh& mesh)
     primitive_count_ = static_cast<u32>(mesh.triangle_index_count() / 3);
 
     joint_remaps_.assign(mesh.joint_remaps.begin(), mesh.joint_remaps.end());
-    inverse_bind_poses_.resize(mesh.inverse_bind_poses.size());
-    for (size_t idx = 0; idx < mesh.inverse_bind_poses.size(); ++idx)
-        inverse_bind_poses_[idx] = ConvertOzzMatrixToXRay(mesh.inverse_bind_poses[idx]);
-    if (inverse_bind_poses_.empty())
-        inverse_bind_poses_.push_back(Fidentity);
     if (joint_remaps_.empty())
         joint_remaps_.push_back(0);
 
@@ -220,8 +214,6 @@ void COzzSkinnedSurface::InitializeGeometry(const ozz::sample::Mesh& mesh)
 
     indices_.assign(mesh.triangle_indices.begin(), mesh.triangle_indices.end());
 
-    // Winding is preserved by using a pure rotation basis in conversion; no swap needed here.
-
     vertex_buffer_ = xr_make_unique<VertexStreamBuffer>();
     vertex_buffer_->Create(static_cast<size_t>(vertex_count_) * sizeof(OzzGpuVertex));
 
@@ -290,7 +282,9 @@ void COzzSkinnedSurface::UpdateGeometry()
             if (data.weight <= 0.f)
                 continue;
 
-            const Fmatrix& skin = (data.remap_index < remapped_palette.size()) ? remapped_palette[data.remap_index] : Fidentity;
+            const Fmatrix& skin = (data.remap_index < remapped_palette.size())
+                ? remapped_palette[data.remap_index]
+                : Fidentity;
 
             Fvector contribution;
             skin.transform_tiny(contribution, src.position);

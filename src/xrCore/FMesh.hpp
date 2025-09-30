@@ -23,6 +23,7 @@ enum MT
 
     MT_3DFLUIDVOLUME = 12,
     MT_OZZ_BUNDLE = 13,
+    MT_OZZ_SKINNED = 14,
 };
 
 enum OGF_Chuncks : u32
