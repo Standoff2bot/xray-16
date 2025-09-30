@@ -513,6 +513,8 @@ endif()
 
 set_target_properties(xrCore PROPERTIES
     PREFIX ""
+    VS_USER_PROPS ${XRAY_MSBUILD_PROPS}
+    VS_PACKAGE_REFERENCES "sdl2.nuget_2.32.4;sdl2.nuget.redist_2.32.4"
 )
 
 target_precompile_headers(xrCore

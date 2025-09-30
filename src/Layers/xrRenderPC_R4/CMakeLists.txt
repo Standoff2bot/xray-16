@@ -98,7 +98,6 @@ target_include_directories(xrRenderPC_R4
     "${CMAKE_SOURCE_DIR}/sdk/include/nvapi"
     "${CMAKE_SOURCE_DIR}/Externals/AGS_SDK"
     "${CMAKE_SOURCE_DIR}/Externals/AGS_SDK/ags_lib/inc"
-    "${CMAKE_SOURCE_DIR}/src/packages/directxtex_desktop_2019.2024.10.29.1/include"
 )
 
 target_link_libraries(xrRenderPC_R4
@@ -126,12 +125,8 @@ if (MSVC)
         set(_xr_ags_release_lib "${CMAKE_SOURCE_DIR}/Externals/AGS_SDK/ags_lib/lib/amd_ags_x86_2019_MD.lib")
     endif()
 
-    set(_xr_dxtex_root "${CMAKE_SOURCE_DIR}/src/packages/directxtex_desktop_2019.2024.10.29.1/native/lib/${_xr_dxtex_arch}")
-
     target_link_libraries(xrRenderPC_R4
         PRIVATE
-        $<$<CONFIG:Debug>:${_xr_dxtex_root}/Debug/DirectXTex.lib>
-        $<$<NOT:$<CONFIG:Debug>>:${_xr_dxtex_root}/Release/DirectXTex.lib>
         ${_xr_nvapi_lib}
         $<$<CONFIG:Debug>:${_xr_ags_debug_lib}>
         $<$<NOT:$<CONFIG:Debug>>:${_xr_ags_release_lib}>
@@ -151,6 +146,8 @@ target_compile_definitions(xrRenderPC_R4
 
 set_target_properties(xrRenderPC_R4 PROPERTIES
     PREFIX ""
+    VS_USER_PROPS ${XRAY_MSBUILD_PROPS}
+    VS_PACKAGE_REFERENCES "directxmath_2024.10.15.1;directxtex_desktop_2019_2024.10.29.1"
 )
 
 target_precompile_headers(xrRenderPC_R4

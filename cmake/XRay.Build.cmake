@@ -51,6 +51,10 @@ else()
     message(FATAL_ERROR "Unsupported or unknown compiler.")
 endif()
 
+# https://stackoverflow.com/questions/61909735/cmakes-vs-package-references-not-adding-a-reference-to-vs2017-project
+# https://stackoverflow.com/questions/2973263/add-visual-c-property-sheets-using-cmake
+set(XRAY_MSBUILD_PROPS "${CMAKE_CURRENT_LIST_DIR}/XRay.MSBuild.props")
+
 if (WIN32)
     include_directories("${XRAY_SDK_INCLUDE_DIR}")
     include_directories("${XRAY_SDK_INCLUDE_DIR}/SDL2")
