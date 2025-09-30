@@ -54,6 +54,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <numeric>
 
 #include "xrCore/Animation/SkeletonMotionDefs.hpp"
 
@@ -1568,16 +1569,11 @@ std::vector<uint8_t> compute_back_face_flags(const std::vector<MeshVertex>& vert
 ozz::sample::Mesh build_mesh(const std::vector<MeshVertex>& vertices, const std::vector<uint16_t>& indices, const std::vector<BoneRecord>& bones,
     const SurfaceMetadata& metadata)
 {
-    std::array<PartData, 5> parts{};
-    for (int influences = 0; influences < 5; ++influences)
-        parts[static_cast<size_t>(influences)].influence_count = influences;
-
     std::unordered_map<uint16_t, uint16_t> joint_map;
     std::vector<uint16_t> joint_remaps;
     std::vector<ozz::math::Float4x4> inverse_bind_poses;
 
-    constexpr uint32_t kInvalidVertexIndex = std::numeric_limits<uint32_t>::max();
-    std::vector<uint32_t> vertex_remap(vertices.size(), kInvalidVertexIndex);
+    std::vector<ConvertedVertex> converted_vertices(vertices.size());
 
     for (size_t vertex_index = 0; vertex_index < vertices.size(); ++vertex_index)
     {
@@ -1632,93 +1628,60 @@ ozz::sample::Mesh build_mesh(const std::vector<MeshVertex>& vertices, const std:
         }
 
         converted.influence_count = std::min<uint8_t>(4, influence_count);
-        const int part_index = std::max<int>(1, converted.influence_count);
-        parts[static_cast<size_t>(part_index)].vertices.emplace_back(converted);
+        converted_vertices[vertex_index] = converted;
     }
 
     ozz::sample::Mesh mesh;
-    uint32_t next_vertex_index = 0;
+    const size_t vertex_count = converted_vertices.size();
 
-    for (int influences = 1; influences <= 4; ++influences)
+    ozz::sample::Mesh::Part part;
+    part.positions.resize(vertex_count * ozz::sample::Mesh::Part::kPositionsCpnts);
+    part.normals.resize(vertex_count * ozz::sample::Mesh::Part::kNormalsCpnts);
+    part.tangents.resize(vertex_count * ozz::sample::Mesh::Part::kTangentsCpnts);
+    part.uvs.resize(vertex_count * ozz::sample::Mesh::Part::kUVsCpnts);
+    part.colors.resize(vertex_count * ozz::sample::Mesh::Part::kColorsCpnts, 0u);
+    part.joint_indices.resize(vertex_count * 4u);
+    part.joint_weights.resize(vertex_count * 3u);
+
+    for (size_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
     {
-        auto& data = parts[static_cast<size_t>(influences)];
-        if (data.vertices.empty())
-            continue;
+        const ConvertedVertex& v = converted_vertices[vertex_index];
 
-        ozz::sample::Mesh::Part part;
-        const size_t count = data.vertices.size();
-        part.positions.resize(count * ozz::sample::Mesh::Part::kPositionsCpnts);
-        part.normals.resize(count * ozz::sample::Mesh::Part::kNormalsCpnts);
-        part.tangents.resize(count * ozz::sample::Mesh::Part::kTangentsCpnts);
-        part.uvs.resize(count * ozz::sample::Mesh::Part::kUVsCpnts);
-        part.joint_indices.resize(count * influences);
-        if (influences > 1)
-            part.joint_weights.resize(count * (influences - 1));
+        part.positions[vertex_index * 3 + 0] = v.position[0];
+        part.positions[vertex_index * 3 + 1] = v.position[1];
+        part.positions[vertex_index * 3 + 2] = v.position[2];
 
-        for (size_t local_index = 0; local_index < count; ++local_index)
+        part.normals[vertex_index * 3 + 0] = v.normal[0];
+        part.normals[vertex_index * 3 + 1] = v.normal[1];
+        part.normals[vertex_index * 3 + 2] = v.normal[2];
+
+        part.tangents[vertex_index * 4 + 0] = v.tangent[0];
+        part.tangents[vertex_index * 4 + 1] = v.tangent[1];
+        part.tangents[vertex_index * 4 + 2] = v.tangent[2];
+        part.tangents[vertex_index * 4 + 3] = v.tangent[3];
+
+        part.uvs[vertex_index * 2 + 0] = v.uv[0];
+        part.uvs[vertex_index * 2 + 1] = v.uv[1];
+
+        for (int influence = 0; influence < 4; ++influence)
         {
-            const ConvertedVertex& v = data.vertices[local_index];
-            vertex_remap[v.original_index] = next_vertex_index + static_cast<uint32_t>(local_index);
-
-            part.positions[local_index * 3 + 0] = v.position[0];
-            part.positions[local_index * 3 + 1] = v.position[1];
-            part.positions[local_index * 3 + 2] = v.position[2];
-
-            part.normals[local_index * 3 + 0] = v.normal[0];
-            part.normals[local_index * 3 + 1] = v.normal[1];
-            part.normals[local_index * 3 + 2] = v.normal[2];
-
-            part.tangents[local_index * 4 + 0] = v.tangent[0];
-            part.tangents[local_index * 4 + 1] = v.tangent[1];
-            part.tangents[local_index * 4 + 2] = v.tangent[2];
-            part.tangents[local_index * 4 + 3] = v.tangent[3];
-
-            part.uvs[local_index * 2 + 0] = v.uv[0];
-            part.uvs[local_index * 2 + 1] = v.uv[1];
-
-            for (int influence = 0; influence < influences; ++influence)
-                part.joint_indices[local_index * influences + influence] = v.joint_indices[influence];
-
-            if (influences > 1)
+            part.joint_indices[vertex_index * 4 + influence] = v.joint_indices[static_cast<size_t>(influence)];
+            if (influence < 3)
             {
-                float accumulated = 0.f;
-                for (int influence = 0; influence < influences - 1; ++influence)
-                {
-                    const float weight = v.joint_weights[influence];
-                    part.joint_weights[local_index * (influences - 1) + influence] = weight;
-                    accumulated += weight;
-                }
+                part.joint_weights[vertex_index * 3 + influence] = v.joint_weights[static_cast<size_t>(influence)];
             }
         }
-
-        mesh.parts.push_back(std::move(part));
-        next_vertex_index += static_cast<uint32_t>(count);
     }
+
+    mesh.parts.push_back(std::move(part));
 
     mesh.triangle_indices.resize(indices.size());
     for (size_t idx = 0; idx < indices.size(); ++idx)
     {
         const uint16_t original = indices[idx];
-        if (original >= vertex_remap.size())
+        if (original >= vertex_count)
             throw std::runtime_error("index references vertex outside range");
-        const uint32_t remapped = vertex_remap[original];
-        if (remapped == kInvalidVertexIndex)
-            throw std::runtime_error("missing remapped index for original vertex");
-        if (remapped > std::numeric_limits<uint16_t>::max())
-            throw std::runtime_error("remapped vertex index exceeds 16-bit range");
-        mesh.triangle_indices[idx] = static_cast<uint16_t>(remapped);
-    }
-
-    const uint32_t exported_vertex_count = next_vertex_index;
-    std::vector<uint32_t> remapped_to_original(exported_vertex_count, kInvalidVertexIndex);
-    for (uint32_t original = 0; original < vertex_remap.size(); ++original)
-    {
-        const uint32_t remapped = vertex_remap[original];
-        if (remapped == kInvalidVertexIndex || remapped >= remapped_to_original.size())
-        {
-            continue;
-        }
-        remapped_to_original[remapped] = original;
+        mesh.triangle_indices[idx] = original;
     }
 
     mesh.joint_remaps.resize(joint_remaps.size());
@@ -1741,8 +1704,10 @@ ozz::sample::Mesh build_mesh(const std::vector<MeshVertex>& vertices, const std:
     mesh.xray_metadata.progressive_collapse_count = metadata.progressive_collapse_count;
     mesh.xray_metadata.progressive_data = metadata.progressive_data;
     mesh.xray_metadata.child_visual_links = metadata.child_visual_links;
-    mesh.xray_metadata.original_to_remapped.assign(vertex_remap.begin(), vertex_remap.end());
-    mesh.xray_metadata.remapped_to_original = std::move(remapped_to_original);
+    mesh.xray_metadata.original_to_remapped.resize(vertex_count);
+    std::iota(mesh.xray_metadata.original_to_remapped.begin(), mesh.xray_metadata.original_to_remapped.end(), 0u);
+    mesh.xray_metadata.remapped_to_original.resize(vertex_count);
+    std::iota(mesh.xray_metadata.remapped_to_original.begin(), mesh.xray_metadata.remapped_to_original.end(), 0u);
 
     return mesh;
 }
