@@ -40,7 +40,6 @@ target_include_directories(xrCDB
     PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
     "${CMAKE_SOURCE_DIR}/Externals"
-    "${CMAKE_SOURCE_DIR}/Externals/imgui"
 )
 
 target_link_libraries(xrCDB

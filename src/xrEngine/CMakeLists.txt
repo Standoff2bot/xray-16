@@ -413,7 +413,6 @@ target_sources(xrEngine
 target_include_directories(xrEngine
     PUBLIC
     "${CMAKE_SOURCE_DIR}/src"
-    "${CMAKE_SOURCE_DIR}/Externals/imgui"
 
     PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -423,6 +422,7 @@ target_include_directories(xrEngine
 target_link_libraries(xrEngine
     PUBLIC
     xrMiscMath
+    xrImGui
 
     PRIVATE
     xrAPI
@@ -432,7 +432,6 @@ target_link_libraries(xrEngine
     xrSound
     xrScriptEngine
     xrNetServer
-    xrImGui
     OpenAL::OpenAL
     Ogg::Ogg
     Theora::Theora

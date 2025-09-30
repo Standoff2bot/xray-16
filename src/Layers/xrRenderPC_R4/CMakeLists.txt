@@ -78,33 +78,12 @@ file(GLOB XR_RENDERPC_R4_R2_SOURCES
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender_R2/*.cpp"
 )
 
-set(XR_IMGUI_DIR "${CMAKE_SOURCE_DIR}/Externals/imgui")
-
-set(XR_IMGUI_SOURCES
-    "${XR_IMGUI_DIR}/imgui.cpp"
-    "${XR_IMGUI_DIR}/imgui_draw.cpp"
-    "${XR_IMGUI_DIR}/imgui_tables.cpp"
-    "${XR_IMGUI_DIR}/imgui_widgets.cpp"
-)
-
-if (MSVC)
-    list(APPEND XR_IMGUI_SOURCES
-        "${XR_IMGUI_DIR}/backends/imgui_impl_dx11.cpp"
-        "${XR_IMGUI_DIR}/backends/imgui_impl_win32.cpp"
-    )
-endif()
-
-set_source_files_properties(${XR_IMGUI_SOURCES} PROPERTIES
-    SKIP_PRECOMPILE_HEADERS ON
-)
-
 target_sources(xrRenderPC_R4 PRIVATE
     ${XR_RENDERPC_R4_SHARED_SOURCES}
     ${XR_RENDERPC_R4_BLENDER_SOURCES}
     ${XR_RENDERPC_R4_UTILITY_SOURCES}
     ${XR_RENDERPC_R4_DX11_SOURCES}
     ${XR_RENDERPC_R4_R2_SOURCES}
-    ${XR_IMGUI_SOURCES}
 )
 
 target_include_directories(xrRenderPC_R4
@@ -114,7 +93,6 @@ target_include_directories(xrRenderPC_R4
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender_R2"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRenderDX11"
-    "${XR_IMGUI_DIR}"
     "${CMAKE_SOURCE_DIR}/sdk/include"
     "${CMAKE_SOURCE_DIR}/sdk/include/DirectXMesh"
     "${CMAKE_SOURCE_DIR}/sdk/include/nvapi"
