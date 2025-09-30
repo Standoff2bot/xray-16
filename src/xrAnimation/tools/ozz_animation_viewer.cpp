@@ -1119,6 +1119,9 @@ protected:
                     std::vector<ozz::math::Float3> world_positions(vertex_count);
                     std::vector<VertexReference> vertex_refs(vertex_count);
 
+                    const std::vector<uint32_t>& remapped_to_original = mesh.xray_metadata.remapped_to_original;
+                    constexpr uint32_t kInvalidVertexIndex = std::numeric_limits<uint32_t>::max();
+
                     uint32_t global_vertex = 0;
 
                     for (size_t part_index = 0; part_index < mesh.parts.size(); ++part_index)
@@ -1193,7 +1196,14 @@ protected:
                             ozz::math::Float3 world_position;
                             ozz::math::Store3PtrU(world_pos_simd, &world_position.x);
                             world_positions[global_vertex] = world_position;
-                            vertex_refs[global_vertex] = VertexReference{ part_index, local_index };
+
+                            const uint32_t remapped_index = global_vertex;
+                            uint32_t original_index = kInvalidVertexIndex;
+                            if (remapped_index < remapped_to_original.size())
+                            {
+                                original_index = remapped_to_original[remapped_index];
+                            }
+                            vertex_refs[global_vertex] = VertexReference{ part_index, local_index, remapped_index, original_index };
 
                             ozz::math::Float3 world_normal{ 0.f, 0.f, 0.f };
                             if (part_has_normals)
@@ -1740,6 +1750,8 @@ private:
     {
         size_t part_index = 0;
         int local_index = 0;
+        uint32_t remapped_index = std::numeric_limits<uint32_t>::max();
+        uint32_t original_index = std::numeric_limits<uint32_t>::max();
     };
 
     struct SelectedTriangle
@@ -2722,9 +2734,19 @@ private:
         {
             const ozz::math::Float3& pos = selected_triangle_.world_positions[i];
             const ozz::math::Float2& uv = selected_triangle_.uvs[i];
-            ImGui::Text("%zu: index %u, world (%.4f, %.4f, %.4f), uv (%.4f, %.4f)", i, selected_triangle_.vertex_indices[i], pos.x, pos.y, pos.z, uv.x, uv.y);
-
+            const uint32_t remapped_index = selected_triangle_.vertex_indices[i];
             const VertexReference& vref = selected_triangle_.vertex_refs[i];
+            constexpr uint32_t kInvalidVertexIndex = std::numeric_limits<uint32_t>::max();
+            const uint32_t original_index = vref.original_index;
+            if (original_index != kInvalidVertexIndex)
+            {
+                ImGui::Text("%zu: remapped %u, original %u, world (%.4f, %.4f, %.4f), uv (%.4f, %.4f)", i, remapped_index, original_index, pos.x, pos.y, pos.z, uv.x,
+                            uv.y);
+            }
+            else
+            {
+                ImGui::Text("%zu: remapped %u, original N/A, world (%.4f, %.4f, %.4f), uv (%.4f, %.4f)", i, remapped_index, pos.x, pos.y, pos.z, uv.x, uv.y);
+            }
             ImGui::Indent();
             ImGui::Text("Part %zu, local %d", vref.part_index, vref.local_index);
 

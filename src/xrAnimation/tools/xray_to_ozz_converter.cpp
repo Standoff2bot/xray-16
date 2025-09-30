@@ -1576,7 +1576,8 @@ ozz::sample::Mesh build_mesh(const std::vector<MeshVertex>& vertices, const std:
     std::vector<uint16_t> joint_remaps;
     std::vector<ozz::math::Float4x4> inverse_bind_poses;
 
-    std::vector<uint32_t> vertex_remap(vertices.size(), 0);
+    constexpr uint32_t kInvalidVertexIndex = std::numeric_limits<uint32_t>::max();
+    std::vector<uint32_t> vertex_remap(vertices.size(), kInvalidVertexIndex);
 
     for (size_t vertex_index = 0; vertex_index < vertices.size(); ++vertex_index)
     {
@@ -1701,9 +1702,23 @@ ozz::sample::Mesh build_mesh(const std::vector<MeshVertex>& vertices, const std:
         if (original >= vertex_remap.size())
             throw std::runtime_error("index references vertex outside range");
         const uint32_t remapped = vertex_remap[original];
+        if (remapped == kInvalidVertexIndex)
+            throw std::runtime_error("missing remapped index for original vertex");
         if (remapped > std::numeric_limits<uint16_t>::max())
             throw std::runtime_error("remapped vertex index exceeds 16-bit range");
         mesh.triangle_indices[idx] = static_cast<uint16_t>(remapped);
+    }
+
+    const uint32_t exported_vertex_count = next_vertex_index;
+    std::vector<uint32_t> remapped_to_original(exported_vertex_count, kInvalidVertexIndex);
+    for (uint32_t original = 0; original < vertex_remap.size(); ++original)
+    {
+        const uint32_t remapped = vertex_remap[original];
+        if (remapped == kInvalidVertexIndex || remapped >= remapped_to_original.size())
+        {
+            continue;
+        }
+        remapped_to_original[remapped] = original;
     }
 
     mesh.joint_remaps.resize(joint_remaps.size());
@@ -1726,6 +1741,8 @@ ozz::sample::Mesh build_mesh(const std::vector<MeshVertex>& vertices, const std:
     mesh.xray_metadata.progressive_collapse_count = metadata.progressive_collapse_count;
     mesh.xray_metadata.progressive_data = metadata.progressive_data;
     mesh.xray_metadata.child_visual_links = metadata.child_visual_links;
+    mesh.xray_metadata.original_to_remapped.assign(vertex_remap.begin(), vertex_remap.end());
+    mesh.xray_metadata.remapped_to_original = std::move(remapped_to_original);
 
     return mesh;
 }

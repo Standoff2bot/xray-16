@@ -1425,6 +1425,56 @@ bool TestMeshSurfaceStatsMatchSource()
             ok = false;
         }
 
+        const uint32_t kInvalidRemap = std::numeric_limits<uint32_t>::max();
+        const size_t exported_vertex_count = static_cast<size_t>(mesh.vertex_count());
+
+        if (!metadata.original_to_remapped.empty() && metadata.original_to_remapped.size() != static_cast<size_t>(source.vertex_count))
+        {
+            std::cerr << "surface " << i << " original_to_remapped size " << metadata.original_to_remapped.size()
+                      << " does not match original vertex count " << source.vertex_count << std::endl;
+            ok = false;
+        }
+
+        if (!metadata.remapped_to_original.empty() && metadata.remapped_to_original.size() != exported_vertex_count)
+        {
+            std::cerr << "surface " << i << " remapped_to_original size " << metadata.remapped_to_original.size()
+                      << " does not match exported vertex count " << exported_vertex_count << std::endl;
+            ok = false;
+        }
+
+        bool has_valid_mapping = false;
+        const size_t remapped_span = metadata.remapped_to_original.size();
+        for (size_t original = 0; original < metadata.original_to_remapped.size(); ++original)
+        {
+            const uint32_t remapped = metadata.original_to_remapped[original];
+            if (remapped == kInvalidRemap)
+            {
+                continue;
+            }
+            if (remapped >= remapped_span)
+            {
+                std::cerr << "surface " << i << " original vertex " << original << " remaps to out-of-range index " << remapped << std::endl;
+                ok = false;
+                continue;
+            }
+            if (!metadata.remapped_to_original.empty() && metadata.remapped_to_original[remapped] != original)
+            {
+                std::cerr << "surface " << i << " remap inconsistency: remapped index " << remapped << " resolves to original "
+                          << metadata.remapped_to_original[remapped] << " instead of " << original << std::endl;
+                ok = false;
+            }
+            else
+            {
+                has_valid_mapping = true;
+            }
+        }
+
+        if (!metadata.original_to_remapped.empty() && !has_valid_mapping)
+        {
+            std::cerr << "surface " << i << " has no valid vertex remap entries" << std::endl;
+            ok = false;
+        }
+
         if (mesh.vertex_count() != static_cast<int>(source.vertex_count))
         {
             std::cerr << "surface " << i << " exported vertex count " << mesh.vertex_count() << " differs from OGF vertex count " << source.vertex_count
