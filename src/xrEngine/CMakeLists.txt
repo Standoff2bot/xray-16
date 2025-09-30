@@ -342,14 +342,16 @@ target_sources_grouped(
     xrTheora_Surface.h
 )
 
-#target_sources_grouped(
-#    TARGET xrEngine
-#    NAME "Render\\Execution & 3D\\TextConsole"
-#    FILES
-#    Text_Console.cpp
-#    Text_Console.h
-#    Text_Console_WndProc.cpp
-#)
+if (WIN32)
+    target_sources_grouped(
+        TARGET xrEngine
+        NAME "Render\\Execution & 3D\\TextConsole"
+        FILES
+        Text_Console.cpp
+        Text_Console.h
+        Text_Console_WndProc.cpp
+    )
+endif()
 
 target_sources_grouped(
     TARGET xrEngine
@@ -407,14 +409,6 @@ target_sources(xrEngine
     features.txt
     TODO.txt
 )
-
-if (WIN32)
-    target_sources(xrEngine
-        PRIVATE
-        Text_Console.cpp
-        Text_Console_WndProc.cpp
-    )
-endif()
 
 target_include_directories(xrEngine
     PUBLIC

@@ -466,7 +466,6 @@ if (WIN32)
         $<$<STREQUAL:${MEMORY_ALLOCATOR},mimalloc>:mimalloc>
         DbgHelp
         FaultRep
-        SDL2::SDL2main
     )
 else()
     target_link_libraries(xrCore

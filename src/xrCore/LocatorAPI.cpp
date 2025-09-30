@@ -12,8 +12,6 @@
 #elif defined(XR_PLATFORM_POSIX)
 #include <SDL.h>
 #include <glob.h>
-#include <SDL.h>
-#include <SDL_filesystem.h>
 #endif
 
 #include "FS_internal.h"

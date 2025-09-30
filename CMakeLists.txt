@@ -21,11 +21,6 @@ option(XRAY_ENABLE_TRACY "Enable tracy profiler"      OFF)
 include(XRay.Build)
 include(XRay.Packaging)
 
-add_compile_definitions(
-    $<$<CONFIG:ReleaseMasterGold>:MASTER_GOLD>
-    $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:XRAY_STATIC_BUILD>
-)
-
 add_subdirectory(Externals)
 add_subdirectory(src)
 add_subdirectory(res)
