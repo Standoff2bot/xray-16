@@ -611,6 +611,68 @@ void parse_progressive_chunk(const Chunk& chunk, SurfaceMetadata& metadata)
     metadata.progressive_collapse_count = reader.read<u32>();
 }
 
+struct ProgressiveWindow
+{
+    uint32_t offset = 0;
+    uint16_t num_tris = 0;
+    uint16_t num_verts = 0;
+};
+
+std::optional<ProgressiveWindow> ParseHighestDetailWindow(const std::vector<uint8_t>& progressive_data)
+{
+    if (progressive_data.size() < sizeof(uint32_t) * 5 + sizeof(ProgressiveWindow))
+        return std::nullopt;
+
+    BinaryReader reader{ reinterpret_cast<const std::byte*>(progressive_data.data()), progressive_data.size() };
+    reader.skip(sizeof(uint32_t) * 4);
+
+    const uint32_t window_count = reader.read<u32>();
+    if (window_count == 0)
+        return std::nullopt;
+
+    const size_t bytes_per_window = sizeof(uint32_t) + sizeof(uint16_t) * 2;
+    if (reader.offset + bytes_per_window * static_cast<size_t>(window_count) > reader.size)
+        return std::nullopt;
+
+    ProgressiveWindow window{};
+    for (uint32_t idx = 0; idx < window_count; ++idx)
+    {
+        window.offset = reader.read<u32>();
+        window.num_tris = reader.read<u16>();
+        window.num_verts = reader.read<u16>();
+    }
+
+    return window;
+}
+
+void ApplyProgressiveWindow(SurfaceDefinition& surface)
+{
+    if (surface.metadata.progressive_data.empty())
+        return;
+
+    const auto window = ParseHighestDetailWindow(surface.metadata.progressive_data);
+    if (!window)
+        return;
+
+    const size_t index_offset = static_cast<size_t>(window->offset);
+    const size_t index_count = static_cast<size_t>(window->num_tris) * 3u;
+    if (index_count == 0)
+        return;
+
+    if (index_offset + index_count > surface.indices.size())
+        throw std::runtime_error("progressive mesh window exceeds index buffer");
+
+    const size_t vertex_count = static_cast<size_t>(window->num_verts);
+    if (vertex_count > surface.vertices.size())
+        throw std::runtime_error("progressive mesh window references vertices outside range");
+
+    if (vertex_count > 0 && vertex_count < surface.vertices.size())
+        surface.vertices.resize(vertex_count);
+
+    std::vector<uint16_t> trimmed(surface.indices.begin() + index_offset, surface.indices.begin() + index_offset + index_count);
+    surface.indices.swap(trimmed);
+}
+
 std::optional<SurfaceDefinition> build_surface_from_chunk_list(const std::vector<std::pair<u32, Chunk>>& chunk_list)
 {
     SurfaceDefinition surface;
@@ -640,8 +702,11 @@ std::optional<SurfaceDefinition> build_surface_from_chunk_list(const std::vector
         return std::nullopt;
 
     surface.vertices = read_mesh_vertices(*vertices_chunk);
-    surface.metadata.original_vertex_count = static_cast<uint32_t>(surface.vertices.size());
     surface.indices = read_mesh_indices(*indices_chunk);
+
+    ApplyProgressiveWindow(surface);
+
+    surface.metadata.original_vertex_count = static_cast<uint32_t>(surface.vertices.size());
     surface.metadata.original_face_count = static_cast<uint32_t>(surface.indices.size() / 3);
 
     rebuild_tangent_frames(surface.vertices, surface.indices);

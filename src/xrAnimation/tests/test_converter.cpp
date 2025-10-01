@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -116,10 +117,55 @@ struct OgfSurfaceStats
     uint32_t face_count = 0;
 };
 
+struct OgfSurfaceGeometry
+{
+    uint32_t vertex_count = 0;
+    std::vector<uint32_t> indices;
+};
+
 constexpr uint32_t OGF_HEADER = 1;
 constexpr uint32_t OGF_VERTICES = 3;
 constexpr uint32_t OGF_INDICES = 4;
 constexpr uint32_t OGF_CHILDREN = 9;
+constexpr uint32_t OGF_SWIDATA = 6;
+
+struct ProgressiveWindow
+{
+    uint32_t offset = 0;
+    uint16_t num_tris = 0;
+    uint16_t num_verts = 0;
+};
+
+std::optional<ProgressiveWindow> ParseHighestDetailWindow(const uint8_t* data, size_t size)
+{
+    const size_t header_bytes = sizeof(uint32_t) * 5;
+    if (data == nullptr || size < header_bytes + sizeof(ProgressiveWindow))
+        return std::nullopt;
+
+    size_t offset = sizeof(uint32_t) * 4;
+    uint32_t window_count = 0;
+    std::memcpy(&window_count, data + offset, sizeof(uint32_t));
+    offset += sizeof(uint32_t);
+
+    if (window_count == 0)
+        return std::nullopt;
+
+    const size_t bytes_per_window = sizeof(uint32_t) + sizeof(uint16_t) * 2;
+    if (offset + bytes_per_window * static_cast<size_t>(window_count) > size)
+        return std::nullopt;
+
+    ProgressiveWindow window{};
+    for (uint32_t idx = 0; idx < window_count; ++idx)
+    {
+        std::memcpy(&window.offset, data + offset, sizeof(uint32_t));
+        offset += sizeof(uint32_t);
+        std::memcpy(&window.num_tris, data + offset, sizeof(uint16_t));
+        offset += sizeof(uint16_t);
+        std::memcpy(&window.num_verts, data + offset, sizeof(uint16_t));
+    }
+
+    return window;
+}
 
 bool ReadBinaryFile(const fs::path& path, std::vector<uint8_t>& out_buffer)
 {
@@ -180,6 +226,7 @@ bool ExtractSurfaceStatsFromSections(const std::vector<ChunkView>& sections, Ogf
 {
     bool has_vertices = false;
     bool has_indices = false;
+    const ChunkView* swidata_chunk = nullptr;
 
     for (const ChunkView& section : sections)
     {
@@ -215,6 +262,125 @@ bool ExtractSurfaceStatsFromSections(const std::vector<ChunkView>& sections, Ogf
             }
             stats.face_count = index_count / 3;
             has_indices = true;
+        }
+        else if (section.id == OGF_SWIDATA)
+        {
+            swidata_chunk = &section;
+        }
+    }
+
+    if (has_vertices && has_indices && swidata_chunk)
+    {
+        if (auto window = ParseHighestDetailWindow(swidata_chunk->data, swidata_chunk->size))
+        {
+            if (window->num_verts > 0 && window->num_verts < stats.vertex_count)
+                stats.vertex_count = window->num_verts;
+
+            if (window->num_tris > 0)
+                stats.face_count = window->num_tris;
+        }
+    }
+
+    return has_vertices && has_indices;
+}
+
+bool ExtractSurfaceGeometryFromSections(const std::vector<ChunkView>& sections, OgfSurfaceGeometry& geometry)
+{
+    bool has_vertices = false;
+    bool has_indices = false;
+    const ChunkView* swidata_chunk = nullptr;
+
+    geometry.vertex_count = 0;
+    geometry.indices.clear();
+
+    for (const ChunkView& section : sections)
+    {
+        if (section.id == OGF_VERTICES)
+        {
+            size_t offset = 0;
+            if (section.size < sizeof(uint32_t) * 2)
+            {
+                std::cerr << "vertex chunk too small" << std::endl;
+                return false;
+            }
+
+            offset += sizeof(uint32_t);
+            uint32_t vertex_count = 0;
+            std::memcpy(&vertex_count, section.data + offset, sizeof(uint32_t));
+            geometry.vertex_count = vertex_count;
+            has_vertices = true;
+        }
+        else if (section.id == OGF_INDICES)
+        {
+            if (section.size < sizeof(uint32_t))
+            {
+                std::cerr << "index chunk too small" << std::endl;
+                return false;
+            }
+
+            uint32_t index_count = 0;
+            std::memcpy(&index_count, section.data, sizeof(uint32_t));
+            const size_t payload_bytes = section.size - sizeof(uint32_t);
+
+            const size_t expected_u16 = static_cast<size_t>(index_count) * sizeof(uint16_t);
+            const size_t expected_u32 = static_cast<size_t>(index_count) * sizeof(uint32_t);
+
+            const uint8_t* cursor = section.data + sizeof(uint32_t);
+            geometry.indices.resize(index_count);
+
+            if (payload_bytes == expected_u16)
+            {
+                for (uint32_t i = 0; i < index_count; ++i)
+                {
+                    uint16_t value = 0;
+                    std::memcpy(&value, cursor + i * sizeof(uint16_t), sizeof(uint16_t));
+                    geometry.indices[i] = value;
+                }
+            }
+            else if (payload_bytes == expected_u32)
+            {
+                for (uint32_t i = 0; i < index_count; ++i)
+                {
+                    uint32_t value = 0;
+                    std::memcpy(&value, cursor + i * sizeof(uint32_t), sizeof(uint32_t));
+                    geometry.indices[i] = value;
+                }
+            }
+            else
+            {
+                std::cerr << "unexpected index payload size: " << payload_bytes << " bytes for " << index_count << " indices" << std::endl;
+                return false;
+            }
+
+            has_indices = true;
+        }
+        else if (section.id == OGF_SWIDATA)
+        {
+            swidata_chunk = &section;
+        }
+    }
+
+    if (has_vertices && has_indices && swidata_chunk)
+    {
+        if (auto window = ParseHighestDetailWindow(swidata_chunk->data, swidata_chunk->size))
+        {
+            const size_t index_offset = static_cast<size_t>(window->offset);
+            const size_t index_count = static_cast<size_t>(window->num_tris) * 3u;
+
+            if (index_count > 0)
+            {
+                if (index_offset + index_count > geometry.indices.size())
+                {
+                    std::cerr << "progressive mesh window exceeds index buffer" << std::endl;
+                    return false;
+                }
+
+                std::vector<uint32_t> trimmed(geometry.indices.begin() + index_offset, geometry.indices.begin() + index_offset + index_count);
+                geometry.indices.swap(trimmed);
+            }
+
+            if (window->num_verts > 0 && window->num_verts < geometry.vertex_count)
+                geometry.vertex_count = window->num_verts;
         }
     }
 
@@ -269,6 +435,57 @@ bool LoadOgfSurfaceStats(const fs::path& path, std::vector<OgfSurfaceStats>& sur
     }
 
     std::cerr << "failed to locate any surfaces in OGF file: " << path << std::endl;
+    return false;
+}
+
+bool LoadOgfSurfaceGeometry(const fs::path& path, std::vector<OgfSurfaceGeometry>& surfaces)
+{
+    std::vector<uint8_t> buffer;
+    if (!ReadBinaryFile(path, buffer))
+        return false;
+
+    std::vector<ChunkView> root_chunks;
+    if (!ParseChunkSequence(buffer.data(), buffer.size(), root_chunks))
+        return false;
+
+    surfaces.clear();
+
+    const auto children_it = std::find_if(root_chunks.begin(), root_chunks.end(),
+        [](const ChunkView& chunk)
+        {
+            return chunk.id == OGF_CHILDREN;
+        });
+
+    if (children_it != root_chunks.end())
+    {
+        std::vector<ChunkView> child_chunks;
+        if (!ParseChunkSequence(children_it->data, children_it->size, child_chunks))
+            return false;
+
+        for (const ChunkView& child : child_chunks)
+        {
+            std::vector<ChunkView> sections;
+            if (!ParseChunkSequence(child.data, child.size, sections))
+                return false;
+
+            OgfSurfaceGeometry geometry;
+            if (!ExtractSurfaceGeometryFromSections(sections, geometry))
+                return false;
+            surfaces.push_back(std::move(geometry));
+        }
+
+        if (!surfaces.empty())
+            return true;
+    }
+
+    OgfSurfaceGeometry root_geometry;
+    if (ExtractSurfaceGeometryFromSections(root_chunks, root_geometry))
+    {
+        surfaces.push_back(std::move(root_geometry));
+        return true;
+    }
+
+    std::cerr << "failed to locate any geometry in OGF file: " << path << std::endl;
     return false;
 }
 
@@ -1289,6 +1506,164 @@ bool TestGenerateMesh()
     return ConvertMesh(true);
 }
 
+bool CompareMeshTrianglesWithSource(size_t surface_index, const OgfSurfaceGeometry& source, const ozz::sample::Mesh& mesh)
+{
+    if (source.indices.size() % 3 != 0)
+    {
+        std::cerr << "surface " << surface_index << " source index buffer not divisible by 3" << std::endl;
+        return false;
+    }
+
+    if (mesh.triangle_indices.size() % 3 != 0)
+    {
+        std::cerr << "surface " << surface_index << " exported index buffer not divisible by 3" << std::endl;
+        return false;
+    }
+
+    std::vector<std::array<uint32_t, 3>> source_triangles;
+    source_triangles.reserve(source.indices.size() / 3);
+    for (size_t tri = 0; tri < source.indices.size(); tri += 3)
+    {
+        std::array<uint32_t, 3> indices = {
+            source.indices[tri + 0],
+            source.indices[tri + 1],
+            source.indices[tri + 2],
+        };
+
+        if (source.vertex_count > 0)
+        {
+            if (indices[0] >= source.vertex_count || indices[1] >= source.vertex_count || indices[2] >= source.vertex_count)
+            {
+                std::cerr << "surface " << surface_index << " source triangle references vertex outside range" << std::endl;
+                return false;
+            }
+        }
+
+        source_triangles.push_back(indices);
+    }
+
+    const size_t exported_vertex_count = static_cast<size_t>(mesh.vertex_count());
+    const auto& remap = mesh.xray_metadata.remapped_to_original;
+    const bool has_remap = !remap.empty();
+
+    if (has_remap && remap.size() != exported_vertex_count)
+    {
+        std::cerr << "surface " << surface_index << " remap size " << remap.size() << " does not match exported vertex count "
+                  << exported_vertex_count << std::endl;
+        return false;
+    }
+
+    std::vector<std::array<uint32_t, 3>> mesh_triangles;
+    mesh_triangles.reserve(mesh.triangle_indices.size() / 3);
+
+    for (size_t tri = 0; tri < mesh.triangle_indices.size(); tri += 3)
+    {
+        const uint16_t idx0 = mesh.triangle_indices[tri + 0];
+        const uint16_t idx1 = mesh.triangle_indices[tri + 1];
+        const uint16_t idx2 = mesh.triangle_indices[tri + 2];
+
+        if (idx0 >= exported_vertex_count || idx1 >= exported_vertex_count || idx2 >= exported_vertex_count)
+        {
+            std::cerr << "surface " << surface_index << " exported triangle references vertex outside range" << std::endl;
+            return false;
+        }
+
+        const uint32_t original0 = has_remap ? remap[idx0] : static_cast<uint32_t>(idx0);
+        const uint32_t original1 = has_remap ? remap[idx1] : static_cast<uint32_t>(idx1);
+        const uint32_t original2 = has_remap ? remap[idx2] : static_cast<uint32_t>(idx2);
+
+        if (source.vertex_count > 0)
+        {
+            if (original0 >= source.vertex_count || original1 >= source.vertex_count || original2 >= source.vertex_count)
+            {
+                std::cerr << "surface " << surface_index << " exported triangle remaps outside original vertex range" << std::endl;
+                return false;
+            }
+        }
+
+        mesh_triangles.push_back({ original0, original1, original2 });
+    }
+
+    if (mesh_triangles.size() != source_triangles.size())
+    {
+        std::cerr << "surface " << surface_index << " triangle count mismatch (" << mesh_triangles.size() << " vs " << source_triangles.size() << ")"
+                  << std::endl;
+        return false;
+    }
+
+    auto make_canonical = [](std::vector<std::array<uint32_t, 3>> triangles)
+    {
+        for (auto& tri : triangles)
+            std::sort(tri.begin(), tri.end());
+        std::sort(triangles.begin(), triangles.end());
+        return triangles;
+    };
+
+    const auto canonical_source = make_canonical(source_triangles);
+    const auto canonical_exported = make_canonical(mesh_triangles);
+
+    if (canonical_source != canonical_exported)
+    {
+        std::vector<std::array<uint32_t, 3>> missing;
+        std::vector<std::array<uint32_t, 3>> extra;
+
+        std::set_difference(canonical_source.begin(), canonical_source.end(), canonical_exported.begin(), canonical_exported.end(),
+            std::back_inserter(missing));
+        std::set_difference(canonical_exported.begin(), canonical_exported.end(), canonical_source.begin(), canonical_source.end(),
+            std::back_inserter(extra));
+
+        auto triangle_to_string = [](const std::array<uint32_t, 3>& tri)
+        {
+            std::ostringstream oss;
+            oss << '(' << tri[0] << ',' << tri[1] << ',' << tri[2] << ')';
+            return oss.str();
+        };
+
+        if (!missing.empty())
+        {
+            std::cerr << "surface " << surface_index << " missing triangle example " << triangle_to_string(missing.front()) << std::endl;
+        }
+
+        if (!extra.empty())
+        {
+            std::cerr << "surface " << surface_index << " extra triangle example " << triangle_to_string(extra.front()) << std::endl;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+bool TestMeshTrianglesMatchSource()
+{
+    if (!ConvertMesh(false))
+        return false;
+
+    std::vector<OgfSurfaceGeometry> ogf_geometry;
+    if (!LoadOgfSurfaceGeometry(SkeletonInputPath(), ogf_geometry))
+        return false;
+
+    std::vector<ozz::sample::Mesh> meshes;
+    if (!LoadMeshArchive(MeshOutputPath(), meshes))
+        return false;
+
+    if (meshes.size() != ogf_geometry.size())
+    {
+        std::cerr << "surface count mismatch before triangle comparison" << std::endl;
+        return false;
+    }
+
+    bool ok = true;
+    for (size_t i = 0; i < meshes.size(); ++i)
+    {
+        if (!CompareMeshTrianglesWithSource(i, ogf_geometry[i], meshes[i]))
+            ok = false;
+    }
+
+    return ok;
+}
+
 bool TestMeshVertexCountsMatchSource()
 {
     if (!ConvertMesh(false))
@@ -2074,6 +2449,11 @@ TEST(ConverterIntegration, MeshSurfaceCountMatchesSource)
 TEST(ConverterIntegration, MeshSurfaceStatsMatchSource)
 {
     EXPECT_TRUE(TestMeshSurfaceStatsMatchSource());
+}
+
+TEST(ConverterIntegration, MeshTrianglesMatchSource)
+{
+    EXPECT_TRUE(TestMeshTrianglesMatchSource());
 }
 
 TEST(ConverterIntegration, BindPoseMatchesBlender)
