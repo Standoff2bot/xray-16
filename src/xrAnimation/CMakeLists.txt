@@ -28,10 +28,14 @@ set(SOURCES
     OzzBundle.h
     OzzAnimationController.cpp
     OzzAnimationController.h
+    LegacyOgfConverter.cpp
+    LegacyOgfConverter.h
     LegacyOmfConverter.cpp
     LegacyOmfConverter.h
     OzzKinematics.cpp
     OzzKinematics.h
+    StartupConversionInventory.cpp
+    StartupConversionInventory.h
 )
 
 # Create static library

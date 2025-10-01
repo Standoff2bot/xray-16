@@ -34,6 +34,7 @@ set_property(TARGET gtest PROPERTY EXCLUDE_FROM_DEFAULT_BUILD_RELEASEMASTERGOLD 
 
 add_executable(xrAnimation_converter_tests
     test_converter.cpp
+    test_startup_conversion.cpp
     ozz_kinematics_test_main.cpp)
 
 target_include_directories(xrAnimation_converter_tests PRIVATE

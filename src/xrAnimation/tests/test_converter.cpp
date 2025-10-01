@@ -25,6 +25,8 @@
 
 #include "gtest/gtest.h"
 
+#include "xrCore/xrCore.h"
+
 #ifndef PROJECT_ROOT
 #    define PROJECT_ROOT ""
 #endif
@@ -47,6 +49,8 @@
 #include "ozz/base/maths/soa_transform.h"
 #include "ozz/base/maths/transform.h"
 
+#include "LegacyOgfConverter.h"
+#include "LegacyOmfConverter.h"
 #include "../../../Externals/ozz-animation/samples/framework/mesh.h"
 #include "../../../Externals/ozz-animation/src/animation/offline/gltf/extern/json.hpp"
 
@@ -2512,6 +2516,27 @@ TEST(ConverterIntegration, MeshSurfaceStatsMatchSource)
 TEST(ConverterIntegration, MeshTrianglesMatchSource)
 {
     EXPECT_TRUE(TestMeshTrianglesMatchSource());
+}
+
+TEST(ConverterRuntime, ConvertLegacyVisualToOzzBundleProducesPayloads)
+{
+    const auto ogf_path = ResolveProjectPath("res/testdata/npc/stalker_hero_1.ogf");
+    ASSERT_TRUE(fs::exists(ogf_path)) << "Missing ogf fixture: " << ogf_path;
+
+    XRay::Animation::LegacyVisualConversionResult result;
+    XRay::Animation::LegacyVisualConversionOptions options;
+    options.build_skeleton = true;
+    options.build_mesh = true;
+
+    xr_string error;
+    ASSERT_TRUE(XRay::Animation::ConvertLegacyVisualToOzzBundle(ogf_path, result, options, &error)) << error.c_str();
+
+    ASSERT_TRUE(result.skeleton);
+    EXPECT_FALSE(result.skeleton_binary.empty());
+    EXPECT_FALSE(result.mesh_binary.empty());
+    EXPECT_FALSE(result.bone_names.empty());
+    EXPECT_LT(0u, result.mesh_surface_count);
+    EXPECT_FALSE(result.motion_refs.empty());
 }
 
 TEST(ConverterIntegration, ConvertAnimationProducesFile)
