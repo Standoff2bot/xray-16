@@ -1,6 +1,7 @@
 #include "pch_script.h"
 #include "GamePersistent.h"
 #include "xrCore/FMesh.hpp"
+#include "xrCore/xrCore.h"
 #include "xrEngine/XR_IOConsole.h"
 #include "xrMaterialSystem/GameMtlLib.h"
 #include "Include/xrRender/Kinematics.h"
@@ -17,6 +18,7 @@
 #include "ActorEffector.h"
 #include "Actor.h"
 #include "Spectator.h"
+#include "Actor_Flags.h"
 
 #include "xrUICore/XML/UITextureMaster.h"
 
@@ -45,6 +47,8 @@
 #endif // _EDITOR
 
 #include "xrEngine/xr_level_controller.h"
+
+#include "xrAnimation/StartupConversionInventory.h"
 
 CGamePersistent::CGamePersistent()
 {
@@ -175,6 +179,26 @@ void CGamePersistent::OnGameStart()
 {
     inherited::OnGameStart();
     UpdateGameType();
+
+    if (GEnv.isDedicatedServer)
+        return;
+
+    using namespace XRay::Animation;
+
+    LegacyAssetInventory inventory = BuildDefaultLegacyAssetInventory();
+    const xr_string stored_digest = LoadInventoryDigestFromUserConfig();
+    const xr_string computed_digest = ComputeLegacyAssetInventoryDigest(inventory);
+
+    if (stored_digest == computed_digest)
+    {
+        Msg("[ozz] Startup inventory digest matches cached value (%s)", computed_digest.c_str());
+    }
+    else
+    {
+        Msg("[ozz] Startup inventory digest changed (cached=%s, computed=%s)",
+            stored_digest.c_str(), computed_digest.c_str());
+        // TODO: trigger conversion stage when runtime wiring is complete.
+    }
 }
 
 LPCSTR GameTypeToString(EGameIDs gt, bool bShort)

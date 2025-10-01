@@ -8,6 +8,7 @@ Stand up a level-loading stage that converts legacy `.ogf/.omf` assets into `.oz
 - Motions are discovered directly from the `.ogf` references; the inventory crawls the same visual roots for `.omf` payloads, capturing metadata (root alias, relative path, size, timestamp, VFS flag).
 - `ComputeLegacyAssetInventoryDigest` folds the full inventory (visual sources + motion metadata) into a deterministic CRC32 digest. `Load/StoreInventoryDigestInUserConfig` persist that digest inside `user.ltx` so we can tell whether the startup scan matches the last cached run.
 - `LegacyOgfConverter` exposes `ConvertLegacyVisualToOzzBundle` so runtime callers and the CLI share identical conversion code paths.
+- `CGamePersistent::OnGameStart()` now loads the cached digest from `user.ltx` whenever `g_use_ozz_visuals` is enabled (and prefetching is active), recomputes the inventory, and logs whether the digest matches. This wiring is the precursor to the conversion pass.
 - `test_startup_conversion.cpp` exercises inventory construction, digest stability, digest invalidation on asset edits, and digest persistence round-tripping through an `.ltx` file.
 
 ## Inventory Builder
@@ -23,8 +24,8 @@ Stand up a level-loading stage that converts legacy `.ogf/.omf` assets into `.oz
 - After successfully processing the queue, write the new digest back to `user.ltx` so the next boot can skip the heavy scan.
 
 ## Outstanding Integration Work
-- Hook the conversion stage into `IGame_Persistent::OnGameStart()` immediately after the prefetch step (respecting `-noprefetch` and `g_use_ozz_visuals`). Surface progress via `LoadTitle("st_converting_ozz_assets")` / `LoadStage()`.
-- Implement the digest comparison + `.ozzx` verification loop described above. Fallback gracefully to legacy visuals whenever conversion fails, and emit clear telemetry for mismatched assets.
+- Trigger the conversion stage from `CGamePersistent::OnGameStart()` once the digest reports a mismatch, enqueueing `.ogf/.omf` work and surfacing progress via the loading screen.
+- After wiring the conversion jobs, verify bundle timestamps before writing new digests so we only persist once outputs are safely on disk. Continue to fallback gracefully to legacy visuals when conversion fails and emit clear telemetry for mismatched assets.
 - Define the output locations for generated skeletons/bundles (most likely under `$gamedata$`) and ensure the stage mirrors the legacy directory structure when writing `.ozz/.ozzx` artefacts.
 - Record per-asset timings so we can report aggregate conversion costs and feed the legacy vs. Ozz frame-cost telemetry workstream.
 - Extend console/debug tooling to dump the current digest, force regeneration, or purge cached bundles when investigating asset issues.

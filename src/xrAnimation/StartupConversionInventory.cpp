@@ -126,7 +126,8 @@ std::optional<std::int64_t> QueryFileTimestampSeconds(const xr_string& root_alia
         return std::nullopt;
 
     std::string resolved_str(resolved);
-    std::replace(resolved_str.begin(), resolved_str.end(), '\\', fs::path::preferred_separator);
+    const char preferred_separator = static_cast<char>(fs::path::preferred_separator);
+    std::replace(resolved_str.begin(), resolved_str.end(), '\\', preferred_separator);
 
     std::error_code ec;
     const fs::path path(resolved_str);
@@ -152,7 +153,8 @@ std::optional<std::int64_t> QueryFileSizeBytes(const xr_string& root_alias, cons
         return std::nullopt;
 
     std::string resolved_str(resolved);
-    std::replace(resolved_str.begin(), resolved_str.end(), '\\', fs::path::preferred_separator);
+    const char preferred_separator = static_cast<char>(fs::path::preferred_separator);
+    std::replace(resolved_str.begin(), resolved_str.end(), '\\', preferred_separator);
 
     std::error_code ec;
     const fs::path path(resolved_str);
