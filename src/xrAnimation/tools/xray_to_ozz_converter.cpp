@@ -620,7 +620,9 @@ struct ProgressiveWindow
 
 std::optional<ProgressiveWindow> ParseHighestDetailWindow(const std::vector<uint8_t>& progressive_data)
 {
-    if (progressive_data.size() < sizeof(uint32_t) * 5 + sizeof(ProgressiveWindow))
+    const size_t header_bytes = sizeof(uint32_t) * 5;
+    const size_t entry_bytes = sizeof(uint32_t) + sizeof(uint16_t) * 2;
+    if (progressive_data.size() < header_bytes + entry_bytes)
         return std::nullopt;
 
     BinaryReader reader{ reinterpret_cast<const std::byte*>(progressive_data.data()), progressive_data.size() };
@@ -630,19 +632,26 @@ std::optional<ProgressiveWindow> ParseHighestDetailWindow(const std::vector<uint
     if (window_count == 0)
         return std::nullopt;
 
-    const size_t bytes_per_window = sizeof(uint32_t) + sizeof(uint16_t) * 2;
-    if (reader.offset + bytes_per_window * static_cast<size_t>(window_count) > reader.size)
+    if (reader.offset + entry_bytes * static_cast<size_t>(window_count) > reader.size)
         return std::nullopt;
 
-    ProgressiveWindow window{};
+    ProgressiveWindow best{};
+    bool best_valid = false;
     for (uint32_t idx = 0; idx < window_count; ++idx)
     {
-        window.offset = reader.read<u32>();
-        window.num_tris = reader.read<u16>();
-        window.num_verts = reader.read<u16>();
+        ProgressiveWindow current{};
+        current.offset = reader.read<u32>();
+        current.num_tris = reader.read<u16>();
+        current.num_verts = reader.read<u16>();
+
+        if (!best_valid || current.offset > best.offset)
+        {
+            best = current;
+            best_valid = true;
+        }
     }
 
-    return window;
+    return best_valid ? std::optional<ProgressiveWindow>(best) : std::nullopt;
 }
 
 void ApplyProgressiveWindow(SurfaceDefinition& surface)
@@ -661,13 +670,6 @@ void ApplyProgressiveWindow(SurfaceDefinition& surface)
 
     if (index_offset + index_count > surface.indices.size())
         throw std::runtime_error("progressive mesh window exceeds index buffer");
-
-    const size_t vertex_count = static_cast<size_t>(window->num_verts);
-    if (vertex_count > surface.vertices.size())
-        throw std::runtime_error("progressive mesh window references vertices outside range");
-
-    if (vertex_count > 0 && vertex_count < surface.vertices.size())
-        surface.vertices.resize(vertex_count);
 
     std::vector<uint16_t> trimmed(surface.indices.begin() + index_offset, surface.indices.begin() + index_offset + index_count);
     surface.indices.swap(trimmed);

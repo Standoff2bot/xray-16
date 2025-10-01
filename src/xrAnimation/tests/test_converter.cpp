@@ -139,7 +139,8 @@ struct ProgressiveWindow
 std::optional<ProgressiveWindow> ParseHighestDetailWindow(const uint8_t* data, size_t size)
 {
     const size_t header_bytes = sizeof(uint32_t) * 5;
-    if (data == nullptr || size < header_bytes + sizeof(ProgressiveWindow))
+    const size_t entry_bytes = sizeof(uint32_t) + sizeof(uint16_t) * 2;
+    if (!data || size < header_bytes + entry_bytes)
         return std::nullopt;
 
     size_t offset = sizeof(uint32_t) * 4;
@@ -150,21 +151,29 @@ std::optional<ProgressiveWindow> ParseHighestDetailWindow(const uint8_t* data, s
     if (window_count == 0)
         return std::nullopt;
 
-    const size_t bytes_per_window = sizeof(uint32_t) + sizeof(uint16_t) * 2;
-    if (offset + bytes_per_window * static_cast<size_t>(window_count) > size)
+    if (offset + entry_bytes * static_cast<size_t>(window_count) > size)
         return std::nullopt;
 
-    ProgressiveWindow window{};
+    ProgressiveWindow best{};
+    bool best_valid = false;
     for (uint32_t idx = 0; idx < window_count; ++idx)
     {
-        std::memcpy(&window.offset, data + offset, sizeof(uint32_t));
+        ProgressiveWindow current{};
+        std::memcpy(&current.offset, data + offset, sizeof(uint32_t));
         offset += sizeof(uint32_t);
-        std::memcpy(&window.num_tris, data + offset, sizeof(uint16_t));
+        std::memcpy(&current.num_tris, data + offset, sizeof(uint16_t));
         offset += sizeof(uint16_t);
-        std::memcpy(&window.num_verts, data + offset, sizeof(uint16_t));
+        std::memcpy(&current.num_verts, data + offset, sizeof(uint16_t));
+        offset += sizeof(uint16_t);
+
+        if (!best_valid || current.offset > best.offset)
+        {
+            best = current;
+            best_valid = true;
+        }
     }
 
-    return window;
+    return best_valid ? std::optional<ProgressiveWindow>(best) : std::nullopt;
 }
 
 bool ReadBinaryFile(const fs::path& path, std::vector<uint8_t>& out_buffer)
@@ -227,7 +236,6 @@ bool ExtractSurfaceStatsFromSections(const std::vector<ChunkView>& sections, Ogf
     bool has_vertices = false;
     bool has_indices = false;
     const ChunkView* swidata_chunk = nullptr;
-
     for (const ChunkView& section : sections)
     {
         if (section.id == OGF_VERTICES)
@@ -273,9 +281,6 @@ bool ExtractSurfaceStatsFromSections(const std::vector<ChunkView>& sections, Ogf
     {
         if (auto window = ParseHighestDetailWindow(swidata_chunk->data, swidata_chunk->size))
         {
-            if (window->num_verts > 0 && window->num_verts < stats.vertex_count)
-                stats.vertex_count = window->num_verts;
-
             if (window->num_tris > 0)
                 stats.face_count = window->num_tris;
         }
@@ -289,7 +294,6 @@ bool ExtractSurfaceGeometryFromSections(const std::vector<ChunkView>& sections, 
     bool has_vertices = false;
     bool has_indices = false;
     const ChunkView* swidata_chunk = nullptr;
-
     geometry.vertex_count = 0;
     geometry.indices.clear();
 
@@ -378,9 +382,6 @@ bool ExtractSurfaceGeometryFromSections(const std::vector<ChunkView>& sections, 
                 std::vector<uint32_t> trimmed(geometry.indices.begin() + index_offset, geometry.indices.begin() + index_offset + index_count);
                 geometry.indices.swap(trimmed);
             }
-
-            if (window->num_verts > 0 && window->num_verts < geometry.vertex_count)
-                geometry.vertex_count = window->num_verts;
         }
     }
 
