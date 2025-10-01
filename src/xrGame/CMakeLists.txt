@@ -2523,13 +2523,19 @@ target_compile_definitions(xrGame
     XRGAME_EXPORTS
 )
 
-# E2K hack: MCST lcc compiler does not support object files greater than 4Gb due to a bug in EDG frontend
-if (CMAKE_CXX_COMPILER_ID MATCHES "LCC")
+if (CMAKE_CXX_COMPILER_ID STREQUAL "LCC")
+    # E2K hack: MCST lcc compiler does not support object files greater than 4Gb due to a bug in EDG frontend
     target_compile_options(xrGame
         PRIVATE
         -g0
     )
     message("Debug information generation is disabled for xrGame, because MCST lcc compiler does not support object files greater than 4 GB (EDG frontend bug).")
+elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # Especially when Unity build is enabled, xrGame exceeds .obj file format limits
+    target_compile_options(xrGame
+        PRIVATE
+        /bigobj
+    )
 endif()
 
 set_target_properties(xrGame PROPERTIES
