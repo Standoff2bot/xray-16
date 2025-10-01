@@ -1,15 +1,12 @@
 #pragma once
 
-#include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <optional>
 #include <string>
-#include <unordered_set>
 
 #include "xrCommon/xr_string.h"
-#include "xrCommon/xr_vector.h"
 #include "xrCommon/xr_unordered_map.h"
+#include "xrCommon/xr_vector.h"
 
 namespace XRay
 {
@@ -65,92 +62,21 @@ struct LegacyAssetInventory
 struct InventoryScanConfig
 {
     xr_vector<xr_string> visual_roots;
-    xr_vector<xr_string> motion_roots;
 };
 
 LegacyAssetInventory BuildLegacyAssetInventory(const InventoryScanConfig& config);
 LegacyAssetInventory BuildDefaultLegacyAssetInventory();
 
-enum class ConversionStatus : std::uint8_t
-{
-    Unknown = 0,
-    Success,
-    Failed,
-    Skipped
-};
+[[nodiscard]] xr_string ComputeLegacyAssetInventoryDigest(const LegacyAssetInventory& inventory);
 
-struct CacheManifest
-{
-    struct MotionEntry
-    {
-        xr_string canonical_motion;
-        xr_string source_root;
-        xr_string source_path;
-        std::int64_t source_timestamp_seconds = 0;
-        std::int64_t source_size = 0;
-        xr_string output_root;
-        xr_string output_path;
-        std::int64_t output_timestamp_seconds = 0;
-    };
+[[nodiscard]] xr_string LoadInventoryDigestFromConfig(const std::filesystem::path& config_path);
+bool StoreInventoryDigestInConfig(const std::filesystem::path& config_path, const xr_string& digest);
 
-    struct VisualEntry
-    {
-        xr_string normalized_identifier;
-        xr_string source_root;
-        xr_string source_path;
-        std::int64_t source_timestamp_seconds = 0;
-        std::int64_t source_size = 0;
-        xr_string skeleton_output_root;
-        xr_string skeleton_output_path;
-        std::int64_t skeleton_output_timestamp_seconds = 0;
-        xr_string bundle_output_root;
-        xr_string bundle_output_path;
-        std::int64_t bundle_output_timestamp_seconds = 0;
-        ConversionStatus last_status = ConversionStatus::Unknown;
-        xr_string last_error;
-        std::int64_t last_duration_milliseconds = 0;
-        xr_string converter_version;
-        xr_string converter_build_id;
-        xr_vector<MotionEntry> motions;
+[[nodiscard]] xr_string LoadInventoryDigestFromUserConfig();
+bool StoreInventoryDigestInUserConfig(const xr_string& digest);
 
-        [[nodiscard]] const MotionEntry* FindMotion(const xr_string& canonical_motion) const;
-        [[nodiscard]] MotionEntry* FindMotion(const xr_string& canonical_motion);
-    };
-
-    xr_string schema_version = "1";
-    xr_string manifest_version = "1";
-    xr_string converter_version;
-    xr_string converter_build_id;
-    std::int64_t last_updated_seconds = 0;
-    xr_unordered_map<xr_string, VisualEntry> visuals;
-
-    [[nodiscard]] const VisualEntry* FindVisual(const xr_string& normalized_identifier) const;
-    [[nodiscard]] VisualEntry* FindVisual(const xr_string& normalized_identifier);
-};
-
-struct ManifestSkipOptions
-{
-    bool force_full_rebuild = false;
-    bool force_failed_rebuild = false;
-    std::unordered_set<xr_string> forced_visuals;
-
-    [[nodiscard]] bool IsForced(const xr_string& normalized_identifier) const;
-};
-
-struct SkipDecision
-{
-    bool should_skip = false;
-    xr_string reason;
-};
-
-CacheManifest LoadCacheManifest(const std::filesystem::path& manifest_path);
-void SaveCacheManifest(const CacheManifest& manifest, const std::filesystem::path& manifest_path);
-
-SkipDecision EvaluateSkipDecision(const LegacyVisualAsset& asset,
-    const CacheManifest& manifest,
-    const ManifestSkipOptions& options,
-    const LegacyAssetInventory& inventory);
+inline constexpr char kInventoryDigestSection[] = "ozz_startup_conversion";
+inline constexpr char kInventoryDigestKey[] = "inventory_digest";
 
 } // namespace Animation
 } // namespace XRay
-

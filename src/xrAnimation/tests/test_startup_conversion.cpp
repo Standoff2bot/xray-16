@@ -92,59 +92,6 @@ void SetFileTimestamp(const fs::path& path, const std::chrono::system_clock::tim
         throw std::runtime_error("failed to set file time: " + path.string());
 }
 
-std::int64_t FileTimestampSeconds(const fs::path& path)
-{
-    std::error_code ec;
-    const auto file_time = fs::last_write_time(path, ec);
-    if (ec)
-        throw std::runtime_error("failed to read file time: " + path.string());
-    using namespace std::chrono;
-    const auto system_time = time_point_cast<system_clock::duration>(file_time - fs::file_time_type::clock::now() + system_clock::now());
-    return duration_cast<seconds>(system_time.time_since_epoch()).count();
-}
-
-std::string CanonicalMotionOutput(const std::string& name)
-{
-    std::string result = "anims\\";
-    result += name;
-    result += ".ozz";
-    return result;
-}
-
-std::string CanonicalizeRelative(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    std::replace(value.begin(), value.end(), '/', '\\');
-    while (!value.empty() && (value.front() == '\\' || value.front() == '/'))
-        value.erase(value.begin());
-    return value;
-}
-
-std::string CanonicalizeReference(std::string value)
-{
-    value = CanonicalizeRelative(std::move(value));
-    if (value.size() < 4 || value.substr(value.size() - 4) != ".omf")
-        value.append(".omf");
-    return value;
-}
-
-std::string CanonicalMotionName(std::string value)
-{
-    value = CanonicalizeReference(std::move(value));
-    const auto dot = value.find_last_of('.');
-    if (dot != std::string::npos)
-        value.erase(dot);
-    return value;
-}
-
-std::string ToNativePath(std::string value)
-{
-    std::replace(value.begin(), value.end(), '\\', fs::path::preferred_separator);
-    return value;
-}
-
 } // namespace
 
 class StartupConversionStageTest : public ::testing::Test
@@ -205,76 +152,12 @@ protected:
     {
         XRay::Animation::InventoryScanConfig config;
         config.visual_roots = { xr_string(mesh_alias_.c_str()) };
-        config.motion_roots = { xr_string(mesh_alias_.c_str()) };
         return config;
     }
 
     XRay::Animation::LegacyAssetInventory BuildInventory() const
     {
         return XRay::Animation::BuildLegacyAssetInventory(BuildConfig());
-    }
-
-    XRay::Animation::CacheManifest BuildUpToDateManifest(const XRay::Animation::LegacyAssetInventory& inventory) const
-    {
-        XRay::Animation::CacheManifest manifest;
-        manifest.manifest_version = "1";
-        manifest.schema_version = "1";
-
-        const auto* asset = inventory.FindVisual(xr_string("actors\\test_visual"));
-        EXPECT_NE(asset, nullptr);
-        const auto* source = asset ? asset->PrimarySource() : nullptr;
-        EXPECT_NE(source, nullptr);
-        if (!asset || !source)
-            return manifest;
-
-        XRay::Animation::CacheManifest::VisualEntry entry;
-        entry.normalized_identifier = asset->normalized_identifier;
-        entry.source_root = source->location.root_alias;
-        entry.source_path = source->location.relative_path;
-        entry.source_timestamp_seconds = source->location.modified_time_seconds;
-        entry.source_size = source->location.file_size;
-        entry.skeleton_output_root = xr_string(convert_alias_.c_str());
-        entry.skeleton_output_path = xr_string("skeletons\\actors\\test_visual.ozz");
-        entry.skeleton_output_timestamp_seconds = FileTimestampSeconds(skeleton_root_ / "test_visual.ozz");
-        entry.bundle_output_root = xr_string(convert_alias_.c_str());
-        entry.bundle_output_path = xr_string("bundles\\actors\\test_visual.ozzx");
-        entry.bundle_output_timestamp_seconds = FileTimestampSeconds(bundle_root_ / "test_visual.ozzx");
-        entry.last_status = XRay::Animation::ConversionStatus::Success;
-
-        for (const auto& reference : source->motion_references)
-        {
-            XRay::Animation::CacheManifest::MotionEntry motion;
-            motion.canonical_motion = reference;
-            const std::string reference_str(reference.c_str());
-            const std::string canonical_name = CanonicalMotionName(reference_str);
-            const auto* motion_asset = inventory.FindMotion(xr_string(canonical_name.c_str()));
-
-            if (motion_asset)
-            {
-                motion.source_root = motion_asset->root_alias;
-                motion.source_path = motion_asset->relative_path;
-                motion.source_timestamp_seconds = motion_asset->modified_time_seconds;
-                motion.source_size = motion_asset->file_size;
-            }
-            else
-            {
-                ADD_FAILURE() << "missing motion asset for " << reference_str;
-                motion.source_root = xr_string(mesh_alias_.c_str());
-                motion.source_path = reference;
-                motion.source_timestamp_seconds = 0;
-                motion.source_size = 0;
-            }
-
-            std::string motion_relative = CanonicalMotionOutput(canonical_name);
-            motion.output_root = xr_string(convert_alias_.c_str());
-            motion.output_path = xr_string(motion_relative.c_str());
-            const auto output_path = converted_root_ / fs::path(ToNativePath(motion_relative));
-            motion.output_timestamp_seconds = FileTimestampSeconds(output_path);
-            entry.motions.emplace_back(std::move(motion));
-        }
-
-        manifest.visuals.emplace(entry.normalized_identifier, std::move(entry));
-        return manifest;
     }
 
     fs::path temp_root_;
@@ -303,66 +186,52 @@ TEST_F(StartupConversionStageTest, BuildsInventoryFromCustomAlias)
     EXPECT_NE(std::find(source.motion_references.begin(), source.motion_references.end(), xr_string("actors\\idle_motion.omf")), source.motion_references.end());
 }
 
-TEST_F(StartupConversionStageTest, ManifestRoundTripPersistsVisualEntry)
+TEST_F(StartupConversionStageTest, DigestRemainsStableForIdenticalInventories)
+{
+    const auto first_inventory = BuildInventory();
+    const auto second_inventory = BuildInventory();
+
+    const auto digest_a = XRay::Animation::ComputeLegacyAssetInventoryDigest(first_inventory);
+    const auto digest_b = XRay::Animation::ComputeLegacyAssetInventoryDigest(second_inventory);
+
+    EXPECT_EQ(digest_a, digest_b);
+}
+
+TEST_F(StartupConversionStageTest, DigestChangesWhenMotionContentChanges)
+{
+    auto inventory = BuildInventory();
+    const auto* motion_before = inventory.FindMotion(xr_string("actors\\test_motion"));
+    ASSERT_NE(motion_before, nullptr);
+    const auto size_before = motion_before->file_size;
+    const auto timestamp_before = motion_before->modified_time_seconds;
+
+    const auto digest_original = XRay::Animation::ComputeLegacyAssetInventoryDigest(inventory);
+
+    WriteTextFile(actors_root_ / "test_motion.omf", "updated motion payload");
+
+    inventory = BuildInventory();
+    const auto* motion_after = inventory.FindMotion(xr_string("actors\\test_motion"));
+    ASSERT_NE(motion_after, nullptr);
+    EXPECT_NE(motion_after->file_size, size_before);
+    EXPECT_NE(motion_after->modified_time_seconds, timestamp_before);
+
+    const auto digest_updated = XRay::Animation::ComputeLegacyAssetInventoryDigest(inventory);
+    EXPECT_NE(digest_original, digest_updated);
+}
+
+TEST_F(StartupConversionStageTest, DigestRoundTripsThroughConfigFile)
 {
     const auto inventory = BuildInventory();
-    auto manifest = BuildUpToDateManifest(inventory);
-    const auto manifest_path = temp_root_ / "manifest.json";
+    const auto digest = XRay::Animation::ComputeLegacyAssetInventoryDigest(inventory);
 
-    XRay::Animation::SaveCacheManifest(manifest, manifest_path);
-    const auto loaded = XRay::Animation::LoadCacheManifest(manifest_path);
+    const fs::path config_path = temp_root_ / "user.ltx";
+    ASSERT_TRUE(XRay::Animation::StoreInventoryDigestInConfig(config_path, digest));
 
-    const auto* original = manifest.FindVisual(xr_string("actors\\test_visual"));
-    ASSERT_NE(original, nullptr);
-    const auto* restored = loaded.FindVisual(xr_string("actors\\test_visual"));
-    ASSERT_NE(restored, nullptr);
+    const auto loaded = XRay::Animation::LoadInventoryDigestFromConfig(config_path);
+    EXPECT_EQ(loaded, digest);
 
-    EXPECT_EQ(restored->source_root, original->source_root);
-    EXPECT_EQ(restored->source_path, original->source_path);
-    EXPECT_EQ(restored->source_timestamp_seconds, original->source_timestamp_seconds);
-    EXPECT_EQ(restored->motions.size(), original->motions.size());
-}
-
-TEST_F(StartupConversionStageTest, SkipDecisionAcknowledgesUpToDateOutputs)
-{
-    auto inventory = BuildInventory();
-    auto manifest = BuildUpToDateManifest(inventory);
-
-    const auto* asset = inventory.FindVisual(xr_string("actors\\test_visual"));
-    ASSERT_NE(asset, nullptr);
-
-    XRay::Animation::ManifestSkipOptions options;
-    const auto decision = XRay::Animation::EvaluateSkipDecision(*asset, manifest, options, inventory);
-    const std::string trace_message = std::string("skip_reason: ") + decision.reason.c_str();
-    SCOPED_TRACE(trace_message);
-    EXPECT_TRUE(decision.should_skip);
-}
-
-TEST_F(StartupConversionStageTest, SkipDecisionFailsWhenBundleMissing)
-{
-    auto inventory = BuildInventory();
-    auto manifest = BuildUpToDateManifest(inventory);
-
-    std::error_code ec;
-    fs::remove(bundle_root_ / "test_visual.ozzx", ec);
-
-    const auto* asset = inventory.FindVisual(xr_string("actors\\test_visual"));
-    ASSERT_NE(asset, nullptr);
-
-    XRay::Animation::ManifestSkipOptions options;
-    const auto decision = XRay::Animation::EvaluateSkipDecision(*asset, manifest, options, inventory);
-    EXPECT_FALSE(decision.should_skip);
-}
-
-TEST_F(StartupConversionStageTest, SkipDecisionHonorsForcedRebuild)
-{
-    auto inventory = BuildInventory();
-    auto manifest = BuildUpToDateManifest(inventory);
-    const auto* asset = inventory.FindVisual(xr_string("actors\\test_visual"));
-    ASSERT_NE(asset, nullptr);
-
-    XRay::Animation::ManifestSkipOptions options;
-    options.force_full_rebuild = true;
-    const auto decision = XRay::Animation::EvaluateSkipDecision(*asset, manifest, options, inventory);
-    EXPECT_FALSE(decision.should_skip);
+    const xr_string updated_digest = xr_string((digest + "ff").c_str());
+    ASSERT_TRUE(XRay::Animation::StoreInventoryDigestInConfig(config_path, updated_digest));
+    const auto reloaded = XRay::Animation::LoadInventoryDigestFromConfig(config_path);
+    EXPECT_EQ(reloaded, updated_digest);
 }

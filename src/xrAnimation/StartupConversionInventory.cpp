@@ -3,22 +3,26 @@
 #include "StartupConversionInventory.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstring>
+#include <cstdio>
 #include <fstream>
-#include <sstream>
+#include <numeric>
+#include <optional>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "xrCore/FMesh.hpp"
 #include "xrCore/FS.h"
 #include "xrCore/Log.h"
+#include "xrCore/_std_extensions.h"
+#include "xrCore/xr_ini.h"
 
 #include "Layers/xrRender/ModelNaming.h"
-
-#include "../../Externals/ozz-animation/src/animation/offline/gltf/extern/json.hpp"
-
-using Json = nlohmann::json;
 namespace fs = std::filesystem;
 
 namespace XRay
@@ -110,6 +114,70 @@ xr_string CanonicalizeMotionName(const xr_string& value)
     if (dot != xr_string::npos)
         canonical.erase(dot);
     return canonical;
+}
+
+std::optional<std::int64_t> QueryFileTimestampSeconds(const xr_string& root_alias, const xr_string& relative_path)
+{
+    if (relative_path.empty())
+        return std::nullopt;
+
+    string_path resolved;
+    if (!FS.update_path(resolved, root_alias.c_str(), relative_path.c_str(), false))
+        return std::nullopt;
+
+    std::string resolved_str(resolved);
+    std::replace(resolved_str.begin(), resolved_str.end(), '\\', fs::path::preferred_separator);
+
+    std::error_code ec;
+    const fs::path path(resolved_str);
+    if (!fs::exists(path, ec) || ec)
+        return std::nullopt;
+
+    using namespace std::chrono;
+    const auto file_time = fs::last_write_time(path, ec);
+    if (ec)
+        return std::nullopt;
+
+    const auto system_time = time_point_cast<system_clock::duration>(file_time - fs::file_time_type::clock::now() + system_clock::now());
+    return duration_cast<seconds>(system_time.time_since_epoch()).count();
+}
+
+std::optional<std::int64_t> QueryFileSizeBytes(const xr_string& root_alias, const xr_string& relative_path)
+{
+    if (relative_path.empty())
+        return std::nullopt;
+
+    string_path resolved;
+    if (!FS.update_path(resolved, root_alias.c_str(), relative_path.c_str(), false))
+        return std::nullopt;
+
+    std::string resolved_str(resolved);
+    std::replace(resolved_str.begin(), resolved_str.end(), '\\', fs::path::preferred_separator);
+
+    std::error_code ec;
+    const fs::path path(resolved_str);
+    if (!fs::exists(path, ec) || ec)
+        return std::nullopt;
+
+    const auto size = fs::file_size(path, ec);
+    if (ec)
+        return std::nullopt;
+
+    return static_cast<std::int64_t>(size);
+}
+
+std::string TrimCopyStd(const std::string& value)
+{
+    const auto begin = value.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos)
+        return {};
+    const auto end = value.find_last_not_of(" \t\r\n");
+    return value.substr(begin, end - begin + 1);
+}
+
+bool EqualsIgnoreCase(const std::string& lhs, pcstr rhs)
+{
+    return xr_stricmp(lhs.c_str(), rhs) == 0;
 }
 
 std::unordered_map<u32, ChunkView> ParseChunks(const std::byte* data, size_t size)
@@ -223,85 +291,51 @@ LegacyAssetLocation MakeLocation(const xr_string& root_alias, const FS_File& fil
     location.file_size = file.size >= 0 ? static_cast<std::int64_t>(file.size) : 0;
     location.modified_time_seconds = file.time_write >= 0 ? static_cast<std::int64_t>(file.time_write) : 0;
     location.stored_in_vfs = (file.attrib & FS_File::flVFS) != 0;
+
+    if (!location.stored_in_vfs)
+    {
+        if (const auto direct_size = QueryFileSizeBytes(location.root_alias, location.relative_path))
+            location.file_size = *direct_size;
+        if (const auto direct_time = QueryFileTimestampSeconds(location.root_alias, location.relative_path))
+            location.modified_time_seconds = *direct_time;
+    }
+
     return location;
 }
 
-std::int64_t FileTimeToUnixSeconds(const fs::file_time_type& file_time)
+std::optional<fs::path> ResolveExistingUserConfigPath()
 {
-    using namespace std::chrono;
-    const auto system_time = time_point_cast<system_clock::duration>(file_time - fs::file_time_type::clock::now() + system_clock::now());
-    return duration_cast<seconds>(system_time.time_since_epoch()).count();
-}
-
-std::optional<std::int64_t> QueryFileTimestampSeconds(const xr_string& root_alias, const xr_string& relative_path)
-{
-    if (relative_path.empty())
-        return std::nullopt;
-
-    string_path resolved;
-    if (!FS.update_path(resolved, root_alias.c_str(), relative_path.c_str(), false))
-        return std::nullopt;
-
+    string_path buffer;
     std::error_code ec;
-    const auto path = fs::path(resolved);
-    if (!fs::exists(path, ec) || ec)
-        return std::nullopt;
 
-    const auto time = fs::last_write_time(path, ec);
-    if (ec)
-        return std::nullopt;
+    if (FS.update_path(buffer, "$app_data_root$", "user.ltx", false))
+    {
+        fs::path candidate(buffer);
+        if (fs::exists(candidate, ec) && !ec)
+            return candidate;
+    }
 
-    return FileTimeToUnixSeconds(time);
+    if (FS.update_path(buffer, "$fs_root$", "user.ltx", false))
+    {
+        fs::path candidate(buffer);
+        if (fs::exists(candidate, ec) && !ec)
+            return candidate;
+    }
+
+    return std::nullopt;
 }
 
-bool ValidateOutputFreshness(const xr_string& root_alias,
-    const xr_string& relative_path,
-    std::int64_t recorded_output_timestamp,
-    std::int64_t source_timestamp,
-    xr_string& out_reason)
+fs::path ResolveUserConfigPathForWrite()
 {
-    const auto actual_timestamp = QueryFileTimestampSeconds(root_alias, relative_path);
-    if (!actual_timestamp)
-    {
-        out_reason = xr_string("missing output ") + relative_path;
-        return false;
-    }
+    string_path buffer;
 
-    if (*actual_timestamp < source_timestamp)
-    {
-        out_reason = xr_string("output older than source: ") + relative_path;
-        return false;
-    }
+    if (FS.update_path(buffer, "$app_data_root$", "user.ltx", false))
+        return fs::path(buffer);
 
-    if (recorded_output_timestamp > 0 && *actual_timestamp < recorded_output_timestamp)
-    {
-        out_reason = xr_string("output timestamp regressed: ") + relative_path;
-        return false;
-    }
+    if (FS.update_path(buffer, "$fs_root$", "user.ltx", false))
+        return fs::path(buffer);
 
-    return true;
-}
-
-ConversionStatus ParseStatus(const std::string& value)
-{
-    if (value == "success")
-        return ConversionStatus::Success;
-    if (value == "failed")
-        return ConversionStatus::Failed;
-    if (value == "skipped")
-        return ConversionStatus::Skipped;
-    return ConversionStatus::Unknown;
-}
-
-std::string StatusToString(ConversionStatus status)
-{
-    switch (status)
-    {
-    case ConversionStatus::Success: return "success";
-    case ConversionStatus::Failed: return "failed";
-    case ConversionStatus::Skipped: return "skipped";
-    default: return "unknown";
-    }
+    return fs::path("user.ltx");
 }
 
 } // namespace
@@ -356,47 +390,6 @@ const LegacyMotionAsset* LegacyAssetInventory::FindMotion(const xr_string& canon
     return &motions[it->second];
 }
 
-const CacheManifest::MotionEntry* CacheManifest::VisualEntry::FindMotion(const xr_string& canonical_motion) const
-{
-    const xr_string canonical = CanonicalizeMotionReference(canonical_motion);
-    for (const auto& motion : motions)
-        if (motion.canonical_motion == canonical)
-            return &motion;
-    return nullptr;
-}
-
-CacheManifest::MotionEntry* CacheManifest::VisualEntry::FindMotion(const xr_string& canonical_motion)
-{
-    const xr_string canonical = CanonicalizeMotionReference(canonical_motion);
-    for (auto& motion : motions)
-        if (motion.canonical_motion == canonical)
-            return &motion;
-    return nullptr;
-}
-
-const CacheManifest::VisualEntry* CacheManifest::FindVisual(const xr_string& normalized_identifier) const
-{
-    const auto it = visuals.find(normalized_identifier);
-    if (it == visuals.end())
-        return nullptr;
-    return &it->second;
-}
-
-CacheManifest::VisualEntry* CacheManifest::FindVisual(const xr_string& normalized_identifier)
-{
-    const auto it = visuals.find(normalized_identifier);
-    if (it == visuals.end())
-        return nullptr;
-    return &it->second;
-}
-
-bool ManifestSkipOptions::IsForced(const xr_string& normalized_identifier) const
-{
-    if (force_full_rebuild)
-        return true;
-    return forced_visuals.find(normalized_identifier) != forced_visuals.end();
-}
-
 LegacyAssetInventory BuildLegacyAssetInventory(const InventoryScanConfig& config)
 {
     LegacyAssetInventory inventory;
@@ -413,12 +406,14 @@ LegacyAssetInventory BuildLegacyAssetInventory(const InventoryScanConfig& config
         return asset;
     };
 
+    std::unordered_set<xr_string> unique_motion_sources;
+
     for (const auto& root : config.visual_roots)
     {
-        FS_FileSet files;
-        FS.file_list(files, root.c_str(), FS_ListFiles, "*.ogf");
+        FS_FileSet ogf_files;
+        FS.file_list(ogf_files, root.c_str(), FS_ListFiles, "*.ogf");
 
-        for (const auto& file : files)
+        for (const auto& file : ogf_files)
         {
             const auto location = MakeLocation(root, file);
             const xr_string normalized = xray::render::detail::NormalizeModelIdentifier(location.relative_path.c_str());
@@ -431,16 +426,11 @@ LegacyAssetInventory BuildLegacyAssetInventory(const InventoryScanConfig& config
             source.motion_references = ExtractMotionReferences(root, source.location.relative_path);
             asset.sources.emplace_back(std::move(source));
         }
-    }
 
-    std::unordered_set<xr_string> unique_motion_sources;
+        FS_FileSet omf_files;
+        FS.file_list(omf_files, root.c_str(), FS_ListFiles, "*.omf");
 
-    for (const auto& root : config.motion_roots)
-    {
-        FS_FileSet files;
-        FS.file_list(files, root.c_str(), FS_ListFiles, "*.omf");
-
-        for (const auto& file : files)
+        for (const auto& file : omf_files)
         {
             LegacyMotionAsset motion;
             motion.root_alias = ToLowerCopy(root);
@@ -449,6 +439,14 @@ LegacyAssetInventory BuildLegacyAssetInventory(const InventoryScanConfig& config
             motion.file_size = file.size >= 0 ? static_cast<std::int64_t>(file.size) : 0;
             motion.modified_time_seconds = file.time_write >= 0 ? static_cast<std::int64_t>(file.time_write) : 0;
             motion.stored_in_vfs = (file.attrib & FS_File::flVFS) != 0;
+
+            if (!motion.stored_in_vfs)
+            {
+                if (const auto direct_size = QueryFileSizeBytes(motion.root_alias, motion.relative_path))
+                    motion.file_size = *direct_size;
+                if (const auto direct_time = QueryFileTimestampSeconds(motion.root_alias, motion.relative_path))
+                    motion.modified_time_seconds = *direct_time;
+            }
 
             xr_string unique_key = motion.root_alias;
             unique_key.append("|");
@@ -471,280 +469,254 @@ LegacyAssetInventory BuildDefaultLegacyAssetInventory()
 {
     InventoryScanConfig config;
     config.visual_roots = { "$level$", "$game_meshes$" };
-    config.motion_roots = { "$level$", "$game_meshes$" };
     return BuildLegacyAssetInventory(config);
 }
 
-CacheManifest LoadCacheManifest(const fs::path& manifest_path)
+xr_string ComputeLegacyAssetInventoryDigest(const LegacyAssetInventory& inventory)
 {
-    CacheManifest manifest;
+    std::string accumulator;
+    accumulator.reserve(4096);
 
-    std::error_code ec;
-    if (!fs::exists(manifest_path, ec) || ec)
-        return manifest;
+    xr_vector<std::size_t> visual_indices;
+    visual_indices.resize(inventory.visuals.size());
+    std::iota(visual_indices.begin(), visual_indices.end(), 0u);
+    std::sort(visual_indices.begin(), visual_indices.end(), [&](std::size_t lhs, std::size_t rhs) {
+        return xr_strcmp(inventory.visuals[lhs].normalized_identifier.c_str(), inventory.visuals[rhs].normalized_identifier.c_str()) < 0;
+    });
 
-    std::ifstream stream(manifest_path);
-    if (!stream)
+    for (const std::size_t index : visual_indices)
     {
-        Msg("! [ozz] Failed to open manifest %s", manifest_path.string().c_str());
-        return manifest;
-    }
+        const LegacyVisualAsset& visual = inventory.visuals[index];
+        accumulator.append("visual|");
+        accumulator.append(visual.normalized_identifier.c_str());
+        accumulator.push_back('\n');
 
-    try
-    {
-        Json json;
-        stream >> json;
+        xr_vector<const LegacyVisualSource*> sources;
+        sources.reserve(visual.sources.size());
+        for (const auto& source : visual.sources)
+            sources.push_back(&source);
+        std::sort(sources.begin(), sources.end(), [](const LegacyVisualSource* lhs, const LegacyVisualSource* rhs) {
+            const int root_compare = xr_strcmp(lhs->location.root_alias.c_str(), rhs->location.root_alias.c_str());
+            if (root_compare != 0)
+                return root_compare < 0;
+            return xr_strcmp(lhs->location.relative_path.c_str(), rhs->location.relative_path.c_str()) < 0;
+        });
 
-        manifest.schema_version = xr_string(json.value("schema_version", std::string("1")).c_str());
-        manifest.manifest_version = xr_string(json.value("manifest_version", std::string("1")).c_str());
-        manifest.converter_version = xr_string(json.value("converter_version", std::string()).c_str());
-        manifest.converter_build_id = xr_string(json.value("converter_build_id", std::string()).c_str());
-        manifest.last_updated_seconds = json.value("last_updated_seconds", 0ll);
-
-        if (auto visuals = json.find("visuals"); visuals != json.end() && visuals->is_array())
+        for (const LegacyVisualSource* source : sources)
         {
-            for (const auto& visual_json : *visuals)
+            const auto& location = source->location;
+            accumulator.append("source|");
+            accumulator.append(location.root_alias.c_str());
+            accumulator.push_back('\n');
+            accumulator.append(location.relative_path.c_str());
+            accumulator.push_back('\n');
+            accumulator.append(std::to_string(location.file_size));
+            accumulator.push_back('\n');
+            accumulator.append(std::to_string(location.modified_time_seconds));
+            accumulator.push_back('\n');
+            accumulator.append(location.stored_in_vfs ? "1" : "0");
+            accumulator.push_back('\n');
+
+            xr_vector<xr_string> references = source->motion_references;
+            std::sort(references.begin(), references.end(), [](const xr_string& lhs, const xr_string& rhs) {
+                return xr_strcmp(lhs.c_str(), rhs.c_str()) < 0;
+            });
+
+            for (const auto& reference : references)
             {
-                CacheManifest::VisualEntry entry;
-                entry.normalized_identifier = xr_string(visual_json.value("normalized_identifier", std::string()));
-                if (entry.normalized_identifier.empty())
-                    continue;
-
-                entry.source_root = xr_string(visual_json.value("source_root", std::string()));
-                entry.source_path = CanonicalizeRelativePath(xr_string(visual_json.value("source_path", std::string())));
-                entry.source_timestamp_seconds = visual_json.value("source_timestamp_seconds", 0ll);
-                entry.source_size = visual_json.value("source_size", 0ll);
-                entry.skeleton_output_root = xr_string(visual_json.value("skeleton_output_root", std::string()));
-                entry.skeleton_output_path = CanonicalizeRelativePath(xr_string(visual_json.value("skeleton_output_path", std::string())));
-                entry.skeleton_output_timestamp_seconds = visual_json.value("skeleton_output_timestamp_seconds", 0ll);
-                entry.bundle_output_root = xr_string(visual_json.value("bundle_output_root", std::string()));
-                entry.bundle_output_path = CanonicalizeRelativePath(xr_string(visual_json.value("bundle_output_path", std::string())));
-                entry.bundle_output_timestamp_seconds = visual_json.value("bundle_output_timestamp_seconds", 0ll);
-                entry.last_error = xr_string(visual_json.value("last_error", std::string()));
-                entry.last_duration_milliseconds = visual_json.value("last_duration_milliseconds", 0ll);
-                entry.converter_version = xr_string(visual_json.value("converter_version", std::string()));
-                entry.converter_build_id = xr_string(visual_json.value("converter_build_id", std::string()));
-                entry.last_status = ParseStatus(visual_json.value("last_status", std::string()));
-
-                if (auto motions = visual_json.find("motions"); motions != visual_json.end() && motions->is_array())
-                {
-                    for (const auto& motion_json : *motions)
-                    {
-                        CacheManifest::MotionEntry motion;
-                        motion.canonical_motion = CanonicalizeMotionReference(xr_string(motion_json.value("canonical_motion", std::string())));
-                        motion.source_root = xr_string(motion_json.value("source_root", std::string()));
-                        motion.source_path = CanonicalizeRelativePath(xr_string(motion_json.value("source_path", std::string())));
-                        motion.source_timestamp_seconds = motion_json.value("source_timestamp_seconds", 0ll);
-                        motion.source_size = motion_json.value("source_size", 0ll);
-                        motion.output_root = xr_string(motion_json.value("output_root", std::string()));
-                        motion.output_path = CanonicalizeRelativePath(xr_string(motion_json.value("output_path", std::string())));
-                        motion.output_timestamp_seconds = motion_json.value("output_timestamp_seconds", 0ll);
-                        entry.motions.emplace_back(std::move(motion));
-                    }
-                }
-
-                manifest.visuals.emplace(entry.normalized_identifier, std::move(entry));
+                accumulator.append("motion_ref|");
+                accumulator.append(reference.c_str());
+                accumulator.push_back('\n');
             }
         }
     }
-    catch (const std::exception& ex)
+
+    xr_vector<std::size_t> motion_indices;
+    motion_indices.resize(inventory.motions.size());
+    std::iota(motion_indices.begin(), motion_indices.end(), 0u);
+    std::sort(motion_indices.begin(), motion_indices.end(), [&](std::size_t lhs, std::size_t rhs) {
+        return xr_strcmp(inventory.motions[lhs].canonical_name.c_str(), inventory.motions[rhs].canonical_name.c_str()) < 0;
+    });
+
+    for (const std::size_t index : motion_indices)
     {
-        Msg("! [ozz] Failed to parse manifest %s (%s)", manifest_path.string().c_str(), ex.what());
+        const LegacyMotionAsset& motion = inventory.motions[index];
+        accumulator.append("motion|");
+        accumulator.append(motion.canonical_name.c_str());
+        accumulator.push_back('\n');
+        accumulator.append(motion.root_alias.c_str());
+        accumulator.push_back('\n');
+        accumulator.append(motion.relative_path.c_str());
+        accumulator.push_back('\n');
+        accumulator.append(std::to_string(motion.file_size));
+        accumulator.push_back('\n');
+        accumulator.append(std::to_string(motion.modified_time_seconds));
+        accumulator.push_back('\n');
+        accumulator.append(motion.stored_in_vfs ? "1" : "0");
+        accumulator.push_back('\n');
     }
 
-    return manifest;
+const u32 crc = accumulator.empty() ? 0u : crc32(accumulator.data(), static_cast<u32>(accumulator.size()));
+char buffer[9];
+std::snprintf(buffer, sizeof(buffer), "%08x", crc);
+return xr_string(buffer);
 }
 
-void SaveCacheManifest(const CacheManifest& manifest, const fs::path& manifest_path)
+xr_string LoadInventoryDigestFromConfig(const fs::path& config_path)
 {
-    Json json;
-    json["schema_version"] = manifest.schema_version.c_str();
-    json["manifest_version"] = manifest.manifest_version.c_str();
-    json["converter_version"] = manifest.converter_version.c_str();
-    json["converter_build_id"] = manifest.converter_build_id.c_str();
-    json["last_updated_seconds"] = manifest.last_updated_seconds;
+    if (config_path.empty())
+        return {};
 
-    Json visuals = Json::array();
-    for (const auto& pair : manifest.visuals)
-    {
-        const auto& entry = pair.second;
-        Json visual;
-        visual["normalized_identifier"] = entry.normalized_identifier.c_str();
-        visual["source_root"] = entry.source_root.c_str();
-        visual["source_path"] = entry.source_path.c_str();
-        visual["source_timestamp_seconds"] = entry.source_timestamp_seconds;
-        visual["source_size"] = entry.source_size;
-        visual["skeleton_output_root"] = entry.skeleton_output_root.c_str();
-        visual["skeleton_output_path"] = entry.skeleton_output_path.c_str();
-        visual["skeleton_output_timestamp_seconds"] = entry.skeleton_output_timestamp_seconds;
-        visual["bundle_output_root"] = entry.bundle_output_root.c_str();
-        visual["bundle_output_path"] = entry.bundle_output_path.c_str();
-        visual["bundle_output_timestamp_seconds"] = entry.bundle_output_timestamp_seconds;
-        visual["last_status"] = StatusToString(entry.last_status);
-        visual["last_error"] = entry.last_error.c_str();
-        visual["last_duration_milliseconds"] = entry.last_duration_milliseconds;
-        visual["converter_version"] = entry.converter_version.c_str();
-        visual["converter_build_id"] = entry.converter_build_id.c_str();
-
-        Json motions = Json::array();
-        for (const auto& motion : entry.motions)
-        {
-            Json motion_json;
-            motion_json["canonical_motion"] = motion.canonical_motion.c_str();
-            motion_json["source_root"] = motion.source_root.c_str();
-            motion_json["source_path"] = motion.source_path.c_str();
-            motion_json["source_timestamp_seconds"] = motion.source_timestamp_seconds;
-            motion_json["source_size"] = motion.source_size;
-            motion_json["output_root"] = motion.output_root.c_str();
-            motion_json["output_path"] = motion.output_path.c_str();
-            motion_json["output_timestamp_seconds"] = motion.output_timestamp_seconds;
-            motions.push_back(std::move(motion_json));
-        }
-        visual["motions"] = std::move(motions);
-        visuals.push_back(std::move(visual));
-    }
-
-    json["visuals"] = std::move(visuals);
-
-    const auto parent = manifest_path.parent_path();
     std::error_code ec;
-    if (!parent.empty())
-        fs::create_directories(parent, ec);
+    if (!fs::exists(config_path, ec) || ec)
+        return {};
 
-    std::ofstream stream(manifest_path);
+    std::ifstream stream(config_path);
     if (!stream)
+        return {};
+
+    const std::string section_header = std::string("[") + kInventoryDigestSection + "]";
+    bool in_section = false;
+    std::string line;
+    while (std::getline(stream, line))
     {
-        Msg("! [ozz] Failed to open manifest for writing: %s", manifest_path.string().c_str());
-        return;
+        const std::string trimmed = TrimCopyStd(line);
+        if (trimmed.empty() || trimmed.front() == ';')
+            continue;
+
+        if (trimmed.front() == '[' && trimmed.back() == ']')
+        {
+            const std::string section_name = TrimCopyStd(trimmed.substr(1, trimmed.size() - 2));
+            in_section = EqualsIgnoreCase(section_name, kInventoryDigestSection);
+            continue;
+        }
+
+        if (!in_section)
+            continue;
+
+        const auto equals = trimmed.find('=');
+        if (equals == std::string::npos)
+            continue;
+
+        std::string key = TrimCopyStd(trimmed.substr(0, equals));
+        if (!EqualsIgnoreCase(key, kInventoryDigestKey))
+            continue;
+
+        std::string value = TrimCopyStd(trimmed.substr(equals + 1));
+        return xr_string(value.c_str());
     }
 
-    stream << json.dump(2);
+    return {};
 }
 
-SkipDecision EvaluateSkipDecision(const LegacyVisualAsset& asset,
-    const CacheManifest& manifest,
-    const ManifestSkipOptions& options,
-    const LegacyAssetInventory& inventory)
+xr_string LoadInventoryDigestFromUserConfig()
 {
-    SkipDecision decision;
+    if (const auto existing = ResolveExistingUserConfigPath())
+        return LoadInventoryDigestFromConfig(*existing);
 
-    if (options.IsForced(asset.normalized_identifier))
+    return {};
+}
+
+bool StoreInventoryDigestInConfig(const fs::path& config_path, const xr_string& digest)
+{
+    if (config_path.empty())
+        return false;
+
+    if (!config_path.parent_path().empty())
     {
-        decision.should_skip = false;
-        decision.reason = "forced rebuild";
-        return decision;
+        std::error_code ec;
+        fs::create_directories(config_path.parent_path(), ec);
     }
 
-    const auto* manifest_entry = manifest.FindVisual(asset.normalized_identifier);
-    if (!manifest_entry)
+    std::vector<std::string> lines;
     {
-        decision.should_skip = false;
-        decision.reason = "manifest entry missing";
-        return decision;
-    }
-
-    if (manifest_entry->last_status != ConversionStatus::Success)
-    {
-        if (options.force_failed_rebuild)
+        std::error_code ec;
+        if (fs::exists(config_path, ec) && !ec)
         {
-            decision.should_skip = false;
-            decision.reason = "prior conversion failed";
-            return decision;
-        }
-
-        decision.should_skip = false;
-        decision.reason = "prior conversion did not succeed";
-        return decision;
-    }
-
-    const auto* source = asset.FindSource(manifest_entry->source_root, manifest_entry->source_path);
-    if (!source)
-    {
-        decision.should_skip = false;
-        decision.reason = "source mapping changed";
-        return decision;
-    }
-
-    if (source->location.modified_time_seconds > manifest_entry->source_timestamp_seconds)
-    {
-        decision.should_skip = false;
-        decision.reason = "source file newer than manifest";
-        return decision;
-    }
-
-    if (source->location.file_size != manifest_entry->source_size)
-    {
-        decision.should_skip = false;
-        decision.reason = "source size changed";
-        return decision;
-    }
-
-    xr_string freshness_reason;
-    if (!ValidateOutputFreshness(manifest_entry->skeleton_output_root,
-            manifest_entry->skeleton_output_path,
-            manifest_entry->skeleton_output_timestamp_seconds,
-            source->location.modified_time_seconds,
-            freshness_reason))
-    {
-        decision.should_skip = false;
-        decision.reason = freshness_reason;
-        return decision;
-    }
-
-    if (!ValidateOutputFreshness(manifest_entry->bundle_output_root,
-            manifest_entry->bundle_output_path,
-            manifest_entry->bundle_output_timestamp_seconds,
-            source->location.modified_time_seconds,
-            freshness_reason))
-    {
-        decision.should_skip = false;
-        decision.reason = freshness_reason;
-        return decision;
-    }
-
-    for (const auto& reference : source->motion_references)
-    {
-        const auto* motion_entry = manifest_entry->FindMotion(reference);
-        if (!motion_entry)
-        {
-            decision.should_skip = false;
-            decision.reason = xr_string("manifest missing motion ") + reference;
-            return decision;
-        }
-
-        const auto* motion_asset = inventory.FindMotion(CanonicalizeMotionName(reference));
-        if (motion_asset)
-        {
-            if (motion_asset->modified_time_seconds > motion_entry->source_timestamp_seconds)
+            std::ifstream stream(config_path);
+            if (stream)
             {
-                decision.should_skip = false;
-                decision.reason = xr_string("motion newer than manifest: ") + reference;
-                return decision;
-            }
-
-            if (motion_asset->file_size != motion_entry->source_size)
-            {
-                decision.should_skip = false;
-                decision.reason = xr_string("motion size changed: ") + reference;
-                return decision;
+                std::string line;
+                while (std::getline(stream, line))
+                    lines.emplace_back(std::move(line));
             }
         }
-
-        if (!ValidateOutputFreshness(motion_entry->output_root,
-                motion_entry->output_path,
-                motion_entry->output_timestamp_seconds,
-                motion_asset ? motion_asset->modified_time_seconds : manifest_entry->source_timestamp_seconds,
-                freshness_reason))
-        {
-            decision.should_skip = false;
-            decision.reason = freshness_reason;
-            return decision;
-        }
     }
 
-    decision.should_skip = true;
-    decision.reason = "manifest outputs up-to-date";
-    return decision;
+    const std::string section_header = std::string("[") + kInventoryDigestSection + "]";
+    const std::string key_line = std::string(kInventoryDigestKey) + " = " + digest.c_str();
+
+    bool section_found = false;
+    bool key_written = false;
+    bool in_section = false;
+    int insert_index = -1;
+
+    for (std::size_t index = 0; index < lines.size(); ++index)
+    {
+        const std::string trimmed = TrimCopyStd(lines[index]);
+        if (!trimmed.empty() && trimmed.front() == ';')
+            continue;
+
+        if (!trimmed.empty() && trimmed.front() == '[' && trimmed.back() == ']')
+        {
+            const std::string section_name = TrimCopyStd(trimmed.substr(1, trimmed.size() - 2));
+            in_section = EqualsIgnoreCase(section_name, kInventoryDigestSection);
+            if (in_section)
+            {
+                section_found = true;
+                insert_index = static_cast<int>(index + 1);
+            }
+            continue;
+        }
+
+        if (!in_section)
+            continue;
+
+        const auto equals = trimmed.find('=');
+        if (equals == std::string::npos)
+        {
+            insert_index = static_cast<int>(index + 1);
+            continue;
+        }
+
+        std::string key = TrimCopyStd(trimmed.substr(0, equals));
+        if (EqualsIgnoreCase(key, kInventoryDigestKey))
+        {
+            lines[index] = key_line;
+            key_written = true;
+        }
+        insert_index = static_cast<int>(index + 1);
+    }
+
+    if (section_found && !key_written)
+    {
+        if (insert_index < 0 || insert_index > static_cast<int>(lines.size()))
+            lines.emplace_back(key_line);
+        else
+            lines.insert(lines.begin() + insert_index, key_line);
+    }
+    else if (!section_found)
+    {
+        if (!lines.empty() && !TrimCopyStd(lines.back()).empty())
+            lines.emplace_back();
+        lines.emplace_back(section_header);
+        lines.emplace_back(key_line);
+    }
+
+    std::ofstream stream(config_path, std::ios::binary | std::ios::trunc);
+    if (!stream)
+        return false;
+
+    for (const auto& line : lines)
+        stream << line << '\n';
+
+    return true;
+}
+
+bool StoreInventoryDigestInUserConfig(const xr_string& digest)
+{
+    const fs::path config_path = ResolveUserConfigPathForWrite();
+    return StoreInventoryDigestInConfig(config_path, digest);
 }
 
 } // namespace Animation
