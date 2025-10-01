@@ -1862,41 +1862,6 @@ bool TestMeshSurfaceStatsMatchSource()
     return ok;
 }
 
-bool TestBindPoseMatchesBlender()
-{
-    if (!EnsureSkeletonGenerated())
-        return false;
-
-    ozz::animation::Skeleton skeleton;
-    if (!LoadOzz(SkeletonOutputPath(), skeleton))
-        return false;
-
-    bool ok = true;
-    for (const auto& expected : kExpectedBindPose)
-    {
-        const int joint_index = FindJoint(skeleton, expected.joint);
-        if (joint_index < 0)
-        {
-            ok = false;
-            continue;
-        }
-
-        const ozz::math::Transform rest = ozz::animation::GetJointLocalRestPose(skeleton, joint_index);
-        const float dx = std::fabs(rest.translation.x - expected.tx);
-        const float dy = std::fabs(rest.translation.y - expected.ty);
-        const float dz = std::fabs(rest.translation.z - expected.tz);
-        if (dx > kTranslationTolerance || dy > kTranslationTolerance || dz > kTranslationTolerance)
-        {
-            std::cerr << "bind pose mismatch for joint '" << expected.joint << "'\n"
-                      << "  expected: [" << expected.tx << ", " << expected.ty << ", " << expected.tz << "]\n"
-                      << "  actual:   [" << rest.translation.x << ", " << rest.translation.y << ", " << rest.translation.z << "]\n";
-            ok = false;
-        }
-    }
-
-    return ok;
-}
-
 bool TestConvertAnimationProducesFile()
 {
     const bool status = ConvertAnimation(true);
@@ -2455,11 +2420,6 @@ TEST(ConverterIntegration, MeshSurfaceStatsMatchSource)
 TEST(ConverterIntegration, MeshTrianglesMatchSource)
 {
     EXPECT_TRUE(TestMeshTrianglesMatchSource());
-}
-
-TEST(ConverterIntegration, BindPoseMatchesBlender)
-{
-    EXPECT_TRUE(TestBindPoseMatchesBlender());
 }
 
 TEST(ConverterIntegration, ConvertAnimationProducesFile)

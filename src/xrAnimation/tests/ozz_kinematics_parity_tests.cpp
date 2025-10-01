@@ -1199,10 +1199,13 @@ TEST(OzzKinematicsPose, SetPoseLocalsOverridesSingleBone)
     ASSERT_LT(soa_index, static_cast<int>(locals.size()));
 
     const Fvector delta{ 0.05f, -0.03f, 0.f };
+    const float delta_ozz_x = -delta.x;
+    const float delta_ozz_y = delta.y;
+    const float delta_ozz_z = -delta.z;
     ozz::math::SoaFloat3 soa_delta = ozz::math::SoaFloat3::zero();
-    soa_delta.x = ozz::math::SetI(soa_delta.x, ozz::math::simd_float4::Load1(delta.x), lane_index);
-    soa_delta.y = ozz::math::SetI(soa_delta.y, ozz::math::simd_float4::Load1(delta.y), lane_index);
-    soa_delta.z = ozz::math::SetI(soa_delta.z, ozz::math::simd_float4::Load1(delta.z), lane_index);
+    soa_delta.x = ozz::math::SetI(soa_delta.x, ozz::math::simd_float4::Load1(delta_ozz_x), lane_index);
+    soa_delta.y = ozz::math::SetI(soa_delta.y, ozz::math::simd_float4::Load1(delta_ozz_y), lane_index);
+    soa_delta.z = ozz::math::SetI(soa_delta.z, ozz::math::simd_float4::Load1(delta_ozz_z), lane_index);
 
     locals[static_cast<size_t>(soa_index)].translation = locals[static_cast<size_t>(soa_index)].translation + soa_delta;
 
