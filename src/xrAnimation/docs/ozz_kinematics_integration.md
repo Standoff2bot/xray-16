@@ -1,5 +1,7 @@
 # Ozz Kinematics Integration Plan
 
+> **Status:** MVP delivered. Converters, parity harness, and the `.ozzx` runtime visual now ship together; the notes below capture the architecture and identify post-MVP work.
+
 ## Legacy Responsibilities Snapshot
 - `IKinematics` (see `xray-16/src/Include/xrRender/Kinematics.h`) defines the runtime contract that gameplay, physics, and renderer expect today: bone lookup by name/ID, transform access (`LL_GetTransform`, `LL_GetTransform_R`), visibility masks, bounding boxes, bone callbacks, wallmark helpers, and a `CalculateBones` entrypoint that lazily recomputes poses.
 - `CKinematics` (see `xray-16/src/Layers/xrRender/SkeletonCustom.{h,cpp}` and `SkeletonRigid.cpp`) implements that contract on top of legacy `CBoneData` and `CBoneInstance` structures. It owns bone maps, manages update throttling (`UCalc_Time`/`UCalc_Interval`), propagates transforms down the hierarchy, and rebuilds render-space transforms and visibility volumes.
@@ -25,7 +27,7 @@
 1. `CalculateBones` checks the same throttle fields (`UCalc_Time`, `UCalc_Interval`) to preserve caller expectations.
 2. When evaluation is required, run Ozz sampling (`SamplingJob`) with the current animation state (populated by the upcoming `OzzKinematicsAnimated`).
 3. Run `LocalToModelJob` to obtain model-space matrices (ozz column-major float4x4).
-4. Convert each transform to X-Ray `Fmatrix` (row-major, applying the `(X, Y, -Z)` swizzle per coordinate system reference) and write into the corresponding `CBoneInstance.mTransform`. Apply additional bone transforms (ABT) and callbacks afterwards to preserve legacy overrides.
+4. Convert each transform to X-Ray `Fmatrix` (row-major, multiply by the diagonal basis `diag(-1, 1, -1)` that flips X and Z) and write into the corresponding `CBoneInstance.mTransform`. Apply additional bone transforms (ABT) and callbacks afterwards to preserve legacy overrides.
 5. Update `mRenderTransform` using precomputed `m2b_transform` exactly as `CKinematics::CLBone` does today so render skinning remains unchanged.
 6. Recompute visibility bounding volumes when the throttle dictates, filling `vis.box` / `vis.sphere` to satisfy `GetBox()` semantics.
 
@@ -39,12 +41,12 @@
 - `Bone_GetAnimPos` must perform a one-off Ozz sampling limited to the target bone chain. Initially we can reuse the latest cached pose and fall back to forcing a full evaluate when `ignore_callbacks` is requested.
 
 ## Implementation Roadmap
-1. **Façade Skeleton**: add `OzzKinematics` class (header/impl) under `xrAnimation/` exposing an `IKinematics` interface. Stub out every virtual with assertions and document mapping decisions inline. Wire into `xrAnimation` CMake target.
-2. **Data Bootstrap**: load `.ozz` skeleton + legacy `CBoneData`, build name/ID maps, allocate `CBoneInstance` storage via engine allocators, and expose getters (`LL_BoneID`, `LL_Bones`, etc.) using converter metadata.
-3. **Pose Evaluation Core**: implement the `CalculateBones` path using Ozz sampling + local-to-model jobs. Populate `CBoneInstance` buffers, respect callbacks/visibility, and update bounding volumes.
-4. **Compatibility Layer**: port remaining helpers (`Bone_GetAnimPos`, wallmarks, bounding boxes) and add unit hooks so downstream systems (physics/render) see unchanged behaviour. `COzzKinematicsVisual` now consumes `.ozzx` mesh payloads, CPU-skins surfaces each frame, and feeds them into the renderer via standard `ref_geom` buffers.
-5. **Animated Extension**: layer an `OzzKinematicsAnimated` companion that implements `IKinematicsAnimated` on top of the façade, translating X-Ray blend graphs into Ozz sampling jobs.
-6. **Validation**: compare viewer output against legacy `CKinematics` for representative actors (`stalker_hero`, weapon rigs) using existing regression scripts; document discrepancies in `logs/`.
+1. **Façade Skeleton** *(done)*: `OzzKinematics` implements `IKinematics`, is part of `xrAnimation`, and mirrors legacy entry points.
+2. **Data Bootstrap** *(done)*: `.ozz` skeleton + legacy `CBoneData` mapping is in place, including name/ID lookup helpers.
+3. **Pose Evaluation Core** *(done)*: `CalculateBones` drives Ozz sampling/local-to-model jobs, honours callbacks/visibility, and refreshes bounding volumes.
+4. **Compatibility Layer** *(done)*: helpers such as `Bone_GetAnimPos`, wallmarks, and bundle hydration keep downstream systems unchanged; `.ozzx` bundles feed `COzzKinematicsVisual`.
+5. **Animated Extension** *(next)*: expand `OzzKinematics` into a full `IKinematicsAnimated` bridge and surface richer motion metadata.
+6. **Validation** *(ongoing)*: maintain parity comparisons for representative actors (`stalker_hero`, weapon rigs) via regression scripts and CI entry points.
 
 ### Future Enhancement
 - Provide an optional startup flag that scans legacy `.ogf/.omf` assets (whether loose or inside packed `.db` archives), converts them to `.ozz/.ozzx` on first launch, and writes the results back to the matching paths under `gamedata`. This removes the need to ship huge preconverted bundles while keeping runtime loading identical.

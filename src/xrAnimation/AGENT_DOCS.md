@@ -1,6 +1,7 @@
 # AGENT_DOCS.md - AI Assistant Guide
 
 ## Latest Session Notes
+- MVP milestone reached: converters, parity harness, and the `.ozzx` runtime visual now exercise `OzzKinematics` end-to-end with legacy parity for the shipped fixtures.
 - Runtime conversion bug traced to missing inverse basis: `ConvertOzzMatrixToXRay` now applies a direct Ozz→X-Ray change-of-basis (`kOzzToXray`), fixing flipped bind poses while keeping legacy palette math intact. The converter switched to the matching direct `kXrayToOzz` transform, dropping the confusing Blender intermediate.
 - OMF tracks are treated as absolute locals again; converters now convert the per-frame local matrix directly, which fixed `OzzKinematicsParity.AnimationPoseMatchesLegacySkeleton` and confirmed that `ozz_animation_viewer` matches in-engine playback.
 - `OzzKinematics` now evaluates bind pose and sampled animation with visibility masks, callbacks, and additional transforms; parity tests compare results against the legacy runtime.
@@ -18,9 +19,10 @@
 - Parity/unit tests require the generated `src/xrAnimation/tests/testdata/stalker_hero_1.ozz` and `.ozzx` fixtures; rerun `convert_assets.sh` if they are missing before executing the suites.
 
 ## Active Objective
-- Integrate a runtime visual that consumes `.ozzx` bundles, owns an `OzzKinematics`, and pushes bone palettes into the renderer/model pool.
-- Drive a dev-only actor (or HUD item) through that path to exercise animation/physics callbacks using converted `.ozz` clips.
-- Maintain TDD discipline: expand regression tests before introducing new runtime wiring or threading changes.
+- Stand up a startup conversion stage that hooks into the level loading flow (after `IGame_Persistent::Prefetch()`), converts any `.ogf/.omf` discovered during prefetch into `.ozz/.ozzx`, and drops the bundles into `gamedata` with progress surfaced via `g_loading_stages`.
+- Harden the MVP: keep converter/runtime parity tests green, expand automation around bundle hydration, and chase down any gameplay regressions surfaced by smoke tests.
+- Gather frame-cost telemetry comparing legacy vs. Ozz paths and publish the results alongside configuration guidance.
+- Capture follow-up requirements (threading, GPU skinning, richer metadata) and turn them into a prioritised roadmap for the next phase.
 
 ## Project Overview & Philosophy
 - Primary project: integrate ozz-animation into the OpenXRay engine while preserving legacy behaviour.
@@ -64,7 +66,7 @@
 
 ## Coordinate System Reference
 - X-Ray is Y-up; ozz/OpenGL is Z-up.
-- Converter outputs skeletons/meshes already in ozz space using the direct basis flip `(X, Y, Z)_XRAY → (X, Y, -Z)_ozz`; the runtime consumes the inverse (`(X, Y, Z)_ozz → (X, Y, -Z)_XRAY`) so palettes and vertex data share the same frame.
+- Converter outputs skeletons/meshes in ozz space using the diagonal basis matrix `diag(-1, 1, -1)`, i.e. an X-Ray vector `(X, Y, Z)` becomes `(-X, Y, -Z)` after conversion. The runtime applies the same matrix in reverse when handing data back to X-Ray so palettes and vertex data stay aligned without Blender-specific intermediates.
 
 ## Tools & Scripts
 - `convert_assets.sh` (workspace root): converts `res/testdata/npc/stalker_hero_1.ogf` and `res/testdata/npc/critical_hit_grup_1.omf` into `.ozz` assets under `asset_tests/`.

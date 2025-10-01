@@ -1,39 +1,35 @@
 # AGENT_NEXT_STEPS
 
 ## Current Status
-- `.ogf/.omf → .ozz` pipeline is validated: skeletons, meshes, and animations round-trip and render correctly in the updated `ozz_animation_viewer`.
-- Viewer UI now mirrors Ozz profiling (FPS/update/render graphs) and cleanly renders converted assets without depth conflicts.
-- Skinning path matches the legacy runtime; palette generation and joint remaps are in sync with Blender/XR exporters.
-- Engine console flag `g_use_ozz_visuals` lets developer builds load `.ozzx` bundles (e.g., `dev_stalker.ozzx`) through the standard `CGameObject` path for smoke testing.
-- Unit coverage now checks `.ozzx` bundle hydration against `OzzKinematics`, ensuring skeleton palettes and mesh payloads stay valid.
-- Model pool normalization retains `.ozzx` suffixes so `model_Create` instantiates `COzzKinematicsVisual`; helper coverage exists in `ModelNaming.NormalizesModelIdentifiers`.
-- Palette instrumentation (`debug_dump_ozz_palette`, `debug_dump_ozz_palette_toggle`) plus `g_dev_ozz_actor` give us a deterministic harness for tracing bone matrices inside the engine.
+- MVP delivered: converters, parity harness, and `.ozzx` runtime visual ship together and mirror legacy behaviour for the supported fixtures.
+- `.ogf/.omf → .ozz` pipeline, viewer tooling, and parity suites remain the authoritative regression harness for future changes.
+- Engine builds expose `g_use_ozz_visuals` and `g_dev_ozz_actor`, enabling smoke tests of converted bundles without touching legacy assets.
+- Bundle hydration, model-name normalisation, and palette instrumentation are covered by dedicated unit and parity tests.
 
-## Immediate Focus – Ozz Runtime Path
-1. **`.ozzx` Visual Integration**
-   - Capture palette uploads and renderer hand-off for `COzzKinematicsVisual`, logging palette deltas to confirm the runtime path mirrors the façade.
-   - Extend parity coverage so model pool normalization and bundle hydration stay deterministic.
-   - After the direct basis fix, validate the bind-pose forward axis and first animation frame inside the engine/debug CLI to ensure no residual orientation flips remain.
-2. **Pilot Actor / HUD Harness**
-   - Wire a dev-only actor (or HUD item) to the new visual path, play a converted clip, and verify callbacks/physics hooks fire as expected.
-   - Capture quirks encountered during animation events, ragdoll bind, or script exposure for follow-up fixes.
-   - Instrument palette dumps pre/post animation sampling to isolate the collapse we observed when the runtime matrices stayed in Ozz space; compare against parity baselines.
-3. **Runtime Telemetry & Docs**
-   - Expose lightweight logging/profiling toggles to compare legacy vs. Ozz frame costs and update docs to reflect the façade + visual split.
+## Post-MVP Focus
+1. **Startup Conversion Stage**
+   - Introduce a loading-stage hook that runs after the existing object/model prefetch to walk legacy `.ogf/.omf` assets, invoke the converter, and persist `.ozz/.ozzx` bundles into `gamedata`.
+   - Surface the stage through `g_loading_stages` so players/devs can track progress, and ensure the UI copy reflects the new work.
+   - Coordinate with asset caches to avoid duplicate loads, respect `-noprefetch`, and fall back gracefully when conversion fails or assets are already cached.
+2. **Stability & Regression Automation**
+   - Keep the converter/runtime suites green, add smoke coverage for newly converted startup bundles, and automate checks that guard palette/visibility behaviour.
+3. **Telemetry & Documentation**
+   - Capture frame-cost deltas between legacy and Ozz paths, publish lightweight dashboards/logs, and fold the findings into README and workflow docs.
 
-## TDD Execution Plan – Visual & Actor Rollout
-1. **Bundle & Visual Unit Tests**
-   - Add tests covering `.ozzx` bundle hydration (skeleton + mesh payload sizes, failure modes) and visual creation to ensure assets load deterministically.
-   - Mock renderer/model pool dependencies where possible so tests stay fast and headless.
-2. **Actor Harness Tests**
-   - Introduce fixtures that construct the pilot actor with an `OzzKinematics`, advance animation time, and assert bone palettes match the parity baselines.
-   - Cover callbacks (`CBoneInstance::callback`), additional transforms, and visibility changes within the new path.
-3. **Optimization & Regression Suite**
-   - Extend converter tests to assert `--optimize` reduces file size and maintains pose parity for representative clips (NPC, weapon, arms).
-   - Keep `ctest --output-on-failure` in the default workflow; capture failing diagnostics under `logs/` for quick diffs.
+## Execution Checklist
+1. **Design the Loading Hook**
+   - Inspect `IGame_Persistent::OnGameStart()` / `Prefetch()` to slot a conversion stage immediately after the OGF/OMF fetch, honouring the existing `LoadTitle()` flow.
+   - Define ownership/lifetime for the conversion queue, output directory, and any async worker coordination.
+2. **Prototype Conversion Pass**
+   - Reuse `xrAnimation` converter entry points to process the prefetched resources, write bundles under `gamedata`, and emit diagnostics via `Msg()`.
+   - Add toggles for skipping conversion (developer workflows, already-converted assets) and guard against blocking the main thread for large asset sets.
+3. **Automation & Telemetry**
+   - Expand CI/local scripts that regenerate fixtures, run converter + runtime tests, and flag regressions when bundle layouts change.
+   - Add optional timers/toggles around sampling, palette builds, and CPU skinning to quantify runtime costs and store summaries alongside docs.
+4. **Roadmap Notes**
+   - Document follow-up milestones (threaded sampling, GPU palette uploads, motion metadata passthrough) with assumptions/risks to guide planning discussions.
 
 ## Supporting Work
-- Keep README/agent docs aligned with runtime capabilities after each milestone.
-- Plan the threading story once the façade + visual stabilise (per-actor buffers, deterministic job scheduling, telemetry hooks).
+- Keep README/agent docs aligned with the MVP status and future roadmap.
+- Maintain the direct X-Ray↔Ozz basis helpers across runtime and tools; avoid reintroducing Blender-dependent math paths when adding new converters or debug outputs.
 - Trim build friction by disabling upstream ozz test targets that trigger DLL copy timeouts during CI or local runs.
-- Maintain the simplified direct X-Ray↔Ozz basis helpers across runtime and tools; avoid reintroducing Blender-dependent math paths when adding new converters or debug outputs.

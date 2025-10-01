@@ -2,13 +2,14 @@
 
 ## Mission Snapshot
 - Modernise OpenXRay's animation runtime by integrating ozz-animation while keeping legacy behaviour intact.
-- xrAnimation module owns the façade around `OzzKinematics`, converter tools, and parity tests against the old pipeline.
+- xrAnimation module owns the façade around `OzzKinematics`, converter tools, parity tests, and the in-engine `.ozzx` visual.
 - Converter CLI already produces `.ozz/.ozzx` assets from legacy `.ogf/.omf`; viewer tooling validates bind pose and animation parity.
+- Minimum Viable Product is shipped: the runtime façade, converter, and bundle visual now mirror legacy behaviour for the shipped fixtures.
 
 ## Active Priorities
-1. Ship an engine visual that consumes `.ozzx` bundles, instantiates `OzzKinematics`, and feeds bone palettes into the renderer/model pool.
-2. Drive a pilot actor or HUD item through the new visual, confirming callbacks, visibility toggles, and additional transforms behave like the legacy path.
-3. Expose lightweight telemetry/docs comparing legacy vs. ozz frame costs and keep documentation in sync with code changes.
+1. Harden the MVP: keep regression suites green, extend automation around `.ozzx` bundle loading, and react quickly to edge cases raised in gameplay smoke tests.
+2. Capture and publish lightweight telemetry comparing legacy vs. Ozz frame costs; feed the numbers back into docs and tuning guidelines.
+3. Shape the next phase (threading, GPU skinning, richer metadata) by collecting follow-up requirements and documenting the proposed roadmap.
 
 ## Workflow Expectations
 - Read existing memory (docs, notes) before running commands or changing files.
