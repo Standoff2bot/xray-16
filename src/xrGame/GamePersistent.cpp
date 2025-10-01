@@ -189,15 +189,50 @@ void CGamePersistent::OnGameStart()
     const xr_string stored_digest = LoadInventoryDigestFromUserConfig();
     const xr_string computed_digest = ComputeLegacyAssetInventoryDigest(inventory);
 
-    if (stored_digest == computed_digest)
+    StartupConversionParams conversion_params;
+    const bool digest_matches = stored_digest == computed_digest;
+    const bool outputs_valid = digest_matches && VerifyConvertedOutputs(inventory, conversion_params);
+
+    if (digest_matches && outputs_valid)
     {
-        Msg("[ozz] Startup inventory digest matches cached value (%s)", computed_digest.c_str());
+        Msg("[ozz] Startup inventory unchanged; cached digest %s", computed_digest.c_str());
+        return;
+    }
+
+    const bool force_rebuild = !digest_matches;
+    StartupConversionStats conversion_stats;
+    const bool show_loading_stage = psActorFlags.test(AF_LOADING_STAGES);
+
+    if (show_loading_stage)
+        LoadTitle("st_converting_ozz_assets", false);
+
+    const xr_string stored_display = stored_digest.empty() ? xr_string("<none>") : stored_digest;
+    Msg("[ozz] Startup conversion %s (cached=%s, computed=%s)",
+        force_rebuild ? "rebuilding all assets" : "refreshing missing assets",
+        stored_display.c_str(), computed_digest.c_str());
+
+    if (!ConvertInventoryToOzz(inventory, conversion_params, force_rebuild, conversion_stats))
+    {
+        Msg("! [ozz] Startup conversion failed (%zu failure%s)",
+            conversion_stats.failures,
+            conversion_stats.failures == 1 ? "" : "s");
+        return;
+    }
+
+    if (show_loading_stage)
+        LoadStage();
+
+    if (!StoreInventoryDigestInUserConfig(computed_digest))
+    {
+        Msg("! [ozz] Failed to persist startup inventory digest to user.ltx");
     }
     else
     {
-        Msg("[ozz] Startup inventory digest changed (cached=%s, computed=%s)",
-            stored_digest.c_str(), computed_digest.c_str());
-        // TODO: trigger conversion stage when runtime wiring is complete.
+        Msg("[ozz] Startup conversion complete: bundles written=%zu (skipped=%zu), motions written=%zu (skipped=%zu)",
+            conversion_stats.bundles_written,
+            conversion_stats.bundles_skipped,
+            conversion_stats.motions_written,
+            conversion_stats.motions_skipped);
     }
 }
 

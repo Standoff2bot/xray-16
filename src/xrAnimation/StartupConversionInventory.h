@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -77,6 +78,27 @@ bool StoreInventoryDigestInUserConfig(const xr_string& digest);
 
 inline constexpr char kInventoryDigestSection[] = "ozz_startup_conversion";
 inline constexpr char kInventoryDigestKey[] = "inventory_digest";
+
+struct StartupConversionParams
+{
+    xr_string bundle_output_alias = "$game_meshes$";
+    xr_string animation_output_alias = "$game_anims$";
+};
+
+struct StartupConversionStats
+{
+    std::size_t bundles_written = 0;
+    std::size_t bundles_skipped = 0;
+    std::size_t motions_written = 0;
+    std::size_t motions_skipped = 0;
+    std::size_t failures = 0;
+};
+
+[[nodiscard]] bool VerifyConvertedOutputs(const LegacyAssetInventory& inventory, const StartupConversionParams& params);
+bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
+                           const StartupConversionParams& params,
+                           bool force_rebuild,
+                           StartupConversionStats& out_stats);
 
 } // namespace Animation
 } // namespace XRay

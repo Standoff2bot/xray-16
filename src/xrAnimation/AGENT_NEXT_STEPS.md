@@ -8,9 +8,8 @@
 
 ## Post-MVP Focus
 1. **Startup Conversion Stage**
-   - Introduce a loading-stage hook that runs after the existing object/model prefetch to walk legacy `.ogf/.omf` assets, invoke the converter, and persist `.ozz/.ozzx` bundles into `gamedata`.
-   - Surface the stage through `g_loading_stages` so players/devs can track progress, and ensure the UI copy reflects the new work.
-   - Coordinate with asset caches to avoid duplicate loads, respect `-noprefetch`, and fall back gracefully when conversion fails or assets are already cached.
+   - Polish the new conversion pass (already invoked from `OnGameStart`) by surfacing progress through `g_loading_stages`, enriching diagnostics, and ensuring failures fall back cleanly to legacy assets.
+   - Coordinate with asset caches to avoid duplicate loads, respect `-noprefetch`, and keep rebuilds idempotent when outputs already exist.
 2. **Stability & Regression Automation**
    - Keep the converter/runtime suites green, add smoke coverage for newly converted startup bundles, and automate checks that guard palette/visibility behaviour.
 3. **Telemetry & Documentation**

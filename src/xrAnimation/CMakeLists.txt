@@ -36,10 +36,17 @@ set(SOURCES
     OzzKinematics.h
     StartupConversionInventory.cpp
     StartupConversionInventory.h
+    ../../Externals/ozz-animation/samples/framework/mesh.cc
 )
 
 # Create static library
 add_library(xrAnimation STATIC ${SOURCES})
+
+set_source_files_properties(
+    ../../Externals/ozz-animation/samples/framework/mesh.cc
+    PROPERTIES
+        SKIP_PRECOMPILE_HEADERS ON
+)
 
 # Link libraries
 target_link_libraries(xrAnimation

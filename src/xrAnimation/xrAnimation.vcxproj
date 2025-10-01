@@ -254,6 +254,9 @@
     <ClCompile Include="OzzBundle.cpp" />
     <ClCompile Include="OzzKinematics.cpp" />
     <ClCompile Include="StartupConversionInventory.cpp" />
+    <ClCompile Include="..\..\Externals\ozz-animation\samples\framework\mesh.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>

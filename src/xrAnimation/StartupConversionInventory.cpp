@@ -16,12 +16,18 @@
 #include <unordered_set>
 #include <vector>
 
+#include <ozz/base/io/archive.h>
+#include <ozz/base/io/stream.h>
+
 #include "xrCore/FMesh.hpp"
 #include "xrCore/FS.h"
 #include "xrCore/Log.h"
 #include "xrCore/_std_extensions.h"
 #include "xrCore/xr_ini.h"
 
+#include "LegacyOgfConverter.h"
+#include "LegacyOmfConverter.h"
+#include "OzzBundle.h"
 #include "Layers/xrRender/ModelNaming.h"
 namespace fs = std::filesystem;
 
@@ -217,6 +223,181 @@ std::vector<std::byte> ReadFileBytes(const xr_string& root_alias, const xr_strin
         std::memcpy(buffer.data(), reader->pointer(), buffer.size());
     FS.r_close(reader);
     return buffer;
+}
+
+bool ResolveAbsolutePath(const xr_string& root_alias, const xr_string& relative_path, fs::path& out_path)
+{
+    string_path resolved;
+    if (!FS.update_path(resolved, root_alias.c_str(), relative_path.c_str(), false))
+        return false;
+    out_path = fs::path(resolved);
+    return true;
+}
+
+bool EnsureParentDirectoryExists(const fs::path& file_path)
+{
+    const fs::path parent = file_path.parent_path();
+    if (parent.empty())
+        return true;
+
+    std::error_code ec;
+    fs::create_directories(parent, ec);
+    if (ec)
+    {
+        Msg("! [ozz] Failed to create directory '%s' (%s)", parent.string().c_str(), ec.message().c_str());
+        return false;
+    }
+    return true;
+}
+
+xr_string BuildBundleRelativePath(const LegacyVisualAsset& visual)
+{
+    xr_string relative = visual.normalized_identifier;
+    relative.append(".ozzx");
+    return relative;
+}
+
+xr_string BuildMotionOutputRelativePath(const LegacyMotionAsset& motion)
+{
+    xr_string relative = motion.relative_path;
+    const auto dot = relative.find_last_of('.');
+    if (dot != xr_string::npos)
+        relative.replace(dot, relative.size() - dot, ".ozz");
+    else
+        relative.append(".ozz");
+    return relative;
+}
+
+bool FileExists(const xr_string& alias, const xr_string& relative_path)
+{
+    fs::path absolute;
+    if (!ResolveAbsolutePath(alias, relative_path, absolute))
+        return false;
+    std::error_code ec;
+    return fs::exists(absolute, ec) && !ec;
+}
+
+bool BundleExists(const LegacyVisualAsset& visual, const StartupConversionParams& params)
+{
+    const xr_string relative = BuildBundleRelativePath(visual);
+    return FileExists(params.bundle_output_alias, relative);
+}
+
+bool MotionExists(const LegacyMotionAsset& motion, const StartupConversionParams& params)
+{
+    const xr_string relative = BuildMotionOutputRelativePath(motion);
+    return FileExists(params.animation_output_alias, relative);
+}
+
+void SerializeString(ozz::io::OArchive& archive, const std::string& value)
+{
+    const uint32_t length = static_cast<uint32_t>(value.size());
+    archive << length;
+    if (length > 0)
+        archive << ozz::io::MakeArray(value.c_str(), length);
+}
+
+void SerializeMotionMarks(ozz::io::OArchive& archive, const LegacyMotionMetadata& metadata)
+{
+    const uint32_t mark_count = static_cast<uint32_t>(metadata.marks.size());
+    archive << mark_count;
+    for (const auto& mark : metadata.marks)
+    {
+        SerializeString(archive, std::string(mark.name.c_str()));
+        const uint32_t interval_count = static_cast<uint32_t>(mark.intervals.size());
+        archive << interval_count;
+        for (const auto& interval : mark.intervals)
+        {
+            archive << interval.first;
+            archive << interval.second;
+        }
+    }
+}
+
+void SerializeMotionMetadata(ozz::io::OArchive& archive, const LegacyMotionMetadata& metadata)
+{
+    SerializeString(archive, std::string(metadata.name.c_str()));
+    archive << metadata.flags;
+    archive << metadata.bone_or_part;
+    archive << metadata.motion_id;
+    archive << metadata.speed;
+    archive << metadata.power;
+    archive << metadata.accrue;
+    archive << metadata.falloff;
+    SerializeMotionMarks(archive, metadata);
+}
+
+bool WriteBundleFile(const StartupConversionParams& params,
+                     const LegacyVisualAsset& visual,
+                     const LegacyVisualConversionResult& conversion)
+{
+    const xr_string relative = BuildBundleRelativePath(visual);
+    fs::path output_path;
+    if (!ResolveAbsolutePath(params.bundle_output_alias, relative, output_path))
+    {
+        Msg("! [ozz] Failed to resolve bundle output path for '%s'", visual.normalized_identifier.c_str());
+        return false;
+    }
+
+    if (!EnsureParentDirectoryExists(output_path))
+        return false;
+
+    OzzxBundle bundle;
+    bundle.version = 2u;
+    bundle.skeleton = conversion.skeleton_binary;
+    bundle.mesh = conversion.mesh_binary;
+    bundle.motion_refs = conversion.motion_refs;
+
+    const std::string path_string = output_path.string();
+
+    if (!WriteOzzxBundle(output_path, bundle))
+    {
+        Msg("! [ozz] Failed to write bundle '%s'", path_string.c_str());
+        return false;
+    }
+
+    Msg("[ozz] wrote bundle %s", path_string.c_str());
+
+    return true;
+}
+
+bool WriteOzzAnimations(const StartupConversionParams& params,
+                        const xr_string& output_relative,
+                        const xr_vector<ConvertedOmfAnimation>& animations)
+{
+    fs::path output_path;
+    if (!ResolveAbsolutePath(params.animation_output_alias, output_relative, output_path))
+    {
+        Msg("! [ozz] Failed to resolve animation output path '%s'", output_relative.c_str());
+        return false;
+    }
+
+    if (!EnsureParentDirectoryExists(output_path))
+        return false;
+
+    const std::string output_string = output_path.string();
+    ozz::io::File output(output_string.c_str(), "wb");
+    if (!output.opened())
+    {
+        Msg("! [ozz] Failed to open animation output '%s'", output_string.c_str());
+        return false;
+    }
+
+    ozz::io::OArchive archive(&output);
+    const uint32_t animation_count = static_cast<uint32_t>(animations.size());
+    archive << animation_count;
+
+    for (const auto& entry : animations)
+    {
+        if (!entry.animation)
+            continue;
+        archive << *entry.animation;
+        SerializeMotionMetadata(archive, entry.metadata);
+    }
+
+    Msg("[ozz] wrote animation %s", output_string.c_str());
+
+    return true;
 }
 
 xr_vector<xr_string> SplitMotionReferenceList(const xr_string& combined)
@@ -719,6 +900,194 @@ bool StoreInventoryDigestInUserConfig(const xr_string& digest)
 {
     const fs::path config_path = ResolveUserConfigPathForWrite();
     return StoreInventoryDigestInConfig(config_path, digest);
+}
+
+bool VerifyConvertedOutputs(const LegacyAssetInventory& inventory, const StartupConversionParams& params)
+{
+    for (const auto& visual : inventory.visuals)
+    {
+        if (!BundleExists(visual, params))
+            return false;
+    }
+
+    for (const auto& motion : inventory.motions)
+    {
+        if (!MotionExists(motion, params))
+            return false;
+    }
+
+    return true;
+}
+
+struct MotionWorkItem
+{
+    const LegacyMotionAsset* asset = nullptr;
+    xr_string canonical_name;
+    xr_string output_relative;
+    bool convert = false;
+};
+
+bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
+                           const StartupConversionParams& params,
+                           bool force_rebuild,
+                           StartupConversionStats& out_stats)
+{
+    out_stats = {};
+
+    std::unordered_set<xr_string> processed_motions;
+
+    for (const auto& visual : inventory.visuals)
+    {
+        const LegacyVisualSource* primary = visual.PrimarySource();
+        if (!primary)
+        {
+            Msg("! [ozz] Visual '%s' has no primary source", visual.normalized_identifier.c_str());
+            ++out_stats.failures;
+            continue;
+        }
+
+        const bool bundle_exists = BundleExists(visual, params);
+        const bool convert_bundle = force_rebuild || !bundle_exists;
+
+        xr_vector<MotionWorkItem> motion_tasks;
+        motion_tasks.reserve(primary->motion_references.size());
+        bool needs_motion_conversion = false;
+
+        for (const auto& reference : primary->motion_references)
+        {
+            xr_string canonical_name = CanonicalizeMotionName(reference);
+            if (canonical_name.empty())
+                continue;
+
+            if (processed_motions.find(canonical_name) != processed_motions.end())
+                continue;
+
+            const LegacyMotionAsset* motion = inventory.FindMotion(canonical_name);
+            if (!motion)
+            {
+                Msg("! [ozz] Missing motion metadata for '%s' referenced by '%s'", canonical_name.c_str(), visual.normalized_identifier.c_str());
+                ++out_stats.failures;
+                processed_motions.insert(std::move(canonical_name));
+                continue;
+            }
+
+            MotionWorkItem task;
+            task.asset = motion;
+            task.canonical_name = canonical_name;
+            task.output_relative = BuildMotionOutputRelativePath(*motion);
+            task.convert = force_rebuild || !FileExists(params.animation_output_alias, task.output_relative);
+
+            if (task.convert)
+                needs_motion_conversion = true;
+
+            motion_tasks.emplace_back(std::move(task));
+        }
+
+        if (!convert_bundle && !needs_motion_conversion)
+        {
+            out_stats.bundles_skipped++;
+            for (auto& task : motion_tasks)
+            {
+                processed_motions.insert(task.canonical_name);
+                out_stats.motions_skipped++;
+            }
+            continue;
+        }
+
+        auto ogf_bytes = ReadFileBytes(primary->location.root_alias, primary->location.relative_path);
+        if (ogf_bytes.empty())
+        {
+            Msg("! [ozz] Failed to read legacy visual '%s:%s'", primary->location.root_alias.c_str(), primary->location.relative_path.c_str());
+            ++out_stats.failures;
+            continue;
+        }
+
+        LegacyVisualInput input;
+        input.buffer = ozz::span<const std::byte>(ogf_bytes.data(), ogf_bytes.size());
+
+        fs::path resolved_source;
+        if (ResolveAbsolutePath(primary->location.root_alias, primary->location.relative_path, resolved_source))
+            input.source_path = resolved_source;
+
+        LegacyVisualConversionOptions options;
+        options.build_mesh = true;
+        options.build_skeleton = true;
+
+        LegacyVisualConversionResult conversion;
+        xr_string error;
+        if (!ConvertLegacyVisualToOzzBundle(input, conversion, options, &error))
+        {
+            Msg("! [ozz] Failed to convert '%s:%s' (%s)", primary->location.root_alias.c_str(), primary->location.relative_path.c_str(), error.c_str());
+            ++out_stats.failures;
+            continue;
+        }
+
+        if (convert_bundle)
+        {
+            if (WriteBundleFile(params, visual, conversion))
+                ++out_stats.bundles_written;
+            else
+                ++out_stats.failures;
+        }
+        else
+        {
+            ++out_stats.bundles_skipped;
+        }
+
+        if (!conversion.skeleton)
+        {
+            Msg("! [ozz] Conversion for '%s' produced no skeleton", visual.normalized_identifier.c_str());
+            ++out_stats.failures;
+            for (auto& task : motion_tasks)
+                processed_motions.insert(task.canonical_name);
+            continue;
+        }
+
+        for (auto& task : motion_tasks)
+        {
+            if (!task.convert)
+            {
+                processed_motions.insert(task.canonical_name);
+                ++out_stats.motions_skipped;
+                continue;
+            }
+
+            auto omf_bytes = ReadFileBytes(task.asset->root_alias, task.asset->relative_path);
+            if (omf_bytes.empty())
+            {
+                Msg("! [ozz] Failed to read legacy motion '%s:%s'", task.asset->root_alias.c_str(), task.asset->relative_path.c_str());
+                ++out_stats.failures;
+                processed_motions.insert(task.canonical_name);
+                continue;
+            }
+
+            xr_vector<ConvertedOmfAnimation> converted_animations;
+            if (!ConvertLegacyOmf(omf_bytes.data(), omf_bytes.size(), conversion.bone_names, *conversion.skeleton, converted_animations))
+            {
+                Msg("! [ozz] Failed to convert legacy motion '%s'", task.asset->relative_path.c_str());
+                ++out_stats.failures;
+                processed_motions.insert(task.canonical_name);
+                continue;
+            }
+
+            if (converted_animations.empty())
+            {
+                Msg("! [ozz] Motion '%s' produced no Ozz animations", task.asset->relative_path.c_str());
+                ++out_stats.failures;
+                processed_motions.insert(task.canonical_name);
+                continue;
+            }
+
+            if (WriteOzzAnimations(params, task.output_relative, converted_animations))
+                ++out_stats.motions_written;
+            else
+                ++out_stats.failures;
+
+            processed_motions.insert(task.canonical_name);
+        }
+    }
+
+    return out_stats.failures == 0;
 }
 
 } // namespace Animation

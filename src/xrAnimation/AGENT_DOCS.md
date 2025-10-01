@@ -17,9 +17,10 @@
 - IK limbs and step manager paths now bail out cleanly when an Ozz visual is active, so missing `IKinematicsAnimated` no longer hard-asserts during experiments.
 - `OzzBundleRuntime` regression test hydrates `OzzKinematics` and mesh payloads from a `.ozzx` bundle to guard bundle/runtime parity.
 - Parity/unit tests require the generated `src/xrAnimation/tests/testdata/stalker_hero_1.ozz` and `.ozzx` fixtures; rerun `convert_assets.sh` if they are missing before executing the suites.
+- Startup boot now rebuilds `.ozzx` bundles and `.ozz` animations under `$game_meshes$` / `$game_anims$` when the inventory digest drifts or assets are missing, persisting the fresh digest back to `user.ltx` once conversions succeed.
 
 ## Active Objective
-- Stand up a startup conversion stage that hooks into the level loading flow (after `IGame_Persistent::Prefetch()`), converts any `.ogf/.omf` discovered during prefetch into `.ozz/.ozzx`, and drops the bundles into `gamedata` with progress surfaced via `g_loading_stages`.
+- Surface the new startup conversion stage through the loading UI once localisation strings are ready so players see a "converting Ozz assets" progress step.
 - Harden the MVP: keep converter/runtime parity tests green, expand automation around bundle hydration, and chase down any gameplay regressions surfaced by smoke tests.
 - Gather frame-cost telemetry comparing legacy vs. Ozz paths and publish the results alongside configuration guidance.
 - Capture follow-up requirements (threading, GPU skinning, richer metadata) and turn them into a prioritised roadmap for the next phase.
