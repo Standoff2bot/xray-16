@@ -16,9 +16,6 @@ target_include_directories(xrMaterialSystem
 )
 
 target_link_libraries(xrMaterialSystem
-    PUBLIC
-    xrMiscMath
-
     PRIVATE
     xrAPI
     xrCore

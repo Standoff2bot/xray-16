@@ -407,13 +407,12 @@ target_link_libraries(xrPhysics
     PUBLIC
     xrODE
     PRIVATE
+    xrAPI
     xrCore
+    xrCDB
     xrEngine
     xrMaterialSystem
-    xrMiscMath
     xrScriptEngine
-    xrAPI
-    xrCDB
     xrSound
 )
 

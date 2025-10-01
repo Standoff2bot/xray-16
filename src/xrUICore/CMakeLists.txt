@@ -133,10 +133,9 @@ target_include_directories(xrUICore
 target_link_libraries(xrUICore
     PRIVATE
     xrAPI
-    xrScriptEngine
-    xrEngine
-    xrMiscMath
     xrCore
+    xrEngine
+    xrScriptEngine
     xrSound
 )
 

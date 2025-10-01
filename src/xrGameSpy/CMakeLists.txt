@@ -50,7 +50,6 @@ target_include_directories(xrGameSpy
 target_link_libraries(xrGameSpy
     PRIVATE
     xrCore
-    xrMiscMath
     GameSpy-oxr
 )
 

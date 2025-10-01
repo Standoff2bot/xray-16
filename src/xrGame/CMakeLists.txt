@@ -2485,20 +2485,19 @@ target_include_directories(xrGame
 
 target_link_libraries(xrGame
     PRIVATE
-    xrCore
-    xrEngine
-    xrMaterialSystem
-    xrMiscMath
     xrAPI
+    xrCore
+    xrCDB
+    xrEngine
     xrAICore
-    xrUICore
-    xrSound
-    xrScriptEngine
     xrGameSpy
     GameSpy-oxr
-    xrCDB
-    xrPhysics
+    xrMaterialSystem
     xrNetServer
+    xrPhysics
+    xrScriptEngine
+    xrSound
+    xrUICore
 )
 
 if (MSVC)

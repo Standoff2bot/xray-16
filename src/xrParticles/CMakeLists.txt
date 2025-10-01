@@ -37,7 +37,6 @@ target_include_directories(xrParticles
 target_link_libraries(xrParticles
     PRIVATE
     xrCore
-    xrMiscMath
     xrEngine
 )
 

@@ -421,17 +421,16 @@ target_include_directories(xrEngine
 
 target_link_libraries(xrEngine
     PUBLIC
-    xrMiscMath
     xrImGui
 
     PRIVATE
     xrAPI
+    xrCore
     xrCDB
     xrMaterialSystem
-    xrCore
-    xrSound
-    xrScriptEngine
     xrNetServer
+    xrScriptEngine
+    xrSound
     OpenAL::OpenAL
     Ogg::Ogg
     Theora::Theora

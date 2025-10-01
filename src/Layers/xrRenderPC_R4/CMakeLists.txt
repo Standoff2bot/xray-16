@@ -1,6 +1,6 @@
-add_library(xrRenderPC_R4)
+add_library(xrRender_R4)
 
-target_sources(xrRenderPC_R4 PRIVATE
+target_sources(xrRender_R4 PRIVATE
     packages.config
     r2_test_hw.cpp
     r4_rendertarget.h
@@ -78,7 +78,7 @@ file(GLOB XR_RENDERPC_R4_R2_SOURCES
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender_R2/*.cpp"
 )
 
-target_sources(xrRenderPC_R4 PRIVATE
+target_sources(xrRender_R4 PRIVATE
     ${XR_RENDERPC_R4_SHARED_SOURCES}
     ${XR_RENDERPC_R4_BLENDER_SOURCES}
     ${XR_RENDERPC_R4_UTILITY_SOURCES}
@@ -86,7 +86,7 @@ target_sources(xrRenderPC_R4 PRIVATE
     ${XR_RENDERPC_R4_R2_SOURCES}
 )
 
-target_include_directories(xrRenderPC_R4
+target_include_directories(xrRender_R4
     PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_SOURCE_DIR}/src"
@@ -100,16 +100,15 @@ target_include_directories(xrRenderPC_R4
     "${CMAKE_SOURCE_DIR}/Externals/AGS_SDK/ags_lib/inc"
 )
 
-target_link_libraries(xrRenderPC_R4
+target_link_libraries(xrRender_R4
     PRIVATE
+    xrAPI
     xrCore
     xrCDB
     xrEngine
     xrMaterialSystem
     xrParticles
     xrScriptEngine
-    xrAPI
-    xrMiscMath
 )
 
 if (MSVC)
@@ -125,7 +124,7 @@ if (MSVC)
         set(_xr_ags_release_lib "${CMAKE_SOURCE_DIR}/Externals/AGS_SDK/ags_lib/lib/amd_ags_x86_2019_MD.lib")
     endif()
 
-    target_link_libraries(xrRenderPC_R4
+    target_link_libraries(xrRender_R4
         PRIVATE
         ${_xr_nvapi_lib}
         $<$<CONFIG:Debug>:${_xr_ags_debug_lib}>
@@ -137,26 +136,26 @@ if (MSVC)
     )
 endif()
 
-target_compile_definitions(xrRenderPC_R4
+target_compile_definitions(xrRender_R4
     PRIVATE
     XRRENDER_R4_EXPORTS
     USE_DX11
     RENDER_NAMESPACE=render_r4
 )
 
-set_target_properties(xrRenderPC_R4 PROPERTIES
+set_target_properties(xrRender_R4 PROPERTIES
     PREFIX ""
     VS_USER_PROPS ${XRAY_MSBUILD_PROPS}
     VS_PACKAGE_REFERENCES "directxmath_2024.10.15.1;directxtex_desktop_2019_2024.10.29.1"
 )
 
-target_precompile_headers(xrRenderPC_R4
+target_precompile_headers(xrRender_R4
     PRIVATE
     stdafx.h
 )
 
 if (BUILD_SHARED_LIBS)
-    install(TARGETS xrRenderPC_R4 LIBRARY
+    install(TARGETS xrRender_R4 LIBRARY
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     )
 endif()

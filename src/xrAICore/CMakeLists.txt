@@ -292,10 +292,9 @@ target_include_directories(xrAICore
 
 target_link_libraries(xrAICore
     PRIVATE
+    xrAPI
     xrCore
     xrEngine
-    xrMiscMath
-    xrAPI
     xrScriptEngine
 )
 

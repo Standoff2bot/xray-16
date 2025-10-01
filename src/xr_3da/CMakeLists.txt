@@ -26,8 +26,8 @@ target_include_directories(xr_3da
 
 target_link_libraries(xr_3da
     PRIVATE
-    xrCore
     xrAPI
+    xrCore
     xrEngine
     xrRender_GL
     xrGame
@@ -36,7 +36,7 @@ target_link_libraries(xr_3da
 if (WIN32)
     target_link_libraries(xr_3da
         PRIVATE
-        xrRenderPC_R4
+        xrRender_R4
     )
 
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)

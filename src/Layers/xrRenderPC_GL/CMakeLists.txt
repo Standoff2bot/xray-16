@@ -407,13 +407,12 @@ target_include_directories(xrRender_GL
 target_link_libraries(xrRender_GL
     PRIVATE
     xrAPI
-    xrCDB
     xrCore
+    xrCDB
     xrEngine
     xrMaterialSystem
     xrParticles
     xrScriptEngine
-    xrImGui
 )
 
 target_compile_definitions(xrRender_GL

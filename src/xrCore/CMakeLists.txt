@@ -451,6 +451,7 @@ target_include_directories(xrCore
 target_link_libraries(xrCore
     PUBLIC
     xrMiscMath
+    PRIVATE
     xrAPI
 )
 
