@@ -1,17 +1,11 @@
-// clang-format off
 #include "Common/Platform.hpp"
-#include "xrCore/xrCore.h"
-#include "xrCore/FMesh.hpp"
-#include "xrCore/Animation/Bone.hpp"
-// clang-format on
-
-#include "gtest/gtest.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -25,9 +19,21 @@
 #include <unordered_map>
 #include <vector>
 
+#include "gtest/gtest.h"
+
+#ifndef PROJECT_ROOT
+#    define PROJECT_ROOT ""
+#endif
+
+#include "xrCore/xrCore.h"
+#include "xrCore/Animation/Bone.hpp"
+#include "xrCore/Animation/SkeletonMotionDefs.hpp"
+#include "xrCore/Animation/SkeletonMotions.hpp"
+#include "xrCore/FMesh.hpp"
+
+#include "OzzAnimationController.h"
 #include "OzzConversion.h"
 #include "OzzKinematics.h"
-#include "OzzAnimationController.h"
 #include "OzzBundle.h"
 #include "../samples/framework/mesh.h"
 
@@ -37,25 +43,18 @@
 #include "ozz/animation/runtime/skeleton.h"
 #include "ozz/base/io/archive.h"
 #include "ozz/base/io/stream.h"
-#include "ozz/base/maths/soa_transform.h"
 #include "ozz/base/maths/simd_math.h"
+#include "ozz/base/maths/soa_transform.h"
 #include "ozz/base/maths/transform.h"
 #include "ozz/base/span.h"
 
-#include "xrCore/Animation/SkeletonMotionDefs.hpp"
-#include "xrCore/Animation/SkeletonMotions.hpp"
-#include "Layers/xrRender/KinematicsAddBoneTransform.hpp"
 #include "Layers/xrRender/ModelNaming.h"
-
-using XRay::Animation::ConvertOzzMatrixToXRay;
-
-#ifndef PROJECT_ROOT
-#    define PROJECT_ROOT ""
-#endif
-using XRay::Animation::OzzKinematics;
 
 namespace
 {
+using XRay::Animation::ConvertOzzMatrixToXRay;
+using XRay::Animation::OzzKinematics;
+
 std::filesystem::path ResolveProjectPath(const std::string& relative)
 {
     static const std::filesystem::path root = []
@@ -1010,183 +1009,367 @@ ozz::math::Transform ExtractTransformLane(const ozz::math::SoaTransform& soa, in
 
 } // namespace
 
-TEST(OzzKinematicsBootstrap, MatchesJointCountWithReferenceSkeleton)
+using XRay::Animation::OzzKinematics;
+
+bool TestOzzKinematicsBootstrapMatchesJointCountWithReferenceSkeleton()
 {
     const std::filesystem::path skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path)) << "Missing sample skeleton at " << skeleton_path;
+    if (!std::filesystem::exists(skeleton_path))
+    {
+        ADD_FAILURE() << "Missing sample skeleton at " << skeleton_path;
+        return false;
+    }
 
     ozz::animation::Skeleton reference_skeleton;
     {
         ozz::io::File file(skeleton_path.string().c_str(), "rb");
-        ASSERT_TRUE(file.opened()) << "Failed to open " << skeleton_path;
+        if (!file.opened())
+        {
+            ADD_FAILURE() << "Failed to open " << skeleton_path;
+            return false;
+        }
         ozz::io::IArchive archive(&file);
         archive >> reference_skeleton;
     }
 
     OzzKinematics kinematics;
-    ASSERT_TRUE(kinematics.InitializeFromOzz(skeleton_path.string().c_str())) << "OzzKinematics failed to load skeleton";
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "OzzKinematics failed to load skeleton";
+        return false;
+    }
 
-    EXPECT_EQ(reference_skeleton.num_joints(), kinematics.LL_BoneCount()) << "Loaded joint count mismatch";
+    const int expected = reference_skeleton.num_joints();
+    const int actual = kinematics.LL_BoneCount();
+    EXPECT_EQ(expected, actual) << "Loaded joint count mismatch";
+    return expected == actual;
 }
 
-TEST(OzzKinematicsBootstrap, InitializesFromOzzxBundleSkeleton)
+
+bool TestOzzKinematicsBootstrapInitializesFromOzzxBundleSkeleton()
 {
     const std::filesystem::path bundle_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero.ozzx");
-    ASSERT_TRUE(std::filesystem::exists(bundle_path)) << "Missing sample bundle at " << bundle_path;
+    if (!std::filesystem::exists(bundle_path))
+    {
+        ADD_FAILURE() << "Missing sample bundle at " << bundle_path;
+        return false;
+    }
 
     XRay::Animation::OzzxBundle bundle;
-    ASSERT_TRUE(XRay::Animation::ReadOzzxBundle(bundle_path, bundle)) << "Failed to read bundle at " << bundle_path;
-    ASSERT_FALSE(bundle.skeleton.empty()) << "Bundle missing skeleton payload";
+    if (!XRay::Animation::ReadOzzxBundle(bundle_path, bundle))
+    {
+        ADD_FAILURE() << "Failed to read bundle at " << bundle_path;
+        return false;
+    }
+
+    if (bundle.skeleton.empty())
+    {
+        ADD_FAILURE() << "Bundle missing skeleton payload";
+        return false;
+    }
 
     const std::filesystem::path reference_skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(reference_skeleton_path));
+    if (!std::filesystem::exists(reference_skeleton_path))
+    {
+        ADD_FAILURE() << "Missing reference skeleton at " << reference_skeleton_path;
+        return false;
+    }
 
     ozz::animation::Skeleton reference_skeleton;
     {
         ozz::io::File file(reference_skeleton_path.string().c_str(), "rb");
-        ASSERT_TRUE(file.opened());
+        if (!file.opened())
+        {
+            ADD_FAILURE() << "Failed to open " << reference_skeleton_path;
+            return false;
+        }
         ozz::io::IArchive archive(&file);
         archive >> reference_skeleton;
     }
 
     OzzKinematics kinematics;
     const ozz::span<const std::byte> skeleton_span(reinterpret_cast<const std::byte*>(bundle.skeleton.data()), bundle.skeleton.size());
-    ASSERT_TRUE(kinematics.InitializeFromOzzBuffer(skeleton_span));
+    if (!kinematics.InitializeFromOzzBuffer(skeleton_span))
+    {
+        ADD_FAILURE() << "Failed to initialize OzzKinematics from bundle skeleton payload";
+        return false;
+    }
 
-    EXPECT_EQ(reference_skeleton.num_joints(), kinematics.LL_BoneCount());
+    const int expected = reference_skeleton.num_joints();
+    const int actual = kinematics.LL_BoneCount();
+    EXPECT_EQ(expected, actual);
+    return expected == actual;
 }
 
-TEST(OzzKinematicsBootstrap, InitializesFromMemoryBuffer)
+
+bool TestOzzKinematicsBootstrapInitializesFromMemoryBuffer()
 {
     const std::filesystem::path skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path)) << "Missing sample skeleton at " << skeleton_path;
+    if (!std::filesystem::exists(skeleton_path))
+    {
+        ADD_FAILURE() << "Missing sample skeleton at " << skeleton_path;
+        return false;
+    }
 
     const auto skeleton_bytes = LoadBinaryFile(skeleton_path);
-    ASSERT_FALSE(skeleton_bytes.empty());
+    if (skeleton_bytes.empty())
+    {
+        ADD_FAILURE() << "Skeleton payload unexpectedly empty";
+        return false;
+    }
 
     ozz::animation::Skeleton reference_skeleton;
     {
         ozz::io::File file(skeleton_path.string().c_str(), "rb");
-        ASSERT_TRUE(file.opened()) << "Failed to open " << skeleton_path;
+        if (!file.opened())
+        {
+            ADD_FAILURE() << "Failed to open " << skeleton_path;
+            return false;
+        }
         ozz::io::IArchive archive(&file);
         archive >> reference_skeleton;
     }
 
     OzzKinematics file_initialized;
-    ASSERT_TRUE(file_initialized.InitializeFromOzz(skeleton_path.string().c_str()));
+    if (!file_initialized.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "Failed to initialize OzzKinematics from file";
+        return false;
+    }
 
     OzzKinematics buffer_initialized;
     const ozz::span<const std::byte> skeleton_span(skeleton_bytes.data(), skeleton_bytes.size());
-    ASSERT_TRUE(buffer_initialized.InitializeFromOzzBuffer(skeleton_span)) << "Failed to initialize from memory buffer";
+    if (!buffer_initialized.InitializeFromOzzBuffer(skeleton_span))
+    {
+        ADD_FAILURE() << "Failed to initialize from memory buffer";
+        return false;
+    }
 
-    ASSERT_EQ(reference_skeleton.num_joints(), buffer_initialized.LL_BoneCount());
-    EXPECT_EQ(file_initialized.LL_BoneCount(), buffer_initialized.LL_BoneCount());
+    bool ok = true;
 
-    ASSERT_GT(buffer_initialized.LL_BoneCount(), 0);
+    const int expected_joints = reference_skeleton.num_joints();
+    const int buffer_joints = buffer_initialized.LL_BoneCount();
+    EXPECT_EQ(expected_joints, buffer_joints);
+    if (expected_joints != buffer_joints)
+        ok = false;
+
+    const int file_joints = file_initialized.LL_BoneCount();
+    EXPECT_EQ(file_joints, buffer_joints);
+    if (file_joints != buffer_joints)
+        ok = false;
+
+    if (buffer_joints <= 0)
+    {
+        ADD_FAILURE() << "Buffer-initialized skeleton reported zero bones";
+        return false;
+    }
+
     const u16 sample_bone = 0;
     EXPECT_STREQ(file_initialized.LL_BoneName_dbg(sample_bone), buffer_initialized.LL_BoneName_dbg(sample_bone));
+    if (std::strcmp(file_initialized.LL_BoneName_dbg(sample_bone), buffer_initialized.LL_BoneName_dbg(sample_bone)) != 0)
+        ok = false;
 
-    EXPECT_TRUE(buffer_initialized.LL_GetBoneVisible(sample_bone));
+    const bool visible = buffer_initialized.LL_GetBoneVisible(sample_bone);
+    EXPECT_TRUE(visible);
+    if (!visible)
+        ok = false;
+
+    return ok;
 }
 
-TEST(OzzKinematicsBootstrap, BoneNameLookupsAndVisibilityDefaults)
+
+bool TestOzzKinematicsBootstrapBoneNameLookupsAndVisibilityDefaults()
 {
     const std::filesystem::path skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path)) << "Missing sample skeleton at " << skeleton_path;
+    if (!std::filesystem::exists(skeleton_path))
+    {
+        ADD_FAILURE() << "Missing sample skeleton at " << skeleton_path;
+        return false;
+    }
 
     ozz::animation::Skeleton reference_skeleton;
     {
         ozz::io::File file(skeleton_path.string().c_str(), "rb");
-        ASSERT_TRUE(file.opened()) << "Failed to open " << skeleton_path;
+        if (!file.opened())
+        {
+            ADD_FAILURE() << "Failed to open " << skeleton_path;
+            return false;
+        }
         ozz::io::IArchive archive(&file);
         archive >> reference_skeleton;
     }
 
     const int joint_count = reference_skeleton.num_joints();
-    ASSERT_GT(joint_count, 0);
+    if (joint_count <= 0)
+    {
+        ADD_FAILURE() << "Reference skeleton has no joints";
+        return false;
+    }
 
     OzzKinematics kinematics;
-    ASSERT_TRUE(kinematics.InitializeFromOzz(skeleton_path.string().c_str())) << "OzzKinematics failed to load skeleton";
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "OzzKinematics failed to load skeleton";
+        return false;
+    }
+
+    bool ok = true;
 
     EXPECT_EQ(joint_count, kinematics.LL_BoneCount());
+    if (joint_count != kinematics.LL_BoneCount())
+        ok = false;
 
     const auto joint_names = reference_skeleton.joint_names();
     for (int joint = 0; joint < joint_count; ++joint)
     {
         const char* joint_name = (static_cast<size_t>(joint) < joint_names.size()) ? joint_names[joint] : nullptr;
-
         const std::string_view name_view = joint_name ? std::string_view(joint_name) : std::string_view();
 
         if (!name_view.empty())
         {
             const u16 expected_id = static_cast<u16>(joint);
+
             EXPECT_EQ(expected_id, kinematics.LL_BoneID(joint_name)) << "Name lookup mismatch for joint " << joint << " (" << joint_name << ")";
+            if (expected_id != kinematics.LL_BoneID(joint_name))
+                ok = false;
 
             const shared_str shared_name(joint_name);
             EXPECT_EQ(expected_id, kinematics.LL_BoneID(shared_name)) << "shared_str lookup mismatch for joint " << joint << " (" << joint_name << ")";
+            if (expected_id != kinematics.LL_BoneID(shared_name))
+                ok = false;
 
             EXPECT_STREQ(joint_name, kinematics.LL_BoneName_dbg(expected_id)) << "Debug name mismatch for bone " << joint;
+            if (std::strcmp(joint_name, kinematics.LL_BoneName_dbg(expected_id)) != 0)
+                ok = false;
         }
     }
 
     const u16 visible_limit = std::min<u16>(kinematics.LL_BoneCount(), 64);
     for (u16 bone = 0; bone < visible_limit; ++bone)
-        EXPECT_TRUE(kinematics.LL_GetBoneVisible(bone)) << "Bone " << bone << " should be visible by default";
+    {
+        const bool visible = kinematics.LL_GetBoneVisible(bone);
+        EXPECT_TRUE(visible) << "Bone " << bone << " should be visible by default";
+        if (!visible)
+            ok = false;
+    }
 
+    const u64 mask = kinematics.LL_GetBonesVisible();
     if (kinematics.LL_BoneCount() == 0)
-        EXPECT_EQ(0u, kinematics.LL_GetBonesVisible());
+    {
+        EXPECT_EQ(0u, mask);
+        if (mask != 0u)
+            ok = false;
+    }
     else if (kinematics.LL_BoneCount() >= 64)
-        EXPECT_EQ(u64(-1), kinematics.LL_GetBonesVisible());
+    {
+        EXPECT_EQ(u64(-1), mask);
+        if (mask != u64(-1))
+            ok = false;
+    }
     else
-        EXPECT_EQ((u64(1) << kinematics.LL_BoneCount()) - 1, kinematics.LL_GetBonesVisible());
+    {
+        const u64 expected_mask = (u64(1) << kinematics.LL_BoneCount()) - 1;
+        EXPECT_EQ(expected_mask, mask);
+        if (expected_mask != mask)
+            ok = false;
+    }
+
+    return ok;
 }
 
-TEST(OzzKinematicsPose, MatchesLegacyBindPoseTranslations)
+
+bool TestOzzKinematicsPoseMatchesLegacyBindPoseTranslations()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
     const auto ogf_path = ResolveProjectPath("res/testdata/npc/stalker_hero_1.ogf");
     const auto omf_path = ResolveProjectPath("res/testdata/npc/critical_hit_grup_1.omf");
 
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path));
-    ASSERT_TRUE(std::filesystem::exists(ogf_path));
-    ASSERT_TRUE(std::filesystem::exists(omf_path));
+    if (!std::filesystem::exists(skeleton_path) || !std::filesystem::exists(ogf_path) || !std::filesystem::exists(omf_path))
+    {
+        ADD_FAILURE() << "Missing bind pose prerequisites";
+        return false;
+    }
 
     const auto legacy_sample = LoadLegacyBindPoseSample(ogf_path, omf_path);
-    ASSERT_TRUE(legacy_sample.has_value());
+    if (!legacy_sample.has_value())
+    {
+        ADD_FAILURE() << "Legacy bind-pose sample unavailable";
+        return false;
+    }
 
     OzzKinematics kinematics;
-    ASSERT_TRUE(kinematics.InitializeFromOzz(skeleton_path.string().c_str()));
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "Failed to initialize OzzKinematics from skeleton";
+        return false;
+    }
     kinematics.CalculateBones(TRUE);
 
-    ASSERT_EQ(legacy_sample->world_space_transforms.size(), static_cast<size_t>(kinematics.LL_BoneCount()));
+    const size_t legacy_count = legacy_sample->world_space_transforms.size();
+    const size_t ozz_count = static_cast<size_t>(kinematics.LL_BoneCount());
+    if (legacy_count != ozz_count)
+    {
+        ADD_FAILURE() << "Bone count mismatch between legacy sample and OzzKinematics";
+        return false;
+    }
+
+    bool ok = true;
 
     for (const auto& [bone_name, expected] : legacy_sample->world_space_transforms)
     {
         const u16 bone_id = kinematics.LL_BoneID(bone_name.c_str());
-        ASSERT_NE(bone_id, BI_NONE) << "OzzKinematics missing bone: " << bone_name;
+        if (bone_id == BI_NONE)
+        {
+            ADD_FAILURE() << "OzzKinematics missing bone: " << bone_name;
+            ok = false;
+            continue;
+        }
 
         const Fmatrix& transform = kinematics.LL_GetTransform(bone_id);
 
         SCOPED_TRACE(::testing::Message() << "bone=" << bone_name);
 
         EXPECT_NEAR(transform.c.x, expected.c.x, 1e-4f) << "Bone: " << bone_name;
+        if (std::fabs(transform.c.x - expected.c.x) > 1e-4f)
+            ok = false;
+
         EXPECT_NEAR(transform.c.y, expected.c.y, 1e-4f) << "Bone: " << bone_name;
+        if (std::fabs(transform.c.y - expected.c.y) > 1e-4f)
+            ok = false;
+
         EXPECT_NEAR(transform.c.z, expected.c.z, 1e-4f) << "Bone: " << bone_name;
+        if (std::fabs(transform.c.z - expected.c.z) > 1e-4f)
+            ok = false;
     }
+
+    return ok;
 }
 
-TEST(OzzKinematicsPose, SetPoseLocalsOverridesSingleBone)
+
+bool TestOzzKinematicsPoseSetPoseLocalsOverridesSingleBone()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path));
+    if (!std::filesystem::exists(skeleton_path))
+    {
+        ADD_FAILURE() << "Missing sample skeleton";
+        return false;
+    }
 
     OzzKinematics kinematics;
-    ASSERT_TRUE(kinematics.InitializeFromOzz(skeleton_path.string().c_str()));
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "Failed to initialize OzzKinematics";
+        return false;
+    }
 
     kinematics.CalculateBones(TRUE);
 
     constexpr u16 target_bone = 0;
-    ASSERT_LT(target_bone, kinematics.LL_BoneCount());
+    if (target_bone >= kinematics.LL_BoneCount())
+    {
+        ADD_FAILURE() << "Target bone index out of range";
+        return false;
+    }
 
     const Fmatrix baseline_target = kinematics.LL_GetTransform(target_bone);
 
@@ -1196,7 +1379,11 @@ TEST(OzzKinematicsPose, SetPoseLocalsOverridesSingleBone)
 
     const int soa_index = static_cast<int>(target_bone / 4);
     const int lane_index = static_cast<int>(target_bone % 4);
-    ASSERT_LT(soa_index, static_cast<int>(locals.size()));
+    if (soa_index >= static_cast<int>(locals.size()))
+    {
+        ADD_FAILURE() << "SOA index out of range";
+        return false;
+    }
 
     const Fvector delta{ 0.05f, -0.03f, 0.f };
     const float delta_ozz_x = -delta.x;
@@ -1209,35 +1396,68 @@ TEST(OzzKinematicsPose, SetPoseLocalsOverridesSingleBone)
 
     locals[static_cast<size_t>(soa_index)].translation = locals[static_cast<size_t>(soa_index)].translation + soa_delta;
 
-    ASSERT_TRUE(kinematics.SetPoseLocals(ozz::span<const ozz::math::SoaTransform>(locals.data(), locals.size())));
+    if (!kinematics.SetPoseLocals(ozz::span<const ozz::math::SoaTransform>(locals.data(), locals.size())))
+    {
+        ADD_FAILURE() << "SetPoseLocals failed";
+        return false;
+    }
     kinematics.CalculateBones(TRUE);
+
+    bool ok = true;
 
     const Fmatrix sampled_target = kinematics.LL_GetTransform(target_bone);
     EXPECT_NEAR(baseline_target.c.x + delta.x, sampled_target.c.x, 1e-4f);
+    if (std::fabs((baseline_target.c.x + delta.x) - sampled_target.c.x) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_target.c.y + delta.y, sampled_target.c.y, 1e-4f);
+    if (std::fabs((baseline_target.c.y + delta.y) - sampled_target.c.y) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_target.c.z + delta.z, sampled_target.c.z, 1e-4f);
+    if (std::fabs((baseline_target.c.z + delta.z) - sampled_target.c.z) > 1e-4f)
+        ok = false;
 
     kinematics.ClearPose();
     kinematics.CalculateBones(TRUE);
 
     const Fmatrix restored_target = kinematics.LL_GetTransform(target_bone);
     EXPECT_NEAR(baseline_target.c.x, restored_target.c.x, 1e-4f);
+    if (std::fabs(baseline_target.c.x - restored_target.c.x) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_target.c.y, restored_target.c.y, 1e-4f);
+    if (std::fabs(baseline_target.c.y - restored_target.c.y) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_target.c.z, restored_target.c.z, 1e-4f);
+    if (std::fabs(baseline_target.c.z - restored_target.c.z) > 1e-4f)
+        ok = false;
+
+    return ok;
 }
 
-TEST(OzzKinematicsPose, AdditionalBoneTransformsAffectSingleBone)
+
+bool TestOzzKinematicsPoseAdditionalBoneTransformsAffectSingleBone()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path));
+    if (!std::filesystem::exists(skeleton_path))
+    {
+        ADD_FAILURE() << "Missing sample skeleton";
+        return false;
+    }
 
     OzzKinematics kinematics;
-    ASSERT_TRUE(kinematics.InitializeFromOzz(skeleton_path.string().c_str()));
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "Failed to initialize OzzKinematics";
+        return false;
+    }
 
     kinematics.CalculateBones(TRUE);
 
     constexpr u16 sample_bone = 0;
-    ASSERT_LT(sample_bone, kinematics.LL_BoneCount());
+    if (sample_bone >= kinematics.LL_BoneCount())
+    {
+        ADD_FAILURE() << "Sample bone index out of range";
+        return false;
+    }
 
     const Fmatrix baseline_transform = kinematics.LL_GetTransform(sample_bone);
     const Fvector baseline_translation = baseline_transform.c;
@@ -1253,27 +1473,52 @@ TEST(OzzKinematicsPose, AdditionalBoneTransformsAffectSingleBone)
     kinematics.LL_AddTransformToBone(offset);
     kinematics.CalculateBones(TRUE);
 
+    bool ok = true;
+
     const Fmatrix offset_transform = kinematics.LL_GetTransform(sample_bone);
     EXPECT_NEAR(baseline_translation.x + offset_x, offset_transform.c.x, 1e-4f);
+    if (std::fabs((baseline_translation.x + offset_x) - offset_transform.c.x) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_translation.y + offset_y, offset_transform.c.y, 1e-4f);
+    if (std::fabs((baseline_translation.y + offset_y) - offset_transform.c.y) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_translation.z + offset_z, offset_transform.c.z, 1e-4f);
+    if (std::fabs((baseline_translation.z + offset_z) - offset_transform.c.z) > 1e-4f)
+        ok = false;
 
     kinematics.LL_ClearAdditionalTransform(sample_bone);
     kinematics.CalculateBones(TRUE);
 
     const Fmatrix restored_transform = kinematics.LL_GetTransform(sample_bone);
     EXPECT_NEAR(baseline_translation.x, restored_transform.c.x, 1e-4f);
+    if (std::fabs(baseline_translation.x - restored_transform.c.x) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_translation.y, restored_transform.c.y, 1e-4f);
+    if (std::fabs(baseline_translation.y - restored_transform.c.y) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_translation.z, restored_transform.c.z, 1e-4f);
+    if (std::fabs(baseline_translation.z - restored_transform.c.z) > 1e-4f)
+        ok = false;
+
+    return ok;
 }
 
-TEST(OzzKinematicsPose, BuildsSkinningPaletteMatchesTransforms)
+
+bool TestOzzKinematicsPoseBuildsSkinningPaletteMatchesTransforms()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path));
+    if (!std::filesystem::exists(skeleton_path))
+    {
+        ADD_FAILURE() << "Missing sample skeleton";
+        return false;
+    }
 
     OzzKinematics kinematics;
-    ASSERT_TRUE(kinematics.InitializeFromOzz(skeleton_path.string().c_str()));
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "Failed to initialize OzzKinematics";
+        return false;
+    }
 
     kinematics.CalculateBones(TRUE);
 
@@ -1283,8 +1528,13 @@ TEST(OzzKinematicsPose, BuildsSkinningPaletteMatchesTransforms)
     kinematics.BuildSkinningPalette(render_palette, true);
 
     const u16 bone_count = kinematics.LL_BoneCount();
-    ASSERT_EQ(static_cast<size_t>(bone_count), local_palette.size());
-    ASSERT_EQ(static_cast<size_t>(bone_count), render_palette.size());
+    if (static_cast<size_t>(bone_count) != local_palette.size() || static_cast<size_t>(bone_count) != render_palette.size())
+    {
+        ADD_FAILURE() << "Palette sizes mismatch";
+        return false;
+    }
+
+    bool ok = true;
 
     for (u16 bone = 0; bone < bone_count; ++bone)
     {
@@ -1293,112 +1543,162 @@ TEST(OzzKinematicsPose, BuildsSkinningPaletteMatchesTransforms)
 
         SCOPED_TRACE(::testing::Message() << "bone=" << bone);
 
-        EXPECT_NEAR(local.i.x, local_palette[bone].i.x, 1e-5f);
-        EXPECT_NEAR(local.i.y, local_palette[bone].i.y, 1e-5f);
-        EXPECT_NEAR(local.i.z, local_palette[bone].i.z, 1e-5f);
-        EXPECT_NEAR(local.j.x, local_palette[bone].j.x, 1e-5f);
-        EXPECT_NEAR(local.j.y, local_palette[bone].j.y, 1e-5f);
-        EXPECT_NEAR(local.j.z, local_palette[bone].j.z, 1e-5f);
-        EXPECT_NEAR(local.k.x, local_palette[bone].k.x, 1e-5f);
-        EXPECT_NEAR(local.k.y, local_palette[bone].k.y, 1e-5f);
-        EXPECT_NEAR(local.k.z, local_palette[bone].k.z, 1e-5f);
-        EXPECT_NEAR(local.c.x, local_palette[bone].c.x, 1e-5f);
-        EXPECT_NEAR(local.c.y, local_palette[bone].c.y, 1e-5f);
-        EXPECT_NEAR(local.c.z, local_palette[bone].c.z, 1e-5f);
+        auto compare_component = [&](float expected, float actual)
+        {
+            EXPECT_NEAR(expected, actual, 1e-5f);
+            if (std::fabs(expected - actual) > 1e-5f)
+                ok = false;
+        };
 
-        EXPECT_NEAR(render.i.x, render_palette[bone].i.x, 1e-5f);
-        EXPECT_NEAR(render.i.y, render_palette[bone].i.y, 1e-5f);
-        EXPECT_NEAR(render.i.z, render_palette[bone].i.z, 1e-5f);
-        EXPECT_NEAR(render.j.x, render_palette[bone].j.x, 1e-5f);
-        EXPECT_NEAR(render.j.y, render_palette[bone].j.y, 1e-5f);
-        EXPECT_NEAR(render.j.z, render_palette[bone].j.z, 1e-5f);
-        EXPECT_NEAR(render.k.x, render_palette[bone].k.x, 1e-5f);
-        EXPECT_NEAR(render.k.y, render_palette[bone].k.y, 1e-5f);
-        EXPECT_NEAR(render.k.z, render_palette[bone].k.z, 1e-5f);
-        EXPECT_NEAR(render.c.x, render_palette[bone].c.x, 1e-5f);
-        EXPECT_NEAR(render.c.y, render_palette[bone].c.y, 1e-5f);
-        EXPECT_NEAR(render.c.z, render_palette[bone].c.z, 1e-5f);
+        compare_component(local.i.x, local_palette[bone].i.x);
+        compare_component(local.i.y, local_palette[bone].i.y);
+        compare_component(local.i.z, local_palette[bone].i.z);
+        compare_component(local.j.x, local_palette[bone].j.x);
+        compare_component(local.j.y, local_palette[bone].j.y);
+        compare_component(local.j.z, local_palette[bone].j.z);
+        compare_component(local.k.x, local_palette[bone].k.x);
+        compare_component(local.k.y, local_palette[bone].k.y);
+        compare_component(local.k.z, local_palette[bone].k.z);
+        compare_component(local.c.x, local_palette[bone].c.x);
+        compare_component(local.c.y, local_palette[bone].c.y);
+        compare_component(local.c.z, local_palette[bone].c.z);
+
+        compare_component(render.i.x, render_palette[bone].i.x);
+        compare_component(render.i.y, render_palette[bone].i.y);
+        compare_component(render.i.z, render_palette[bone].i.z);
+        compare_component(render.j.x, render_palette[bone].j.x);
+        compare_component(render.j.y, render_palette[bone].j.y);
+        compare_component(render.j.z, render_palette[bone].j.z);
+        compare_component(render.k.x, render_palette[bone].k.x);
+        compare_component(render.k.y, render_palette[bone].k.y);
+        compare_component(render.k.z, render_palette[bone].k.z);
+        compare_component(render.c.x, render_palette[bone].c.x);
+        compare_component(render.c.y, render_palette[bone].c.y);
+        compare_component(render.c.z, render_palette[bone].c.z);
     }
+
+    return ok;
 }
 
-TEST(OzzKinematicsVisibility, BoneVisibilityToggleZeroesTransforms)
+
+bool TestOzzKinematicsVisibilityBoneVisibilityToggleZeroesTransforms()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path));
+    if (!std::filesystem::exists(skeleton_path))
+    {
+        ADD_FAILURE() << "Missing sample skeleton";
+        return false;
+    }
 
     OzzKinematics kinematics;
-    ASSERT_TRUE(kinematics.InitializeFromOzz(skeleton_path.string().c_str()));
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "Failed to initialize OzzKinematics";
+        return false;
+    }
 
     kinematics.CalculateBones(TRUE);
 
     constexpr u16 sample_bone = 0;
-    ASSERT_LT(sample_bone, kinematics.LL_BoneCount());
+    if (sample_bone >= kinematics.LL_BoneCount())
+    {
+        ADD_FAILURE() << "Sample bone index out of range";
+        return false;
+    }
 
     const Fmatrix baseline = kinematics.LL_GetTransform(sample_bone);
 
-    auto expect_translation = [](const Fmatrix& transform, const Fvector& expected, float epsilon)
+    auto expect_translation = [](const Fmatrix& transform, const Fvector& expected, float epsilon, bool& ok)
     {
         EXPECT_NEAR(expected.x, transform.c.x, epsilon);
         EXPECT_NEAR(expected.y, transform.c.y, epsilon);
         EXPECT_NEAR(expected.z, transform.c.z, epsilon);
+        if (std::fabs(expected.x - transform.c.x) > epsilon || std::fabs(expected.y - transform.c.y) > epsilon ||
+            std::fabs(expected.z - transform.c.z) > epsilon)
+        {
+            ok = false;
+        }
     };
 
+    bool ok = true;
     Fvector baseline_translation = baseline.c;
 
     kinematics.LL_SetBoneVisible(sample_bone, FALSE, FALSE);
     kinematics.CalculateBones(TRUE);
 
     const Fmatrix hidden = kinematics.LL_GetTransform(sample_bone);
-    expect_translation(hidden, { 0.f, 0.f, 0.f }, 1e-5f);
+    expect_translation(hidden, { 0.f, 0.f, 0.f }, 1e-5f, ok);
 
     Fmatrix pre_callback{};
     kinematics.Bone_GetAnimPos(pre_callback, sample_bone, 0, TRUE);
-    expect_translation(pre_callback, { 0.f, 0.f, 0.f }, 1e-5f);
+    expect_translation(pre_callback, { 0.f, 0.f, 0.f }, 1e-5f, ok);
 
     kinematics.LL_SetBoneVisible(sample_bone, TRUE, FALSE);
     kinematics.CalculateBones(TRUE);
 
     const Fmatrix restored = kinematics.LL_GetTransform(sample_bone);
-    expect_translation(restored, baseline_translation, 1e-4f);
+    expect_translation(restored, baseline_translation, 1e-4f, ok);
+
+    return ok;
 }
 
-TEST(OzzKinematicsVisibility, SetBonesVisibleControlsMask)
+
+bool TestOzzKinematicsVisibilitySetBonesVisibleControlsMask()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path));
+    if (!std::filesystem::exists(skeleton_path))
+    {
+        ADD_FAILURE() << "Missing sample skeleton";
+        return false;
+    }
 
     OzzKinematics kinematics;
-    ASSERT_TRUE(kinematics.InitializeFromOzz(skeleton_path.string().c_str()));
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "Failed to initialize OzzKinematics";
+        return false;
+    }
 
     kinematics.CalculateBones(TRUE);
 
     constexpr u16 first_hidden_bone = 0;
     constexpr u16 second_hidden_bone = 1;
     constexpr u16 survivor_bone = 2;
-    ASSERT_LT(second_hidden_bone, kinematics.LL_BoneCount());
-    ASSERT_LT(survivor_bone, kinematics.LL_BoneCount());
+    const u16 bone_count = kinematics.LL_BoneCount();
+    if (second_hidden_bone >= bone_count || survivor_bone >= bone_count)
+    {
+        ADD_FAILURE() << "Visibility mask test requires at least three bones";
+        return false;
+    }
 
     const Fmatrix baseline_first = kinematics.LL_GetTransform(first_hidden_bone);
     const Fmatrix baseline_second = kinematics.LL_GetTransform(second_hidden_bone);
     const Fmatrix baseline_survivor = kinematics.LL_GetTransform(survivor_bone);
 
-    const u16 bone_count = kinematics.LL_BoneCount();
     const u64 full_mask = bone_count >= 64 ? u64(-1) : ((u64(1) << bone_count) - 1);
     const u64 hidden_mask = full_mask & ~(u64(1) << first_hidden_bone) & ~(u64(1) << second_hidden_bone);
 
     kinematics.LL_SetBonesVisible(hidden_mask);
     kinematics.CalculateBones(TRUE);
 
+    bool ok = true;
+
     EXPECT_EQ(hidden_mask, kinematics.LL_GetBonesVisible());
+    if (hidden_mask != kinematics.LL_GetBonesVisible())
+        ok = false;
 
     const u16 expected_visible = static_cast<u16>(bone_count - 2);
     EXPECT_EQ(expected_visible, kinematics.LL_VisibleBoneCount());
+    if (expected_visible != kinematics.LL_VisibleBoneCount())
+        ok = false;
 
-    auto expect_zero_translation = [](const Fmatrix& transform)
+    auto expect_zero_translation = [&](const Fmatrix& transform)
     {
         EXPECT_NEAR(0.f, transform.c.x, 1e-5f);
         EXPECT_NEAR(0.f, transform.c.y, 1e-5f);
         EXPECT_NEAR(0.f, transform.c.z, 1e-5f);
+        if (std::fabs(transform.c.x) > 1e-5f || std::fabs(transform.c.y) > 1e-5f || std::fabs(transform.c.z) > 1e-5f)
+            ok = false;
     };
 
     expect_zero_translation(kinematics.LL_GetTransform(first_hidden_bone));
@@ -1406,60 +1706,129 @@ TEST(OzzKinematicsVisibility, SetBonesVisibleControlsMask)
 
     const Fmatrix survivor_visible = kinematics.LL_GetTransform(survivor_bone);
     EXPECT_NEAR(baseline_survivor.c.x, survivor_visible.c.x, 1e-4f);
+    if (std::fabs(baseline_survivor.c.x - survivor_visible.c.x) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_survivor.c.y, survivor_visible.c.y, 1e-4f);
+    if (std::fabs(baseline_survivor.c.y - survivor_visible.c.y) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_survivor.c.z, survivor_visible.c.z, 1e-4f);
+    if (std::fabs(baseline_survivor.c.z - survivor_visible.c.z) > 1e-4f)
+        ok = false;
 
     kinematics.LL_SetBonesVisible(full_mask);
     kinematics.CalculateBones(TRUE);
 
     EXPECT_EQ(full_mask, kinematics.LL_GetBonesVisible());
+    if (full_mask != kinematics.LL_GetBonesVisible())
+        ok = false;
 
     const Fmatrix restored_first = kinematics.LL_GetTransform(first_hidden_bone);
     EXPECT_NEAR(baseline_first.c.x, restored_first.c.x, 1e-4f);
+    if (std::fabs(baseline_first.c.x - restored_first.c.x) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_first.c.y, restored_first.c.y, 1e-4f);
+    if (std::fabs(baseline_first.c.y - restored_first.c.y) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_first.c.z, restored_first.c.z, 1e-4f);
+    if (std::fabs(baseline_first.c.z - restored_first.c.z) > 1e-4f)
+        ok = false;
 
     const Fmatrix restored_second = kinematics.LL_GetTransform(second_hidden_bone);
     EXPECT_NEAR(baseline_second.c.x, restored_second.c.x, 1e-4f);
+    if (std::fabs(baseline_second.c.x - restored_second.c.x) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_second.c.y, restored_second.c.y, 1e-4f);
+    if (std::fabs(baseline_second.c.y - restored_second.c.y) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline_second.c.z, restored_second.c.z, 1e-4f);
+    if (std::fabs(baseline_second.c.z - restored_second.c.z) > 1e-4f)
+        ok = false;
+
+    return ok;
 }
 
-TEST(OzzAnimationController, LoadsStandaloneClip)
+
+bool TestOzzAnimationControllerLoadsStandaloneClip()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
     const auto animation_path = ResolveProjectPath("src/xrAnimation/tests/testdata/critical_hit_grup_1_single.ozz");
 
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path));
-    ASSERT_TRUE(std::filesystem::exists(animation_path));
+    if (!std::filesystem::exists(skeleton_path) || !std::filesystem::exists(animation_path))
+    {
+        ADD_FAILURE() << "Missing controller test assets";
+        return false;
+    }
 
     ozz::animation::Skeleton skeleton;
     {
         ozz::io::File file(skeleton_path.string().c_str(), "rb");
-        ASSERT_TRUE(file.opened()) << "failed to open skeleton " << skeleton_path;
+        if (!file.opened())
+        {
+            ADD_FAILURE() << "failed to open skeleton " << skeleton_path;
+            return false;
+        }
         ozz::io::IArchive archive(&file);
-        ASSERT_TRUE(archive.TestTag<ozz::animation::Skeleton>());
+        if (!archive.TestTag<ozz::animation::Skeleton>())
+        {
+            ADD_FAILURE() << "sample skeleton missing tag";
+            return false;
+        }
         archive >> skeleton;
     }
 
     XRay::Animation::OzzAnimationController controller;
-    EXPECT_TRUE(controller.Initialize(skeleton));
-    EXPECT_FALSE(controller.HasAnimation());
-    EXPECT_FLOAT_EQ(0.f, controller.Duration());
-    EXPECT_FALSE(controller.Update(0.016f));
+    if (!controller.Initialize(skeleton))
+    {
+        ADD_FAILURE() << "Controller initialization failed";
+        return false;
+    }
 
-    EXPECT_TRUE(controller.LoadAnimation(animation_path));
+    bool ok = true;
+
+    EXPECT_FALSE(controller.HasAnimation());
+    if (controller.HasAnimation())
+        ok = false;
+    EXPECT_FLOAT_EQ(0.f, controller.Duration());
+    if (controller.Duration() != 0.f)
+        ok = false;
+    EXPECT_FALSE(controller.Update(0.016f));
+    if (controller.Update(0.016f))
+        ok = false;
+
+    if (!controller.LoadAnimation(animation_path))
+    {
+        ADD_FAILURE() << "Controller failed to load animation";
+        return false;
+    }
+
     EXPECT_TRUE(controller.HasAnimation());
+    if (!controller.HasAnimation())
+        ok = false;
     EXPECT_GT(controller.Duration(), 0.f);
+    if (!(controller.Duration() > 0.f))
+        ok = false;
 
     EXPECT_TRUE(controller.Update(0.f));
+    if (!controller.Update(0.f))
+        ok = false;
     const auto locals_start_span = controller.SampledLocals();
-    ASSERT_EQ(locals_start_span.size(), static_cast<size_t>(skeleton.num_soa_joints()));
+    if (locals_start_span.size() != static_cast<size_t>(skeleton.num_soa_joints()))
+    {
+        ADD_FAILURE() << "Sampled locals size mismatch";
+        return false;
+    }
+
     std::vector<ozz::math::SoaTransform> locals_start(locals_start_span.begin(), locals_start_span.end());
     const float advance_time = std::max(0.0f, std::min(controller.Duration() * 0.25f, controller.Duration()));
     EXPECT_TRUE(controller.Update(advance_time));
+    if (!controller.Update(advance_time))
+        ok = false;
     const auto locals_mid_span = controller.SampledLocals();
-    ASSERT_EQ(locals_mid_span.size(), locals_start.size());
+    if (locals_mid_span.size() != locals_start.size())
+    {
+        ADD_FAILURE() << "Mid locals size mismatch";
+        return false;
+    }
     std::vector<ozz::math::SoaTransform> locals_mid(locals_mid_span.begin(), locals_mid_span.end());
     float max_delta = 0.f;
     for (int soa_index = 0; soa_index < skeleton.num_soa_joints(); ++soa_index)
@@ -1491,29 +1860,56 @@ TEST(OzzAnimationController, LoadsStandaloneClip)
     }
 
     EXPECT_GT(max_delta, 1e-7f) << "animation locals remained static";
+    if (!(max_delta > 1e-7f))
+        ok = false;
 
     controller.SetLooping(false);
     EXPECT_TRUE(controller.Update(controller.Duration() * 2.f));
+    if (!controller.Update(controller.Duration() * 2.f))
+        ok = false;
     EXPECT_TRUE(controller.Update(0.f));
+    if (!controller.Update(0.f))
+        ok = false;
 
     controller.ClearAnimation();
     EXPECT_FALSE(controller.HasAnimation());
+    if (controller.HasAnimation())
+        ok = false;
     EXPECT_FLOAT_EQ(0.f, controller.Duration());
+    if (controller.Duration() != 0.f)
+        ok = false;
     EXPECT_TRUE(controller.SampledLocals().empty());
+    if (!controller.SampledLocals().empty())
+        ok = false;
+
+    return ok;
 }
 
-TEST(OzzKinematicsCallbacks, InvokesBoneCallbackAndHonorsOverwrite)
+
+bool TestOzzKinematicsCallbacksInvokeBoneCallbackAndHonorOverwrite()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    ASSERT_TRUE(std::filesystem::exists(skeleton_path));
+    if (!std::filesystem::exists(skeleton_path))
+    {
+        ADD_FAILURE() << "Missing sample skeleton";
+        return false;
+    }
 
     OzzKinematics kinematics;
-    ASSERT_TRUE(kinematics.InitializeFromOzz(skeleton_path.string().c_str()));
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
+    {
+        ADD_FAILURE() << "Failed to initialize OzzKinematics";
+        return false;
+    }
 
     kinematics.CalculateBones(TRUE);
 
     constexpr u16 callback_bone = 0;
-    ASSERT_LT(callback_bone, kinematics.LL_BoneCount());
+    if (callback_bone >= kinematics.LL_BoneCount())
+    {
+        ADD_FAILURE() << "Callback bone index out of range";
+        return false;
+    }
 
     const Fmatrix baseline = kinematics.LL_GetTransform(callback_bone);
 
@@ -1527,84 +1923,153 @@ TEST(OzzKinematicsCallbacks, InvokesBoneCallbackAndHonorsOverwrite)
 
     kinematics.CalculateBones(TRUE);
 
+    bool ok = true;
+
     EXPECT_EQ(1, context.call_count);
+    if (context.call_count != 1)
+        ok = false;
     EXPECT_EQ(&bone_instance, context.last_instance);
+    if (context.last_instance != &bone_instance)
+        ok = false;
 
     Fmatrix pre_callback{};
     kinematics.Bone_GetAnimPos(pre_callback, callback_bone, 0, TRUE);
     EXPECT_NEAR(baseline.c.x, pre_callback.c.x, 1e-4f);
+    if (std::fabs(baseline.c.x - pre_callback.c.x) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline.c.y, pre_callback.c.y, 1e-4f);
+    if (std::fabs(baseline.c.y - pre_callback.c.y) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(baseline.c.z, pre_callback.c.z, 1e-4f);
+    if (std::fabs(baseline.c.z - pre_callback.c.z) > 1e-4f)
+        ok = false;
 
     const Fmatrix final_transform = kinematics.LL_GetTransform(callback_bone);
     EXPECT_NEAR(context.override_transform.c.x, final_transform.c.x, 1e-4f);
+    if (std::fabs(context.override_transform.c.x - final_transform.c.x) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(context.override_transform.c.y, final_transform.c.y, 1e-4f);
+    if (std::fabs(context.override_transform.c.y - final_transform.c.y) > 1e-4f)
+        ok = false;
     EXPECT_NEAR(context.override_transform.c.z, final_transform.c.z, 1e-4f);
+    if (std::fabs(context.override_transform.c.z - final_transform.c.z) > 1e-4f)
+        ok = false;
 
     bone_instance.reset_callback();
+    return ok;
 }
 
-TEST(OzzKinematicsParity, BindPoseMatchesLegacySkeleton)
+
+bool TestOzzKinematicsParityBindPoseMatchesLegacySkeleton()
 {
     const auto ogf_path = ResolveProjectPath("res/testdata/npc/stalker_hero_1.ogf");
     const auto omf_path = ResolveProjectPath("res/testdata/npc/critical_hit_grup_1.omf");
     const auto ozz_skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
 
-    ASSERT_TRUE(std::filesystem::exists(ogf_path)) << "Missing legacy .ogf: " << ogf_path;
-    ASSERT_TRUE(std::filesystem::exists(omf_path)) << "Missing legacy .omf: " << omf_path;
-    ASSERT_TRUE(std::filesystem::exists(ozz_skeleton_path)) << "Missing converted skeleton: " << ozz_skeleton_path;
+    if (!std::filesystem::exists(ogf_path) || !std::filesystem::exists(omf_path) || !std::filesystem::exists(ozz_skeleton_path))
+    {
+        ADD_FAILURE() << "Missing bind-pose parity assets";
+        return false;
+    }
 
     const auto legacy_sample = LoadLegacyBindPoseSample(ogf_path, omf_path);
-    ASSERT_TRUE(legacy_sample.has_value()) << "Legacy bind-pose sampling not implemented yet for " << ogf_path.filename();
+    if (!legacy_sample.has_value())
+    {
+        ADD_FAILURE() << "Legacy bind-pose sampling failed for " << ogf_path.filename();
+        return false;
+    }
 
     const auto ozz_sample = LoadOzzBindPoseSample(ozz_skeleton_path);
-    ASSERT_TRUE(ozz_sample.has_value()) << "Failed to load Ozz bind-pose sample from " << ozz_skeleton_path;
+    if (!ozz_sample.has_value())
+    {
+        ADD_FAILURE() << "Failed to load Ozz bind-pose sample from " << ozz_skeleton_path;
+        return false;
+    }
 
-    ASSERT_EQ(legacy_sample->world_space_transforms.size(), ozz_sample->world_space_transforms.size())
-        << "Bone count mismatch between legacy and Ozz skeletons";
+    if (legacy_sample->world_space_transforms.size() != ozz_sample->world_space_transforms.size())
+    {
+        ADD_FAILURE() << "Bone count mismatch between legacy and Ozz skeletons";
+        return false;
+    }
+
+    bool ok = true;
 
     for (const auto& [bone_name, legacy_transform] : legacy_sample->world_space_transforms)
     {
         const auto ozz_iter = ozz_sample->world_space_transforms.find(bone_name);
-        ASSERT_NE(ozz_iter, ozz_sample->world_space_transforms.end()) << "Ozz skeleton missing bone " << bone_name;
+        if (ozz_iter == ozz_sample->world_space_transforms.end())
+        {
+            ADD_FAILURE() << "Ozz skeleton missing bone " << bone_name;
+            ok = false;
+            continue;
+        }
 
         const Fmatrix& ozz_transform = ozz_iter->second;
 
         EXPECT_NEAR(legacy_transform.c.x, ozz_transform.c.x, 1e-4f) << "Bind-pose X mismatch for bone " << bone_name;
+        if (std::fabs(legacy_transform.c.x - ozz_transform.c.x) > 1e-4f)
+            ok = false;
         EXPECT_NEAR(legacy_transform.c.y, ozz_transform.c.y, 1e-4f) << "Bind-pose Y mismatch for bone " << bone_name;
+        if (std::fabs(legacy_transform.c.y - ozz_transform.c.y) > 1e-4f)
+            ok = false;
         EXPECT_NEAR(legacy_transform.c.z, ozz_transform.c.z, 1e-4f) << "Bind-pose Z mismatch for bone " << bone_name;
+        if (std::fabs(legacy_transform.c.z - ozz_transform.c.z) > 1e-4f)
+            ok = false;
     }
+
+    return ok;
 }
 
-TEST(OzzKinematicsParity, AnimationPoseMatchesLegacySkeleton)
+
+bool TestOzzKinematicsParityAnimationPoseMatchesLegacySkeleton()
 {
     const auto ogf_path = ResolveProjectPath("res/testdata/npc/stalker_hero_1.ogf");
     const auto omf_path = ResolveProjectPath("res/testdata/npc/critical_hit_grup_1.omf");
     const auto ozz_skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
     const auto ozz_animation_path = ResolveProjectPath("src/xrAnimation/tests/testdata/critical_hit_grup_1.ozz");
 
-    ASSERT_TRUE(std::filesystem::exists(ogf_path)) << "Missing legacy .ogf: " << ogf_path;
-    ASSERT_TRUE(std::filesystem::exists(omf_path)) << "Missing legacy .omf: " << omf_path;
-    ASSERT_TRUE(std::filesystem::exists(ozz_skeleton_path)) << "Missing converted skeleton: " << ozz_skeleton_path;
-    ASSERT_TRUE(std::filesystem::exists(ozz_animation_path)) << "Missing converted animation: " << ozz_animation_path;
+    if (!std::filesystem::exists(ogf_path) || !std::filesystem::exists(omf_path) || !std::filesystem::exists(ozz_skeleton_path) ||
+        !std::filesystem::exists(ozz_animation_path))
+    {
+        ADD_FAILURE() << "Missing animation parity assets";
+        return false;
+    }
 
     constexpr std::string_view kMotionName = "norm_2_critical_hit_hend_left_0";
     constexpr float kSampleTimeSeconds = 0.2f;
 
     const auto legacy_sample = LoadLegacyAnimationSample(ogf_path, omf_path, kMotionName, kSampleTimeSeconds);
-    ASSERT_TRUE(legacy_sample.has_value()) << "Legacy animation sampling not implemented yet for " << kMotionName;
+    if (!legacy_sample.has_value())
+    {
+        ADD_FAILURE() << "Legacy animation sampling failed for " << kMotionName;
+        return false;
+    }
 
     const auto ozz_sample = LoadOzzAnimationSample(ozz_skeleton_path, ozz_animation_path, kMotionName, legacy_sample->applied_time_seconds);
-    ASSERT_TRUE(ozz_sample.has_value()) << "Ozz animation sampling not implemented yet for " << kMotionName;
+    if (!ozz_sample.has_value())
+    {
+        ADD_FAILURE() << "Ozz animation sampling failed for " << kMotionName;
+        return false;
+    }
 
-    ASSERT_EQ(legacy_sample->world_space_transforms.size(), ozz_sample->world_space_transforms.size()) << "Bone count mismatch between sampled poses";
+    if (legacy_sample->world_space_transforms.size() != ozz_sample->world_space_transforms.size())
+    {
+        ADD_FAILURE() << "Bone count mismatch between sampled poses";
+        return false;
+    }
 
-    constexpr float kAnimationTolerance = 5e-4f; // Conversion quantization + basis changes introduce ~2e-4 deltas.
+    bool ok = true;
+    constexpr float kAnimationTolerance = 5e-4f;
 
     for (const auto& [bone_name, legacy_transform] : legacy_sample->world_space_transforms)
     {
         const auto ozz_it = ozz_sample->world_space_transforms.find(bone_name);
-        ASSERT_NE(ozz_it, ozz_sample->world_space_transforms.end()) << "Ozz sample missing bone " << bone_name;
+        if (ozz_it == ozz_sample->world_space_transforms.end())
+        {
+            ADD_FAILURE() << "Ozz sample missing bone " << bone_name;
+            ok = false;
+            continue;
+        }
 
         const Fmatrix& ozz_transform = ozz_it->second;
 
@@ -1616,34 +2081,76 @@ TEST(OzzKinematicsParity, AnimationPoseMatchesLegacySkeleton)
                                           << ", " << dz << ") max=" << max_abs);
 
         EXPECT_NEAR(legacy_transform.c.x, ozz_transform.c.x, kAnimationTolerance) << "Animation X mismatch for bone " << bone_name;
+        if (std::fabs(dx) > kAnimationTolerance)
+            ok = false;
         EXPECT_NEAR(legacy_transform.c.y, ozz_transform.c.y, kAnimationTolerance) << "Animation Y mismatch for bone " << bone_name;
+        if (std::fabs(dy) > kAnimationTolerance)
+            ok = false;
         EXPECT_NEAR(legacy_transform.c.z, ozz_transform.c.z, kAnimationTolerance) << "Animation Z mismatch for bone " << bone_name;
+        if (std::fabs(dz) > kAnimationTolerance)
+            ok = false;
     }
+
+    return ok;
 }
 
-TEST(OzzBundleRuntime, HydratesKinematicsAndMeshPayload)
+
+bool TestOzzBundleRuntimeHydratesKinematicsAndMeshPayload()
 {
     const auto bundle_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero.ozzx");
-    ASSERT_TRUE(std::filesystem::exists(bundle_path)) << "Missing test bundle: " << bundle_path;
+    if (!std::filesystem::exists(bundle_path))
+    {
+        ADD_FAILURE() << "Missing test bundle: " << bundle_path;
+        return false;
+    }
 
     XRay::Animation::OzzxBundle bundle;
-    ASSERT_TRUE(XRay::Animation::ReadOzzxBundle(bundle_path, bundle)) << "Failed to read bundle";
-    ASSERT_FALSE(bundle.skeleton.empty()) << "Bundle missing skeleton payload";
-    ASSERT_FALSE(bundle.mesh.empty()) << "Bundle missing mesh payload";
+    if (!XRay::Animation::ReadOzzxBundle(bundle_path, bundle))
+    {
+        ADD_FAILURE() << "Failed to read bundle";
+        return false;
+    }
+
+    if (bundle.skeleton.empty())
+    {
+        ADD_FAILURE() << "Bundle missing skeleton payload";
+        return false;
+    }
+
+    if (bundle.mesh.empty())
+    {
+        ADD_FAILURE() << "Bundle missing mesh payload";
+        return false;
+    }
 
     XRay::Animation::OzzKinematics kinematics;
     ozz::span<const std::byte> skeleton_span(reinterpret_cast<const std::byte*>(bundle.skeleton.data()), bundle.skeleton.size());
-    ASSERT_TRUE(kinematics.InitializeFromOzzBuffer(skeleton_span)) << "Failed to initialize kinematics from bundle";
-    EXPECT_GT(kinematics.LL_BoneCount(), 0) << "Kinematics reported zero bones";
+    if (!kinematics.InitializeFromOzzBuffer(skeleton_span))
+    {
+        ADD_FAILURE() << "Failed to initialize kinematics from bundle";
+        return false;
+    }
+
+    bool ok = true;
+    if (!(kinematics.LL_BoneCount() > 0))
+    {
+        ADD_FAILURE() << "Kinematics reported zero bones";
+        ok = false;
+    }
 
     kinematics.CalculateBones(TRUE);
     xr_vector<Fmatrix> palette;
     kinematics.BuildSkinningPalette(palette, true);
     EXPECT_EQ(palette.size(), kinematics.LL_BoneCount()) << "Palette bone count mismatch";
+    if (palette.size() != static_cast<size_t>(kinematics.LL_BoneCount()))
+        ok = false;
 
-    // Decode mesh payload to ensure geometry data survived bundling.
     ozz::io::MemoryStream mesh_stream;
-    ASSERT_TRUE(mesh_stream.Write(bundle.mesh.data(), bundle.mesh.size()));
+    if (!mesh_stream.Write(bundle.mesh.data(), bundle.mesh.size()))
+    {
+        ADD_FAILURE() << "Failed to stage mesh payload";
+        return false;
+    }
     mesh_stream.Seek(0, ozz::io::Stream::kSet);
 
     ozz::io::IArchive archive(&mesh_stream);
@@ -1653,23 +2160,161 @@ TEST(OzzBundleRuntime, HydratesKinematicsAndMeshPayload)
         ozz::sample::Mesh mesh;
         archive >> mesh;
         EXPECT_GT(mesh.vertex_count(), 0);
+        if (!(mesh.vertex_count() > 0))
+            ok = false;
         EXPECT_FALSE(mesh.parts.empty());
+        if (mesh.parts.empty())
+            ok = false;
         ++mesh_count;
     }
     EXPECT_GT(mesh_count, 0u) << "Bundle contained no meshes";
+    if (!(mesh_count > 0u))
+        ok = false;
+
+    return ok;
+}
+
+
+bool TestModelNamingNormalizesModelIdentifiers()
+{
+    using xray::render::detail::NormalizeModelIdentifier;
+
+    bool ok = true;
+
+    if (NormalizeModelIdentifier("actors\\stalker") != "actors\\stalker")
+    {
+        ADD_FAILURE() << "Unexpected normalization for actors\\stalker";
+        ok = false;
+    }
+
+    if (NormalizeModelIdentifier("actors\\stalker.ogf") != "actors\\stalker")
+    {
+        ADD_FAILURE() << ".ogf suffix not stripped";
+        ok = false;
+    }
+
+    if (NormalizeModelIdentifier("actors\\DEV_STALKER.OGF") != "actors\\dev_stalker")
+    {
+        ADD_FAILURE() << "Uppercase .ogf normalization failed";
+        ok = false;
+    }
+
+    if (NormalizeModelIdentifier("actors\\dev_stalker.ozzx") != "actors\\dev_stalker.ozzx")
+    {
+        ADD_FAILURE() << ".ozzx suffix altered unexpectedly";
+        ok = false;
+    }
+
+    if (NormalizeModelIdentifier("actors\\DEV_STALKER.OZZX") != "actors\\dev_stalker.ozzx")
+    {
+        ADD_FAILURE() << "Uppercase .ozzx normalization failed";
+        ok = false;
+    }
+
+    if (NormalizeModelIdentifier("actors\\some_visual.dds") != "actors\\some_visual")
+    {
+        ADD_FAILURE() << "Texture suffix not stripped";
+        ok = false;
+    }
+
+    if (NormalizeModelIdentifier("weapon") != "weapon")
+    {
+        ADD_FAILURE() << "Identifier without suffix changed";
+        ok = false;
+    }
+
+    if (!NormalizeModelIdentifier(nullptr).empty())
+    {
+        ADD_FAILURE() << "Null pointer should yield empty string";
+        ok = false;
+    }
+
+    if (!NormalizeModelIdentifier("").empty())
+    {
+        ADD_FAILURE() << "Empty identifier should remain empty";
+        ok = false;
+    }
+
+    return ok;
+}
+
+
+TEST(OzzKinematicsBootstrap, MatchesJointCountWithReferenceSkeleton)
+{
+    EXPECT_TRUE(TestOzzKinematicsBootstrapMatchesJointCountWithReferenceSkeleton());
+}
+
+TEST(OzzKinematicsBootstrap, InitializesFromOzzxBundleSkeleton)
+{
+    EXPECT_TRUE(TestOzzKinematicsBootstrapInitializesFromOzzxBundleSkeleton());
+}
+
+TEST(OzzKinematicsBootstrap, InitializesFromMemoryBuffer)
+{
+    EXPECT_TRUE(TestOzzKinematicsBootstrapInitializesFromMemoryBuffer());
+}
+
+TEST(OzzKinematicsBootstrap, BoneNameLookupsAndVisibilityDefaults)
+{
+    EXPECT_TRUE(TestOzzKinematicsBootstrapBoneNameLookupsAndVisibilityDefaults());
+}
+
+TEST(OzzKinematicsPose, MatchesLegacyBindPoseTranslations)
+{
+    EXPECT_TRUE(TestOzzKinematicsPoseMatchesLegacyBindPoseTranslations());
+}
+
+TEST(OzzKinematicsPose, SetPoseLocalsOverridesSingleBone)
+{
+    EXPECT_TRUE(TestOzzKinematicsPoseSetPoseLocalsOverridesSingleBone());
+}
+
+TEST(OzzKinematicsPose, AdditionalBoneTransformsAffectSingleBone)
+{
+    EXPECT_TRUE(TestOzzKinematicsPoseAdditionalBoneTransformsAffectSingleBone());
+}
+
+TEST(OzzKinematicsPose, BuildsSkinningPaletteMatchesTransforms)
+{
+    EXPECT_TRUE(TestOzzKinematicsPoseBuildsSkinningPaletteMatchesTransforms());
+}
+
+TEST(OzzKinematicsVisibility, BoneVisibilityToggleZeroesTransforms)
+{
+    EXPECT_TRUE(TestOzzKinematicsVisibilityBoneVisibilityToggleZeroesTransforms());
+}
+
+TEST(OzzKinematicsVisibility, SetBonesVisibleControlsMask)
+{
+    EXPECT_TRUE(TestOzzKinematicsVisibilitySetBonesVisibleControlsMask());
+}
+
+TEST(OzzAnimationController, LoadsStandaloneClip)
+{
+    EXPECT_TRUE(TestOzzAnimationControllerLoadsStandaloneClip());
+}
+
+TEST(OzzKinematicsCallbacks, InvokesBoneCallbackAndHonorsOverwrite)
+{
+    EXPECT_TRUE(TestOzzKinematicsCallbacksInvokeBoneCallbackAndHonorOverwrite());
+}
+
+TEST(OzzKinematicsParity, BindPoseMatchesLegacySkeleton)
+{
+    EXPECT_TRUE(TestOzzKinematicsParityBindPoseMatchesLegacySkeleton());
+}
+
+TEST(OzzKinematicsParity, AnimationPoseMatchesLegacySkeleton)
+{
+    EXPECT_TRUE(TestOzzKinematicsParityAnimationPoseMatchesLegacySkeleton());
+}
+
+TEST(OzzBundleRuntime, HydratesKinematicsAndMeshPayload)
+{
+    EXPECT_TRUE(TestOzzBundleRuntimeHydratesKinematicsAndMeshPayload());
 }
 
 TEST(ModelNaming, NormalizesModelIdentifiers)
 {
-    using xray::render::detail::NormalizeModelIdentifier;
-
-    EXPECT_STREQ(NormalizeModelIdentifier("actors\\stalker").c_str(), "actors\\stalker");
-    EXPECT_STREQ(NormalizeModelIdentifier("actors\\stalker.ogf").c_str(), "actors\\stalker");
-    EXPECT_STREQ(NormalizeModelIdentifier("actors\\DEV_STALKER.OGF").c_str(), "actors\\dev_stalker");
-    EXPECT_STREQ(NormalizeModelIdentifier("actors\\dev_stalker.ozzx").c_str(), "actors\\dev_stalker.ozzx");
-    EXPECT_STREQ(NormalizeModelIdentifier("actors\\DEV_STALKER.OZZX").c_str(), "actors\\dev_stalker.ozzx");
-    EXPECT_STREQ(NormalizeModelIdentifier("actors\\some_visual.dds").c_str(), "actors\\some_visual");
-    EXPECT_STREQ(NormalizeModelIdentifier("weapon").c_str(), "weapon");
-    EXPECT_TRUE(NormalizeModelIdentifier(nullptr).empty());
-    EXPECT_TRUE(NormalizeModelIdentifier("").empty());
+    EXPECT_TRUE(TestModelNamingNormalizesModelIdentifiers());
 }

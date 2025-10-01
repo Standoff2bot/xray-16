@@ -3,23 +3,21 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <limits>
-#include <map>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <unordered_map>
@@ -1501,6 +1499,30 @@ bool TestGenerateSkeleton()
     return ConvertSkeleton(true);
 }
 
+bool TestSkeletonWrittenToTestdataDirectory()
+{
+    if (!ConvertSkeleton(true))
+    {
+        ADD_FAILURE() << "Skeleton conversion failed";
+        return false;
+    }
+
+    const auto expected_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
+    const auto actual_path = SkeletonOutputPath();
+
+    bool ok = true;
+
+    EXPECT_EQ(PathToString(actual_path), PathToString(expected_path));
+    if (PathToString(actual_path) != PathToString(expected_path))
+        ok = false;
+
+    EXPECT_TRUE(fs::exists(expected_path)) << "expected converted skeleton missing at " << PathToString(expected_path);
+    if (!fs::exists(expected_path))
+        ok = false;
+
+    return ok;
+}
+
 bool TestGenerateMesh()
 {
     std::cout << "Generating mesh via converter..." << std::endl;
@@ -2381,6 +2403,82 @@ bool TestAssetBundleContainsSkeletonAndMesh()
     return true;
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+bool TestLegacyOmfConverterConvertsCriticalHitOmf()
+{
+    const auto bundle_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero.ozzx");
+    XRay::Animation::OzzxBundle bundle;
+    if (!XRay::Animation::ReadOzzxBundle(bundle_path, bundle))
+    {
+        ADD_FAILURE() << "Failed to read bundle: " << PathToString(bundle_path);
+        return false;
+    }
+
+    ozz::animation::Skeleton skeleton;
+    ozz::io::MemoryStream skeleton_stream;
+    if (!skeleton_stream.Write(bundle.skeleton.data(), bundle.skeleton.size()))
+    {
+        ADD_FAILURE() << "Failed to stage skeleton payload";
+        return false;
+    }
+    skeleton_stream.Seek(0, ozz::io::Stream::kSet);
+    ozz::io::IArchive skeleton_archive(&skeleton_stream);
+    skeleton_archive >> skeleton;
+
+    xr_vector<xr_string> bone_names;
+    const auto joint_names = skeleton.joint_names();
+    bone_names.reserve(joint_names.size());
+    for (const char* name : joint_names)
+        bone_names.emplace_back(name ? name : "");
+
+    const auto omf_path = ResolveProjectPath("res/testdata/npc/critical_hit_grup_1.omf");
+    xr_vector<XRay::Animation::ConvertedOmfAnimation> converted;
+    if (!XRay::Animation::ConvertLegacyOmf(omf_path, bone_names, skeleton, converted))
+    {
+        ADD_FAILURE() << "ConvertLegacyOmf failed";
+        return false;
+    }
+
+    if (converted.empty())
+    {
+        ADD_FAILURE() << "No animations converted";
+        return false;
+    }
+
+    bool ok = true;
+    for (const auto& entry : converted)
+    {
+        const ozz::animation::Animation* animation_ptr = entry.animation.get();
+        if (animation_ptr == nullptr)
+        {
+            ADD_FAILURE() << "Converted animation missing payload";
+            ok = false;
+            continue;
+        }
+
+        EXPECT_EQ(animation_ptr->num_tracks(), skeleton.num_joints());
+        if (animation_ptr->num_tracks() != skeleton.num_joints())
+            ok = false;
+    }
+
+    return ok;
+}
+
+} // namespace
+
 TEST(ConverterIntegration, GenerateSkeleton)
 {
     EXPECT_TRUE(TestGenerateSkeleton());
@@ -2388,13 +2486,7 @@ TEST(ConverterIntegration, GenerateSkeleton)
 
 TEST(ConverterIntegration, SkeletonWrittenToTestdataDirectory)
 {
-    ASSERT_TRUE(ConvertSkeleton(true));
-
-    const auto expected_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
-    const auto actual_path = SkeletonOutputPath();
-
-    EXPECT_EQ(PathToString(actual_path), PathToString(expected_path));
-    EXPECT_TRUE(fs::exists(expected_path)) << "expected converted skeleton missing at " << PathToString(expected_path);
+    EXPECT_TRUE(TestSkeletonWrittenToTestdataDirectory());
 }
 
 TEST(ConverterIntegration, GenerateMesh)
@@ -2459,33 +2551,5 @@ TEST(ConverterIntegration, AssetBundleContainsSkeletonAndMesh)
 
 TEST(LegacyOmfConverter, ConvertsCriticalHitOmf)
 {
-    const auto bundle_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero.ozzx");
-    XRay::Animation::OzzxBundle bundle;
-    ASSERT_TRUE(XRay::Animation::ReadOzzxBundle(bundle_path, bundle)) << "Failed to read bundle: " << PathToString(bundle_path);
-
-    ozz::animation::Skeleton skeleton;
-    ozz::io::MemoryStream skeleton_stream;
-    ASSERT_TRUE(skeleton_stream.Write(bundle.skeleton.data(), bundle.skeleton.size()));
-    skeleton_stream.Seek(0, ozz::io::Stream::kSet);
-    ozz::io::IArchive skeleton_archive(&skeleton_stream);
-    skeleton_archive >> skeleton;
-
-    xr_vector<xr_string> bone_names;
-    const auto joint_names = skeleton.joint_names();
-    bone_names.reserve(joint_names.size());
-    for (const char* name : joint_names)
-        bone_names.emplace_back(name ? name : "");
-
-    const auto omf_path = ResolveProjectPath("res/testdata/npc/critical_hit_grup_1.omf");
-    xr_vector<XRay::Animation::ConvertedOmfAnimation> converted;
-    ASSERT_TRUE(XRay::Animation::ConvertLegacyOmf(omf_path, bone_names, skeleton, converted));
-    ASSERT_FALSE(converted.empty());
-
-    for (const auto& entry : converted)
-    {
-        const ozz::animation::Animation* animation_ptr = entry.animation.get();
-        ASSERT_TRUE(animation_ptr != nullptr);
-        EXPECT_EQ(animation_ptr->num_tracks(), skeleton.num_joints());
-    }
+    EXPECT_TRUE(TestLegacyOmfConverterConvertsCriticalHitOmf());
 }
-} // namespace
