@@ -247,6 +247,11 @@ void OzzKinematics::ResetAnimationState()
     blend_destroy_callback_ = nullptr;
     update_tracks_callback_ = nullptr;
     animation_applied_ = false;
+    active_cycle_blend_.reset();
+    active_cycle_motion_.invalidate();
+    active_cycle_partition_ = BI_NONE;
+    active_cycle_channel_ = 0;
+    active_cycle_motion_index_ = -1;
 }
 
 bool OzzKinematics::EnsureAnimationController()
@@ -368,6 +373,11 @@ void OzzKinematics::StopAnimation()
     animation_applied_ = false;
     ClearPose();
     CalculateBones_Invalidate();
+    active_cycle_blend_.reset();
+    active_cycle_motion_.invalidate();
+    active_cycle_partition_ = BI_NONE;
+    active_cycle_channel_ = 0;
+    active_cycle_motion_index_ = -1;
 }
 
 MotionID OzzKinematics::ResolveLegacyMotionId(const xr_string& motion_name)
@@ -1366,16 +1376,90 @@ u16 OzzKinematics::LL_PartID(LPCSTR /*B*/)
     return BI_NONE;
 }
 
-CBlend* OzzKinematics::LL_PlayCycle(u16 /*partition*/, MotionID /*motion*/, BOOL /*bMixing*/, float /*blendAccrue*/,
-    float /*blendFalloff*/, float /*Speed*/, BOOL /*noloop*/, PlayCallback /*Callback*/, LPVOID /*CallbackParam*/, u8 /*channel*/)
+CBlend* OzzKinematics::LL_PlayCycle(u16 partition, MotionID motion, BOOL bMixing, float blendAccrue,
+    float blendFalloff, float Speed, BOOL noloop, PlayCallback Callback, LPVOID CallbackParam, u8 channel)
 {
-    return nullptr;
+    if (!motion.valid())
+        return nullptr;
+
+    if (motion.slot != 0)
+    {
+        Msg("[OzzKinematics] LL_PlayCycle received motion with unsupported slot %u", motion.slot);
+        return nullptr;
+    }
+
+    const u16 motion_index = motion.idx;
+    if (motion_index >= loaded_motions_.size())
+    {
+        Msg("[OzzKinematics] LL_PlayCycle motion index %u out of range", motion_index);
+        return nullptr;
+    }
+
+    if (!EnsureAnimationController())
+        return nullptr;
+
+    LoadedMotion& record = loaded_motions_[motion_index];
+    if (!record.animation)
+    {
+        Msg("[OzzKinematics] LL_PlayCycle motion '%s' is missing animation payload", record.name.c_str());
+        return nullptr;
+    }
+
+    if (!animation_controller_->LoadAnimation(record.animation))
+        return nullptr;
+
+    const bool mixing = !!bMixing;
+    const bool stop_at_end = !!noloop;
+    const float def_speed = record.definition.Speed();
+    float playback_speed = Speed;
+    if (fis_zero(playback_speed))
+        playback_speed = !fis_zero(def_speed) ? def_speed : 1.f;
+
+    animation_controller_->SetLooping(!stop_at_end);
+    animation_controller_->SetPlaybackSpeed(playback_speed);
+
+    animation_applied_ = false;
+    CalculateBones_Invalidate();
+
+    active_cycle_blend_ = xr_make_unique<CBlend>();
+    CBlend& blend = *active_cycle_blend_;
+    blend.set_accrue_state();
+    blend.blendAmount = mixing ? EPS_S : 1.f;
+    blend.blendAccrue = blendAccrue;
+    blend.blendFalloff = blendFalloff;
+    blend.blendPower = 1.f;
+    blend.speed = playback_speed;
+    blend.motionID = motion;
+    blend.timeCurrent = 0.f;
+    blend.timeTotal = record.animation->duration();
+    const u16 resolved_partition = (partition == BI_NONE) ? u16(0) : partition;
+    blend.bone_or_part = resolved_partition;
+    blend.stop_at_end = stop_at_end;
+    blend.playing = true;
+    blend.stop_at_end_callback = true;
+    blend.Callback = Callback;
+    blend.CallbackParam = CallbackParam;
+    blend.channel = channel;
+    blend.fall_at_end = blend.stop_at_end && (channel > 1);
+    blend.dwFrame = Device.dwFrame ? Device.dwFrame - 1 : 0;
+
+    active_cycle_motion_ = motion;
+    active_cycle_partition_ = resolved_partition;
+    active_cycle_channel_ = channel;
+    active_cycle_motion_index_ = static_cast<int>(motion_index);
+
+    return &blend;
 }
 
 CBlend* OzzKinematics::LL_PlayCycle(
-    u16 /*partition*/, MotionID /*motion*/, BOOL /*bMixIn*/, PlayCallback /*Callback*/, LPVOID /*CallbackParam*/, u8 /*channel*/)
+    u16 partition, MotionID motion, BOOL bMixIn, PlayCallback Callback, LPVOID CallbackParam, u8 channel)
 {
-    return nullptr;
+    CMotionDef* def = LL_GetMotionDef(motion);
+    if (!def)
+        return nullptr;
+
+    return LL_PlayCycle(partition, motion, bMixIn, def->Accrue(), def->Falloff(), def->Speed(), def->StopAtEnd(), Callback,
+        CallbackParam, channel);
 }
 
 void OzzKinematics::LL_CloseCycle(u16 /*partition*/, u8 /*mask_channel*/)
@@ -1391,15 +1475,47 @@ void OzzKinematics::UpdateTracks()
     LL_UpdateTracks(Device.fTimeDelta, true, false);
 }
 
-void OzzKinematics::LL_UpdateTracks(float dt, bool /*b_force*/, bool /*leave_blends*/)
+void OzzKinematics::LL_UpdateTracks(float dt, bool b_force, bool leave_blends)
 {
+    if (active_cycle_blend_ && animation_controller_)
+    {
+        animation_controller_->SetLooping(!active_cycle_blend_->stop_at_end);
+        animation_controller_->SetPlaybackSpeed(active_cycle_blend_->speed);
+    }
+
     const bool advanced = AdvanceAnimation(dt);
+
+    if (active_cycle_blend_)
+    {
+        CBlend& blend = *active_cycle_blend_;
+        if (b_force || blend.dwFrame != Device.dwFrame)
+        {
+            blend.dwFrame = Device.dwFrame;
+            const bool finished = blend.update(dt, blend.Callback);
+            if (finished && !leave_blends)
+            {
+                if (blend_destroy_callback_)
+                    blend_destroy_callback_->BlendDestroy(blend);
+
+                if (animation_controller_)
+                    animation_controller_->ClearAnimation();
+                animation_applied_ = false;
+
+                active_cycle_blend_.reset();
+                active_cycle_motion_.invalidate();
+                active_cycle_partition_ = BI_NONE;
+                active_cycle_channel_ = 0;
+                active_cycle_motion_index_ = -1;
+            }
+        }
+    }
+
     if (update_tracks_callback_)
         (*update_tracks_callback_)(dt, *this);
 
     if (advanced && blend_destroy_callback_)
     {
-        // Ozz runtime currently does not maintain blend instances, so nothing to flush here.
+        // Blend destruction is handled above when cycles complete.
     }
 }
 
@@ -1433,20 +1549,29 @@ MotionID OzzKinematics::ID_Cycle_Safe(shared_str N)
     return ResolveLegacyMotionId(xr_string(N.c_str()));
 }
 
-CBlend* OzzKinematics::PlayCycle(LPCSTR /*N*/, BOOL /*bMixIn*/, PlayCallback /*Callback*/, LPVOID /*CallbackParam*/, u8 /*channel*/)
+CBlend* OzzKinematics::PlayCycle(LPCSTR N, BOOL bMixIn, PlayCallback Callback, LPVOID CallbackParam, u8 channel)
 {
-    return nullptr;
+    MotionID id = ID_Cycle_Safe(N);
+    if (!id.valid())
+        return nullptr;
+
+    return PlayCycle(id, bMixIn, Callback, CallbackParam, channel);
 }
 
-CBlend* OzzKinematics::PlayCycle(MotionID /*M*/, BOOL /*bMixIn*/, PlayCallback /*Callback*/, LPVOID /*CallbackParam*/, u8 /*channel*/)
+CBlend* OzzKinematics::PlayCycle(MotionID M, BOOL bMixIn, PlayCallback Callback, LPVOID CallbackParam, u8 channel)
 {
-    return nullptr;
+    CMotionDef* def = LL_GetMotionDef(M);
+    if (!def)
+        return nullptr;
+
+    return LL_PlayCycle(def->bone_or_part, M, bMixIn, def->Accrue(), def->Falloff(), def->Speed(), def->StopAtEnd(),
+        Callback, CallbackParam, channel);
 }
 
-CBlend* OzzKinematics::PlayCycle(u16 /*partition*/, MotionID /*M*/, BOOL /*bMixIn*/, PlayCallback /*Callback*/,
-    LPVOID /*CallbackParam*/, u8 /*channel*/)
+CBlend* OzzKinematics::PlayCycle(u16 partition, MotionID M, BOOL bMixIn, PlayCallback Callback, LPVOID CallbackParam,
+    u8 channel)
 {
-    return nullptr;
+    return LL_PlayCycle(partition, M, bMixIn, Callback, CallbackParam, channel);
 }
 
 MotionID OzzKinematics::ID_FX(LPCSTR /*N*/)

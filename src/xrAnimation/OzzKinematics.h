@@ -228,6 +228,11 @@ private:
     bool animation_applied_ = false;
     CPartition default_partition_{};
     bool initialized_ = false;
+    xr_unique_ptr<CBlend> active_cycle_blend_;
+    MotionID active_cycle_motion_{};
+    u16 active_cycle_partition_ = BI_NONE;
+    u8 active_cycle_channel_ = 0;
+    int active_cycle_motion_index_ = -1;
 };
 } // namespace Animation
 } // namespace XRay
