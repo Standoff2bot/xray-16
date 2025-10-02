@@ -8,7 +8,6 @@
 #include "xrCore/_fbox.h"
 #include "xrCommon/xr_smart_pointers.h"
 #include "xrCommon/xr_unordered_map.h"
-#include "xrCommon/xr_set.h"
 
 #include "OzzAnimationController.h"
 #include <filesystem>
@@ -212,18 +211,64 @@ private:
     xr_vector<KinematicsABT::additional_bone_transform> boneOffsets;
     ozz::animation::SamplingJob::Context samplingContext;
     xr_unique_ptr<OzzAnimationController> animationController;
-    struct LoadedMotion
+    struct MotionRecord
     {
         xr_string name;
         std::shared_ptr<ozz::animation::Animation> animation;
         CMotionDef definition;
         MotionID id;
     };
-    xr_vector<LoadedMotion> loadedMotions;
-    xr_unordered_map<xr_string, u16> motionLookup;
-    xr_set<xr_string> loadedAnimationSources;
+    struct MotionLibrary
+    {
+        xr_vector<MotionRecord> records;
+        xr_unordered_map<xr_string, u16> lookup;
+
+        void Reset()
+        {
+            records.clear();
+            lookup.clear();
+        }
+
+        bool Contains(const xr_string& name) const
+        {
+            return lookup.find(name) != lookup.end();
+        }
+
+        MotionRecord* Find(u16 index)
+        {
+            return index < records.size() ? &records[index] : nullptr;
+        }
+
+        const MotionRecord* Find(u16 index) const
+        {
+            return index < records.size() ? &records[index] : nullptr;
+        }
+
+        MotionRecord* Find(const xr_string& name)
+        {
+            auto it = lookup.find(name);
+            return it != lookup.end() ? &records[it->second] : nullptr;
+        }
+
+        const MotionRecord* Find(const xr_string& name) const
+        {
+            auto it = lookup.find(name);
+            return it != lookup.end() ? &records[it->second] : nullptr;
+        }
+
+        u16 NextIndex() const { return static_cast<u16>(records.size()); }
+
+        void Add(MotionRecord&& record)
+        {
+            const u16 index = static_cast<u16>(records.size());
+            lookup.emplace(record.name, index);
+            records.push_back(std::move(record));
+        }
+    };
+
+    MotionLibrary motionLibrary;
     xr_vector<xr_string> motionReferences;
-    bool motionLibraryInitialized = false;
+    bool motionLibraryBuilt = false;
     IBlendDestroyCallback* blendDestroyCallback = nullptr;
     IUpdateTracksCallback* updateTracksCallback = nullptr;
     bool animationApplied = false;
