@@ -7,6 +7,7 @@
 #include "xrEngine/device.h"
 #include "xrCore/FS.h"
 #include "xrCore/FS_impl.h"
+#include "xrCore/Animation/Motion.hpp"
 
 #include "ozz/animation/runtime/skeleton_utils.h"
 #include "ozz/base/io/archive.h"
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace XRay
@@ -154,6 +156,9 @@ void OzzKinematics::ResetAnimationState()
     legacy_motion_metadata_.clear();
     legacy_motion_library_.clear();
     converted_motion_sources_.clear();
+    legacy_motion_lookup_.clear();
+    legacy_motion_ids_.clear();
+    legacy_motion_defs_.clear();
     blend_destroy_callback_ = nullptr;
     update_tracks_callback_ = nullptr;
     animation_applied_ = false;
@@ -184,6 +189,9 @@ void OzzKinematics::SetLegacyMotionReferences(const xr_vector<xr_string>& refere
     legacy_motion_metadata_.clear();
     legacy_motion_library_.clear();
     converted_motion_sources_.clear();
+    legacy_motion_lookup_.clear();
+    legacy_motion_ids_.clear();
+    legacy_motion_defs_.clear();
 }
 
 xr_vector<xr_string> OzzKinematics::LegacyMotionNames()
@@ -280,6 +288,97 @@ void OzzKinematics::StopAnimation()
     animation_applied_ = false;
     ClearPose();
     CalculateBones_Invalidate();
+}
+
+MotionID OzzKinematics::RegisterLegacyMotionId(const xr_string& motion_name)
+{
+    if (motion_name.empty())
+        return MotionID();
+
+    const auto existing = legacy_motion_lookup_.find(motion_name);
+    if (existing != legacy_motion_lookup_.end())
+        return existing->second;
+
+    if (legacy_motion_ids_.size() >= std::numeric_limits<u16>::max())
+    {
+        Msg("[OzzKinematics] Too many legacy motions registered, cannot assign MotionID for '%s'", motion_name.c_str());
+        return MotionID();
+    }
+
+    MotionID id;
+    id.set(0, static_cast<u16>(legacy_motion_ids_.size()));
+    legacy_motion_ids_.push_back(motion_name);
+    legacy_motion_lookup_.emplace(motion_name, id);
+    EnsureLegacyMotionDef(id.idx, motion_name);
+    return id;
+}
+
+MotionID OzzKinematics::ResolveLegacyMotionId(const xr_string& motion_name)
+{
+    if (motion_name.empty())
+        return MotionID();
+
+    const auto cached = legacy_motion_lookup_.find(motion_name);
+    if (cached != legacy_motion_lookup_.end())
+        return cached->second;
+
+    if (legacy_motion_library_.empty() && !motion_references_.empty())
+        BuildLegacyMotionLibrary();
+
+    if (legacy_motion_library_.find(motion_name) == legacy_motion_library_.end())
+        return MotionID();
+
+    return RegisterLegacyMotionId(motion_name);
+}
+
+void OzzKinematics::EnsureLegacyMotionDef(u16 index, const xr_string& motion_name)
+{
+    if (legacy_motion_defs_.size() <= index)
+        legacy_motion_defs_.resize(static_cast<size_t>(index) + 1);
+
+    CMotionDef& def = legacy_motion_defs_[index];
+
+    const auto meta_it = legacy_motion_metadata_.find(motion_name);
+    if (meta_it == legacy_motion_metadata_.end())
+    {
+        def.bone_or_part = 0;
+        def.motion = index;
+        def.speed = def.Quantize(1.f);
+        def.power = def.Quantize(1.f);
+        def.accrue = def.Quantize(0.f);
+        def.falloff = def.Quantize(0.f);
+        def.flags = 0;
+        def.marks.clear();
+        return;
+    }
+
+    const LegacyMotionMetadata& meta = meta_it->second;
+
+    def.bone_or_part = meta.bone_or_part;
+    def.motion = meta.motion_id;
+    const float speed = std::max(meta.speed, 0.f);
+    const float power = std::max(meta.power, 0.f);
+    const float accrue = std::max(meta.accrue, 0.f);
+    const float falloff = std::max(meta.falloff, 0.f);
+    def.speed = def.Quantize(speed);
+    def.power = def.Quantize(power);
+    def.accrue = def.Quantize(accrue);
+    def.falloff = def.Quantize(falloff);
+    def.flags = static_cast<u16>(meta.flags);
+    if (!(def.flags & esmFX) && def.falloff >= def.accrue && def.accrue > 0)
+        def.falloff = static_cast<u16>(def.accrue - 1);
+
+    def.marks.clear();
+    if (!meta.marks.empty())
+    {
+        def.marks.reserve(meta.marks.size());
+        for (const LegacyMotionMark& mark : meta.marks)
+        {
+            motion_marks converted;
+            converted.name = shared_str(mark.name.c_str());
+            def.marks.emplace_back(std::move(converted));
+        }
+    }
 }
 
 bool OzzKinematics::AdvanceAnimation(float dt)
@@ -444,6 +543,7 @@ bool OzzKinematics::ConvertLegacyOmfFile(const xr_string& relative_path, const x
         auto deleter = entry.animation.get_deleter();
         legacy_motion_library_[motion_name] =
             std::shared_ptr<ozz::animation::Animation>(entry.animation.release(), deleter);
+        RegisterLegacyMotionId(motion_name);
     }
 
     converted_motion_sources_.insert(relative_path);
@@ -1169,9 +1269,17 @@ const shared_motions& OzzKinematics::LL_MotionsSlot(u16 /*idx*/)
     return dummy;
 }
 
-CMotionDef* OzzKinematics::LL_GetMotionDef(MotionID /*id*/)
+CMotionDef* OzzKinematics::LL_GetMotionDef(MotionID id)
 {
-    return nullptr;
+    if (!id.valid() || id.slot != 0)
+        return nullptr;
+
+    const u16 index = id.idx;
+    if (index >= legacy_motion_ids_.size())
+        return nullptr;
+
+    EnsureLegacyMotionDef(index, legacy_motion_ids_[index]);
+    return &legacy_motion_defs_[index];
 }
 
 CMotion* OzzKinematics::LL_GetRootMotion(MotionID /*id*/)
@@ -1261,24 +1369,34 @@ void OzzKinematics::LL_UpdateTracks(float dt, bool /*b_force*/, bool /*leave_ble
     }
 }
 
-MotionID OzzKinematics::ID_Cycle(LPCSTR /*N*/)
+MotionID OzzKinematics::ID_Cycle(LPCSTR N)
 {
-    return MotionID();
+    MotionID id = ID_Cycle_Safe(N);
+    R_ASSERT3(id.valid(), "[OzzKinematics] can't find cycle: ", N ? N : "<null>");
+    return id;
 }
 
-MotionID OzzKinematics::ID_Cycle_Safe(LPCSTR /*N*/)
+MotionID OzzKinematics::ID_Cycle_Safe(LPCSTR N)
 {
-    return MotionID();
+    if (!N || !N[0])
+        return MotionID();
+
+    return ResolveLegacyMotionId(xr_string(N));
 }
 
-MotionID OzzKinematics::ID_Cycle(shared_str /*N*/)
+MotionID OzzKinematics::ID_Cycle(shared_str N)
 {
-    return MotionID();
+    MotionID id = ID_Cycle_Safe(N);
+    R_ASSERT3(id.valid(), "[OzzKinematics] can't find cycle: ", N.c_str());
+    return id;
 }
 
-MotionID OzzKinematics::ID_Cycle_Safe(shared_str /*N*/)
+MotionID OzzKinematics::ID_Cycle_Safe(shared_str N)
 {
-    return MotionID();
+    if (!N || !N.c_str() || !N.c_str()[0])
+        return MotionID();
+
+    return ResolveLegacyMotionId(xr_string(N.c_str()));
 }
 
 CBlend* OzzKinematics::PlayCycle(LPCSTR /*N*/, BOOL /*bMixIn*/, PlayCallback /*Callback*/, LPVOID /*CallbackParam*/, u8 /*channel*/)

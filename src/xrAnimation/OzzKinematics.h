@@ -4,6 +4,7 @@
 
 #include "Include/xrRender/Kinematics.h"
 #include "Include/xrRender/KinematicsAnimated.h"
+#include "Include/xrRender/animation_motion.h"
 #include "xrCore/_fbox.h"
 #include "xrCommon/xr_smart_pointers.h"
 #include "xrCommon/xr_unordered_map.h"
@@ -183,6 +184,8 @@ private:
     bool EnsureAnimationController();
     bool BuildLegacyMotionLibrary();
     bool LoadLegacyMotion(const xr_string& motion_name);
+    MotionID ResolveLegacyMotionId(const xr_string& motion_name);
+    MotionID RegisterLegacyMotionId(const xr_string& motion_name);
     xr_vector<xr_string> CollectSkeletonBoneNames() const;
     xr_vector<xr_string> ResolveMotionReference(const xr_string& reference) const;
     bool ConvertLegacyOmfFile(const xr_string& relative_path, const xr_vector<xr_string>& skeleton_bone_names);
@@ -190,6 +193,7 @@ private:
     bool IsBoneVisible(size_t index) const;
     bool LoadSkeletonFromStream(ozz::io::Stream* stream, pcstr debug_source);
     bool FinalizeSkeletonInitialization(pcstr debug_source);
+    void EnsureLegacyMotionDef(u16 index, const xr_string& motion_name);
 
 private:
     CInifile* user_data_;
@@ -217,6 +221,9 @@ private:
     xr_unordered_map<xr_string, LegacyMotionMetadata> legacy_motion_metadata_;
     xr_unordered_map<xr_string, std::shared_ptr<ozz::animation::Animation>> legacy_motion_library_;
     xr_set<xr_string> converted_motion_sources_;
+    xr_vector<xr_string> legacy_motion_ids_;
+    xr_unordered_map<xr_string, MotionID> legacy_motion_lookup_;
+    xr_vector<CMotionDef> legacy_motion_defs_;
     IBlendDestroyCallback* blend_destroy_callback_ = nullptr;
     IUpdateTracksCallback* update_tracks_callback_ = nullptr;
     bool animation_applied_ = false;
