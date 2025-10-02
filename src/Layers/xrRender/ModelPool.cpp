@@ -93,11 +93,48 @@ dxRender_Visual* CModelPool::Instance_Load(const char* N, BOOL allow_register)
     string_path fn;
     string_path name;
 
+    auto load_bundle_from_path = [&](const std::filesystem::path& bundle_path) -> dxRender_Visual*
+    {
+        auto* visual = static_cast<COzzKinematicsVisual*>(Instance_Create(MT_OZZ_BUNDLE));
+        if (!visual->LoadFromBundle(N, bundle_path))
+        {
+            xr_delete(visual);
+            return nullptr;
+        }
+
+        if (allow_register)
+            Instance_Register(N, visual);
+
+        return visual;
+    };
+
     // Add default ext if no ext at all
     if (nullptr == strext(N))
         strconcat(sizeof(name), name, N, ".ogf");
     else
         xr_strcpy(name, sizeof(name), N);
+
+    const char* requested_ext = strext(name);
+    if (!requested_ext || 0 == xr_stricmp(requested_ext, ".ogf"))
+    {
+        string_path bundle_name;
+        xr_strcpy(bundle_name, name);
+        if (requested_ext)
+            bundle_name[requested_ext - name] = 0;
+        xr_strcat(bundle_name, ".ozzx");
+
+        if (FS.exist(fn, "$level$", bundle_name))
+        {
+            if (auto* bundle_visual = load_bundle_from_path(std::filesystem::path(fn)))
+                return bundle_visual;
+        }
+
+        if (FS.exist(fn, "$game_meshes$", bundle_name))
+        {
+            if (auto* bundle_visual = load_bundle_from_path(std::filesystem::path(fn)))
+                return bundle_visual;
+        }
+    }
 
     // Load data from MESHES or LEVEL
     if (!FS.exist(N))
@@ -116,6 +153,21 @@ dxRender_Visual* CModelPool::Instance_Load(const char* N, BOOL allow_register)
     else
     {
         xr_strcpy(fn, N);
+
+        if (const char* direct_ext = strext(fn))
+        {
+            if (0 == xr_stricmp(direct_ext, ".ogf"))
+            {
+                std::filesystem::path direct_bundle(fn);
+                direct_bundle.replace_extension(".ozzx");
+                std::error_code ec;
+                if (std::filesystem::exists(direct_bundle, ec) && !ec)
+                {
+                    if (auto* bundle_visual = load_bundle_from_path(direct_bundle))
+                        return bundle_visual;
+                }
+            }
+        }
     }
 
     if (const char* ext = strext(fn))

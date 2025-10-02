@@ -31,7 +31,7 @@ namespace XRay
 {
 namespace Animation
 {
-class OzzKinematics final : public IKinematics, public IKinematicsAnimated
+class OzzKinematics : public IKinematics, public IKinematicsAnimated
 {
 public:
     OzzKinematics();

@@ -25,7 +25,7 @@ namespace xray::render::RENDER_NAMESPACE
 using XRay::Animation::OzzKinematics;
 class COzzSkinnedSurface;
 
-class COzzKinematicsVisual final : public FHierrarhyVisual
+class COzzKinematicsVisual final : public FHierrarhyVisual, public OzzKinematics
 {
 public:
     COzzKinematicsVisual();
@@ -39,12 +39,13 @@ public:
 
     bool LoadFromBundle(const char* name, const std::filesystem::path& path);
 
-    IKinematics* dcast_PKinematics() override { return &kinematics_; }
-    IKinematicsAnimated* dcast_PKinematicsAnimated() override { return &kinematics_; }
+    IKinematics* dcast_PKinematics() override { return this; }
+    IKinematicsAnimated* dcast_PKinematicsAnimated() override { return this; }
 
-    OzzKinematics& Kinematics() { return kinematics_; }
+    OzzKinematics& Kinematics() { return *this; }
+    const OzzKinematics& Kinematics() const { return *this; }
     bool HasGeometry() const { return !meshes_.empty(); }
-    bool IsKinematicsReady() const { return initialized_ && kinematics_.IsInitialized(); }
+    bool IsKinematicsReady() const { return initialized_ && IsInitialized(); }
     const xr_vector<Fmatrix>& SkinningPalette();
     const xr_vector<ozz::sample::Mesh>& Meshes() const { return meshes_; }
 
@@ -68,7 +69,6 @@ private:
     bool InitializeFromPayload(bool spawn_children = false);
 
 private:
-    OzzKinematics kinematics_;
     xr_vector<std::uint8_t> skeleton_payload_;
     xr_vector<std::uint8_t> mesh_payload_;
     xr_vector<ozz::sample::Mesh> meshes_;

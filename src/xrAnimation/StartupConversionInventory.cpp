@@ -29,6 +29,8 @@
 #include "LegacyOmfConverter.h"
 #include "OzzBundle.h"
 #include "Layers/xrRender/ModelNaming.h"
+#include "xrCore/Threading/ParallelFor.hpp"
+
 namespace fs = std::filesystem;
 
 namespace XRay
@@ -919,14 +921,6 @@ bool VerifyConvertedOutputs(const LegacyAssetInventory& inventory, const Startup
     return true;
 }
 
-struct MotionWorkItem
-{
-    const LegacyMotionAsset* asset = nullptr;
-    xr_string canonical_name;
-    xr_string output_relative;
-    bool convert = false;
-};
-
 bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                            const StartupConversionParams& params,
                            bool force_rebuild,
@@ -934,7 +928,39 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
 {
     out_stats = {};
 
-    std::unordered_set<xr_string> processed_motions;
+    struct VisualConversionWork
+    {
+        enum class Failure
+        {
+            None,
+            MissingSource,
+            ReadFailed,
+            ConvertFailed
+        };
+
+        const LegacyVisualAsset* visual = nullptr;
+        const LegacyVisualSource* primary = nullptr;
+        bool convert_bundle = false;
+        xr_vector<xr_string> motion_names;
+        LegacyVisualConversionResult conversion;
+        bool success = false;
+        Failure failure = Failure::None;
+        xr_string convert_error;
+    };
+
+    struct MotionTask
+    {
+        const LegacyMotionAsset* asset = nullptr;
+        xr_string output_relative;
+        bool convert = false;
+        const LegacyVisualConversionResult* source_conversion = nullptr;
+    };
+
+    std::vector<VisualConversionWork> visual_tasks;
+    visual_tasks.reserve(inventory.visuals.size());
+
+    std::unordered_map<xr_string, MotionTask> motion_tasks;
+    motion_tasks.reserve(inventory.motions.size());
 
     for (const auto& visual : inventory.visuals)
     {
@@ -946,12 +972,10 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
             continue;
         }
 
-        const bool bundle_exists = BundleExists(visual, params);
-        const bool convert_bundle = force_rebuild || !bundle_exists;
-
-        xr_vector<MotionWorkItem> motion_tasks;
-        motion_tasks.reserve(primary->motion_references.size());
-        bool needs_motion_conversion = false;
+        VisualConversionWork work;
+        work.visual = &visual;
+        work.primary = primary;
+        work.convert_bundle = force_rebuild || !BundleExists(visual, params);
 
         for (const auto& reference : primary->motion_references)
         {
@@ -959,72 +983,110 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
             if (canonical_name.empty())
                 continue;
 
-            if (processed_motions.find(canonical_name) != processed_motions.end())
+            if (std::find(work.motion_names.begin(), work.motion_names.end(), canonical_name) != work.motion_names.end())
                 continue;
 
-            const LegacyMotionAsset* motion = inventory.FindMotion(canonical_name);
-            if (!motion)
+            work.motion_names.emplace_back(canonical_name);
+
+            auto [mt_it, inserted] = motion_tasks.try_emplace(work.motion_names.back());
+            if (inserted)
             {
-                Msg("! [ozz] Missing motion metadata for '%s' referenced by '%s'", canonical_name.c_str(), visual.normalized_identifier.c_str());
-                ++out_stats.failures;
-                processed_motions.insert(std::move(canonical_name));
+                const LegacyMotionAsset* motion = inventory.FindMotion(work.motion_names.back());
+                if (!motion)
+                {
+                    Msg("! [ozz] Missing motion metadata for '%s' referenced by '%s'",
+                        work.motion_names.back().c_str(), visual.normalized_identifier.c_str());
+                    ++out_stats.failures;
+                    motion_tasks.erase(mt_it);
+                }
+                else
+                {
+                    mt_it->second.asset = motion;
+                    mt_it->second.output_relative = BuildMotionOutputRelativePath(*motion);
+                    mt_it->second.convert = force_rebuild ||
+                        !FileExists(params.animation_output_alias, mt_it->second.output_relative);
+                }
+            }
+        }
+
+        visual_tasks.emplace_back(std::move(work));
+    }
+
+    if (visual_tasks.empty())
+        return out_stats.failures == 0;
+
+    xr_parallel_for(TaskRange<size_t>(0, visual_tasks.size()), [&](const TaskRange<size_t>& range)
+    {
+        for (size_t idx = range.begin(); idx != range.end(); ++idx)
+        {
+            auto& work = visual_tasks[idx];
+            if (!work.primary)
+            {
+                work.failure = VisualConversionWork::Failure::MissingSource;
                 continue;
             }
 
-            MotionWorkItem task;
-            task.asset = motion;
-            task.canonical_name = canonical_name;
-            task.output_relative = BuildMotionOutputRelativePath(*motion);
-            task.convert = force_rebuild || !FileExists(params.animation_output_alias, task.output_relative);
-
-            if (task.convert)
-                needs_motion_conversion = true;
-
-            motion_tasks.emplace_back(std::move(task));
-        }
-
-        if (!convert_bundle && !needs_motion_conversion)
-        {
-            out_stats.bundles_skipped++;
-            for (auto& task : motion_tasks)
+            auto ogf_bytes = ReadFileBytes(work.primary->location.root_alias, work.primary->location.relative_path);
+            if (ogf_bytes.empty())
             {
-                processed_motions.insert(task.canonical_name);
-                out_stats.motions_skipped++;
+                work.failure = VisualConversionWork::Failure::ReadFailed;
+                continue;
             }
-            continue;
-        }
 
-        auto ogf_bytes = ReadFileBytes(primary->location.root_alias, primary->location.relative_path);
-        if (ogf_bytes.empty())
+            LegacyVisualInput input;
+            input.buffer = ozz::span<const std::byte>(ogf_bytes.data(), ogf_bytes.size());
+
+            fs::path resolved_source;
+            if (ResolveAbsolutePath(work.primary->location.root_alias, work.primary->location.relative_path, resolved_source))
+                input.source_path = resolved_source;
+
+            LegacyVisualConversionOptions options;
+            options.build_mesh = true;
+            options.build_skeleton = true;
+
+            xr_string error;
+            if (!ConvertLegacyVisualToOzzBundle(input, work.conversion, options, &error))
+            {
+                work.failure = VisualConversionWork::Failure::ConvertFailed;
+                work.convert_error = error;
+                continue;
+            }
+
+            work.success = true;
+        }
+    });
+
+    for (auto& work : visual_tasks)
+    {
+        const LegacyVisualAsset& visual = *work.visual;
+
+        if (!work.success)
         {
-            Msg("! [ozz] Failed to read legacy visual '%s:%s'", primary->location.root_alias.c_str(), primary->location.relative_path.c_str());
+            switch (work.failure)
+            {
+            case VisualConversionWork::Failure::MissingSource:
+                Msg("! [ozz] Visual '%s' has no primary source", visual.normalized_identifier.c_str());
+                break;
+            case VisualConversionWork::Failure::ReadFailed:
+                Msg("! [ozz] Failed to read legacy visual '%s:%s'",
+                    work.primary->location.root_alias.c_str(), work.primary->location.relative_path.c_str());
+                break;
+            case VisualConversionWork::Failure::ConvertFailed:
+                Msg("! [ozz] Failed to convert '%s:%s' (%s)",
+                    work.primary->location.root_alias.c_str(), work.primary->location.relative_path.c_str(),
+                    work.convert_error.c_str());
+                break;
+            case VisualConversionWork::Failure::None:
+                break;
+            }
+
             ++out_stats.failures;
             continue;
         }
 
-        LegacyVisualInput input;
-        input.buffer = ozz::span<const std::byte>(ogf_bytes.data(), ogf_bytes.size());
-
-        fs::path resolved_source;
-        if (ResolveAbsolutePath(primary->location.root_alias, primary->location.relative_path, resolved_source))
-            input.source_path = resolved_source;
-
-        LegacyVisualConversionOptions options;
-        options.build_mesh = true;
-        options.build_skeleton = true;
-
-        LegacyVisualConversionResult conversion;
-        xr_string error;
-        if (!ConvertLegacyVisualToOzzBundle(input, conversion, options, &error))
+        if (work.convert_bundle)
         {
-            Msg("! [ozz] Failed to convert '%s:%s' (%s)", primary->location.root_alias.c_str(), primary->location.relative_path.c_str(), error.c_str());
-            ++out_stats.failures;
-            continue;
-        }
-
-        if (convert_bundle)
-        {
-            if (WriteBundleFile(params, visual, conversion))
+            if (WriteBundleFile(params, visual, work.conversion))
                 ++out_stats.bundles_written;
             else
                 ++out_stats.failures;
@@ -1034,57 +1096,72 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
             ++out_stats.bundles_skipped;
         }
 
-        if (!conversion.skeleton)
+        if (!work.conversion.skeleton)
         {
             Msg("! [ozz] Conversion for '%s' produced no skeleton", visual.normalized_identifier.c_str());
             ++out_stats.failures;
-            for (auto& task : motion_tasks)
-                processed_motions.insert(task.canonical_name);
             continue;
         }
 
-        for (auto& task : motion_tasks)
+        for (const auto& canonical : work.motion_names)
         {
-            if (!task.convert)
-            {
-                processed_motions.insert(task.canonical_name);
-                ++out_stats.motions_skipped;
+            auto mt_it = motion_tasks.find(canonical);
+            if (mt_it == motion_tasks.end())
                 continue;
-            }
 
-            auto omf_bytes = ReadFileBytes(task.asset->root_alias, task.asset->relative_path);
-            if (omf_bytes.empty())
-            {
-                Msg("! [ozz] Failed to read legacy motion '%s:%s'", task.asset->root_alias.c_str(), task.asset->relative_path.c_str());
-                ++out_stats.failures;
-                processed_motions.insert(task.canonical_name);
-                continue;
-            }
-
-            xr_vector<ConvertedOmfAnimation> converted_animations;
-            if (!ConvertLegacyOmf(omf_bytes.data(), omf_bytes.size(), conversion.bone_names, *conversion.skeleton, converted_animations))
-            {
-                Msg("! [ozz] Failed to convert legacy motion '%s'", task.asset->relative_path.c_str());
-                ++out_stats.failures;
-                processed_motions.insert(task.canonical_name);
-                continue;
-            }
-
-            if (converted_animations.empty())
-            {
-                Msg("! [ozz] Motion '%s' produced no Ozz animations", task.asset->relative_path.c_str());
-                ++out_stats.failures;
-                processed_motions.insert(task.canonical_name);
-                continue;
-            }
-
-            if (WriteOzzAnimations(params, task.output_relative, converted_animations))
-                ++out_stats.motions_written;
-            else
-                ++out_stats.failures;
-
-            processed_motions.insert(task.canonical_name);
+            mt_it->second.source_conversion = &work.conversion;
         }
+    }
+
+    for (auto& motion_entry : motion_tasks)
+    {
+        const xr_string& canonical = motion_entry.first;
+        MotionTask& task = motion_entry.second;
+
+        if (!task.asset)
+            continue; // already reported and accounted for
+
+        if (!task.source_conversion || !task.source_conversion->skeleton)
+        {
+            Msg("! [ozz] No converted skeleton available for motion '%s'", canonical.c_str());
+            ++out_stats.failures;
+            continue;
+        }
+
+        if (!task.convert)
+        {
+            ++out_stats.motions_skipped;
+            continue;
+        }
+
+        auto omf_bytes = ReadFileBytes(task.asset->root_alias, task.asset->relative_path);
+        if (omf_bytes.empty())
+        {
+            Msg("! [ozz] Failed to read legacy motion '%s:%s'", task.asset->root_alias.c_str(), task.asset->relative_path.c_str());
+            ++out_stats.failures;
+            continue;
+        }
+
+        xr_vector<ConvertedOmfAnimation> converted_animations;
+        if (!ConvertLegacyOmf(omf_bytes.data(), omf_bytes.size(), task.source_conversion->bone_names,
+                              *task.source_conversion->skeleton, converted_animations))
+        {
+            Msg("! [ozz] Failed to convert legacy motion '%s'", task.asset->relative_path.c_str());
+            ++out_stats.failures;
+            continue;
+        }
+
+        if (converted_animations.empty())
+        {
+            Msg("! [ozz] Motion '%s' produced no Ozz animations", task.asset->relative_path.c_str());
+            ++out_stats.failures;
+            continue;
+        }
+
+        if (WriteOzzAnimations(params, task.output_relative, converted_animations))
+            ++out_stats.motions_written;
+        else
+            ++out_stats.failures;
     }
 
     return out_stats.failures == 0;
