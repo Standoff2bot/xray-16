@@ -98,6 +98,8 @@ OZZ_OPTIONS_DECLARE_STRING(dump_animation_json, "Path to write sampled animation
 
 OZZ_OPTIONS_DECLARE_STRING(texture_root, "Optional root directory to resolve texture metadata paths.", "", false)
 
+OZZ_OPTIONS_DECLARE_BOOL(random_triangle_colors, "Randomize per-triangle debug colors when displaying meshes.", true, false)
+
 namespace
 {
 namespace fs = std::filesystem;
@@ -600,6 +602,7 @@ protected:
         bool draw_skeleton = true;
         bool draw_mesh = false;
         ozz::sample::Renderer::Options renderer_options;
+        bool random_triangle_colors = true;
         bool show_bone_debug = true;
         int bone_display_limit = 16;
         bool foot_ik_enabled = false;
@@ -1516,6 +1519,8 @@ protected:
             }
         }
 
+        ui_state_.random_triangle_colors = OPTIONS_random_triangle_colors;
+
         const char* bundle_option = OPTIONS_bundle;
         const bool bundle_requested = bundle_option && bundle_option[0] != '\0';
         std::string mesh_reference_path;
@@ -2393,6 +2398,10 @@ private:
             ImGui::Checkbox("Draw mesh", &ui_state_.draw_mesh);
 
             ImGui::Checkbox("Show triangles", &ui_state_.renderer_options.triangles);
+            if (ImGui::Checkbox("Random triangle colors", &ui_state_.random_triangle_colors))
+            {
+                BuildTriangleDebugMeshes();
+            }
             if (ImGui::Checkbox("Show texture", &ui_state_.renderer_options.texture))
             {
                 if (ui_state_.renderer_options.texture)
@@ -3798,6 +3807,12 @@ void PlaybackSampleApplication::BuildTriangleDebugMeshes()
 {
     triangle_debug_meshes_.clear();
     triangle_debug_meshes_.resize(meshes_.size());
+
+    const bool random_colors = ui_state_.random_triangle_colors;
+    if (!random_colors)
+    {
+        return;
+    }
 
     std::mt19937 base_rng(0x715517u);
     std::uniform_real_distribution<float> color_distribution(0.25f, 0.95f);
