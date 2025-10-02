@@ -312,6 +312,7 @@ struct ConvertedVertex
 struct VertexDedupKey
 {
     std::array<int32_t, 3> position{ 0, 0, 0 };
+    std::array<int32_t, 2> uv{ 0, 0 };
     std::array<uint16_t, 4> bones{ 0, 0, 0, 0 };
     std::array<int32_t, 4> weights{ 0, 0, 0, 0 };
     uint8_t influence_count = 0;
@@ -322,6 +323,7 @@ struct VertexDedupKey
         return influence_count == other.influence_count &&
             back_side == other.back_side &&
             position == other.position &&
+            uv == other.uv &&
             bones == other.bones &&
             weights == other.weights;
     }
@@ -341,6 +343,8 @@ struct VertexDedupKeyHasher
         combine(std::hash<uint8_t>{}(key.influence_count));
         combine(std::hash<uint8_t>{}(key.back_side));
         for (int32_t component : key.position)
+            combine(std::hash<int32_t>{}(component));
+        for (int32_t component : key.uv)
             combine(std::hash<int32_t>{}(component));
         for (uint16_t bone : key.bones)
             combine(std::hash<uint16_t>{}(bone));
@@ -1150,6 +1154,7 @@ void rebuild_tangent_frames(std::vector<MeshVertex>& vertices, const std::vector
 }
 
 constexpr float kPositionQuantizeScale = 100000.f;
+constexpr float kUVQuantizeScale = 100000.f;
 constexpr float kWeightQuantizeScale = 1000000.f;
 constexpr float kNormalQuantizeScale = 1000.f;
 
@@ -1168,6 +1173,8 @@ VertexDedupKey make_dedup_key(const MeshVertex& vertex, uint8_t back_side_flag)
     key.position = quantize_position(vertex.position).components;
     key.influence_count = vertex.influence_count;
     key.back_side = back_side_flag;
+    key.uv[0] = static_cast<int32_t>(std::llround(vertex.uv.x * kUVQuantizeScale));
+    key.uv[1] = static_cast<int32_t>(std::llround(vertex.uv.y * kUVQuantizeScale));
 
     for (size_t idx = 0; idx < key.bones.size(); ++idx)
     {
