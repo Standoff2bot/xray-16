@@ -616,7 +616,7 @@ void player_hud::render_hud(u32 context_id, IRenderable* root)
         return;
 
     if (m_model)
-        GEnv.Render->add_Visual(context_id, root, m_model->dcast_RenderVisual(), m_transform);
+        GEnv.Render->add_Visual(context_id, root, m_model->dcast_RenderVisual(), Fidentity);
 
     if (item0)
         item0->render(context_id, root);

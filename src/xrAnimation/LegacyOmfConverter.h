@@ -16,6 +16,7 @@
 
 #include <ozz/animation/runtime/animation.h>
 #include <ozz/animation/runtime/skeleton.h>
+#include <ozz/base/io/archive.h>
 #include <ozz/base/memory/unique_ptr.h>
 
 namespace XRay
@@ -51,6 +52,14 @@ struct LegacyBoneTrack
 {
     xr_vector<Fquaternion> rotations;
     xr_vector<Fvector> translations;
+    xr_vector<CKeyQR> rotation_keys;
+    xr_vector<CKeyQT8> translation_keys8;
+    xr_vector<CKeyQT16> translation_keys16;
+    Fvector translation_init{};
+    Fvector translation_size{};
+    u8 flags = 0;
+    u32 rotation_crc = 0;
+    u32 translation_crc = 0;
 };
 
 struct LegacyOmfMotion
@@ -59,6 +68,19 @@ struct LegacyOmfMotion
     u32 frame_count = 0;
     xr_vector<LegacyBoneTrack> bone_tracks;
     LegacyMotionMetadata metadata;
+};
+
+struct ConvertedBoneMotion
+{
+    u16 bone_id = BI_NONE;
+    u8 flags = 0;
+    u32 rotation_crc = 0;
+    u32 translation_crc = 0;
+    xr_vector<CKeyQR> rotation_keys;
+    xr_vector<CKeyQT8> translation_keys8;
+    xr_vector<CKeyQT16> translation_keys16;
+    Fvector translation_init{};
+    Fvector translation_size{};
 };
 
 struct LegacyOmfData
@@ -74,6 +96,8 @@ struct ConvertedOmfAnimation
     xr_string name;
     LegacyMotionMetadata metadata;
     ozz::unique_ptr<ozz::animation::Animation> animation;
+    u32 frame_count = 0;
+    xr_vector<ConvertedBoneMotion> bone_motions;
 };
 
 bool ConvertLegacyOmf(const std::filesystem::path& omf_path,
@@ -90,5 +114,7 @@ bool ConvertLegacyOmf(const std::byte* data,
                       xr_vector<ConvertedOmfAnimation>& out_animations,
                       std::optional<xr_string> motion_filter = std::nullopt,
                       bool optimize = false);
+
+void SerializeBoneMotions(ozz::io::OArchive& archive, const ConvertedOmfAnimation& animation);
 }
 } // namespace XRay::Animation

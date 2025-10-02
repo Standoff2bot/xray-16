@@ -17,6 +17,8 @@
 #include "ozz/base/maths/soa_transform.h"
 #include "ozz/base/span.h"
 
+class CMotion;
+
 namespace ozz
 {
 namespace io
@@ -172,6 +174,16 @@ public:
     shared_str getDebugName() override;
 #endif
 
+    struct MotionRecord
+    {
+        xr_string name;
+        std::shared_ptr<ozz::animation::Animation> animation;
+        CMotionDef definition;
+        MotionID id;
+        u32 frameCount = 0;
+        xr_vector<xr_unique_ptr<CMotion>> boneMotions;
+    };
+
 private:
     void NotImplemented(pcstr function_name) const;
     bool BuildBoneMetadata();
@@ -211,13 +223,7 @@ private:
     xr_vector<KinematicsABT::additional_bone_transform> boneOffsets;
     ozz::animation::SamplingJob::Context samplingContext;
     xr_unique_ptr<OzzAnimationController> animationController;
-    struct MotionRecord
-    {
-        xr_string name;
-        std::shared_ptr<ozz::animation::Animation> animation;
-        CMotionDef definition;
-        MotionID id;
-    };
+
     struct MotionLibrary
     {
         xr_vector<MotionRecord> records;

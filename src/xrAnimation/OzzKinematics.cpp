@@ -8,6 +8,7 @@
 #include "xrCore/FS.h"
 #include "xrCore/FS_impl.h"
 #include "xrCore/Animation/Motion.hpp"
+#include "xrCore/_std_extensions.h"
 
 #include "ozz/animation/runtime/skeleton_utils.h"
 #include "ozz/base/io/archive.h"
@@ -16,8 +17,10 @@
 #include "ozz/base/span.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -86,6 +89,20 @@ std::string ReadOzzString(ozz::io::IArchive& archive)
     return result;
 }
 
+struct MotionBoneData
+{
+    u16 bone_id = BI_NONE;
+    u8 flags = 0;
+    u8 translation_format = 0;
+    u32 rotation_crc = 0;
+    u32 translation_crc = 0;
+    xr_vector<CKeyQR> rotation_keys;
+    xr_vector<CKeyQT8> translation_keys8;
+    xr_vector<CKeyQT16> translation_keys16;
+    Fvector translation_size{};
+    Fvector translation_init{};
+};
+
 struct MotionMetadata
 {
     xr_string name;
@@ -96,6 +113,8 @@ struct MotionMetadata
     float power = 1.f;
     float accrue = 0.f;
     float falloff = 0.f;
+    uint32_t frame_count = 0;
+    xr_vector<MotionBoneData> bone_motions;
 };
 
 MotionMetadata ReadMotionMetadataFromArchive(ozz::io::IArchive& archive)
@@ -131,6 +150,102 @@ MotionMetadata ReadMotionMetadataFromArchive(ozz::io::IArchive& archive)
         }
     }
 
+    archive >> metadata.frame_count;
+
+    uint32_t bone_motion_count = 0;
+    archive >> bone_motion_count;
+    metadata.bone_motions.resize(bone_motion_count);
+
+    for (uint32_t bone_index = 0; bone_index < bone_motion_count; ++bone_index)
+    {
+        MotionBoneData& bone = metadata.bone_motions[bone_index];
+
+        archive >> bone.bone_id;
+
+        uint8_t flags = 0;
+        archive >> flags;
+        bone.flags = flags;
+
+        uint8_t translation_format = 0;
+        archive >> translation_format;
+        bone.translation_format = translation_format;
+
+        archive >> bone.rotation_crc;
+        archive >> bone.translation_crc;
+
+        uint32_t rotation_key_count = 0;
+        archive >> rotation_key_count;
+        bone.rotation_keys.clear();
+        bone.rotation_keys.resize(rotation_key_count);
+        for (uint32_t key_index = 0; key_index < rotation_key_count; ++key_index)
+        {
+            s16 x = 0;
+            s16 y = 0;
+            s16 z = 0;
+            s16 w = 0;
+            archive >> x;
+            archive >> y;
+            archive >> z;
+            archive >> w;
+            bone.rotation_keys[key_index].x = x;
+            bone.rotation_keys[key_index].y = y;
+            bone.rotation_keys[key_index].z = z;
+            bone.rotation_keys[key_index].w = w;
+        }
+
+        uint32_t translation_key_count = 0;
+        archive >> translation_key_count;
+
+        switch (translation_format)
+        {
+        case 1:
+            bone.translation_keys8.clear();
+            bone.translation_keys8.resize(translation_key_count);
+            bone.translation_keys16.clear();
+            for (uint32_t key_index = 0; key_index < translation_key_count; ++key_index)
+            {
+                s8 x = 0;
+                s8 y = 0;
+                s8 z = 0;
+                archive >> x;
+                archive >> y;
+                archive >> z;
+                bone.translation_keys8[key_index].x1 = x;
+                bone.translation_keys8[key_index].y1 = y;
+                bone.translation_keys8[key_index].z1 = z;
+            }
+            break;
+        case 2:
+            bone.translation_keys16.clear();
+            bone.translation_keys16.resize(translation_key_count);
+            bone.translation_keys8.clear();
+            for (uint32_t key_index = 0; key_index < translation_key_count; ++key_index)
+            {
+                s16 x = 0;
+                s16 y = 0;
+                s16 z = 0;
+                archive >> x;
+                archive >> y;
+                archive >> z;
+                bone.translation_keys16[key_index].x1 = x;
+                bone.translation_keys16[key_index].y1 = y;
+                bone.translation_keys16[key_index].z1 = z;
+            }
+            break;
+        default:
+            bone.translation_keys8.clear();
+            bone.translation_keys16.clear();
+            break;
+        }
+
+        archive >> bone.translation_size.x;
+        archive >> bone.translation_size.y;
+        archive >> bone.translation_size.z;
+        archive >> bone.translation_init.x;
+        archive >> bone.translation_init.y;
+        archive >> bone.translation_init.z;
+    }
+
     return metadata;
 }
 
@@ -146,6 +261,124 @@ xr_string BuildMotionNameFromPath(const xr_string& path)
         name.erase(dot);
 
     return name;
+}
+
+u32 CalculateFrameCountFromAnimation(const ozz::animation::Animation* animation)
+{
+    if (!animation)
+        return 1;
+
+    const float duration = animation->duration();
+    if (!std::isfinite(duration) || duration <= 0.f)
+        return 1;
+
+    const double frames = static_cast<double>(duration) * static_cast<double>(SAMPLE_FPS);
+    const double rounded = std::round(frames);
+    if (!std::isfinite(rounded) || rounded <= 0.0)
+        return 1;
+
+    const double clamped = std::min(rounded, static_cast<double>(std::numeric_limits<u32>::max()));
+    const u32 frame_count = static_cast<u32>(clamped);
+    return frame_count > 0 ? frame_count : 1u;
+}
+
+u32 DetermineFrameCount(const MotionMetadata& metadata, const ozz::animation::Animation* animation)
+{
+    if (metadata.frame_count > 0)
+        return metadata.frame_count;
+    return CalculateFrameCountFromAnimation(animation);
+}
+
+u32 ComputeOrDefaultCrc(u32 provided_crc, const void* data, size_t byte_count)
+{
+    if (provided_crc != 0 || byte_count == 0 || data == nullptr)
+        return provided_crc;
+    return crc32(data, static_cast<u32>(byte_count));
+}
+
+bool PopulateMotionRecordFromMetadata(
+    const MotionMetadata& metadata, OzzKinematics::MotionRecord& record, u32 joint_count)
+{
+    if (joint_count == 0)
+        return false;
+
+    const u32 frame_count = std::max<u32>(1u, DetermineFrameCount(metadata, record.animation.get()));
+    record.frameCount = frame_count;
+
+    record.boneMotions.clear();
+    record.boneMotions.resize(joint_count);
+
+    for (const MotionBoneData& bone : metadata.bone_motions)
+    {
+        if (bone.bone_id == BI_NONE || bone.bone_id >= joint_count)
+            continue;
+
+        xr_unique_ptr<CMotion> motion = xr_make_unique<CMotion>();
+        motion->set_flags(bone.flags);
+        motion->set_count(frame_count);
+
+        if (!bone.rotation_keys.empty())
+        {
+            const u32 crc = ComputeOrDefaultCrc(
+                bone.rotation_crc, bone.rotation_keys.data(), bone.rotation_keys.size() * sizeof(CKeyQR));
+            motion->_keysR.create(crc, static_cast<u32>(bone.rotation_keys.size()),
+                const_cast<CKeyQR*>(bone.rotation_keys.data()));
+        }
+
+        switch (bone.translation_format)
+        {
+        case 1:
+            if (!bone.translation_keys8.empty())
+            {
+                const u32 crc = ComputeOrDefaultCrc(bone.translation_crc, bone.translation_keys8.data(),
+                    bone.translation_keys8.size() * sizeof(CKeyQT8));
+                motion->_keysT8.create(crc, static_cast<u32>(bone.translation_keys8.size()),
+                    const_cast<CKeyQT8*>(bone.translation_keys8.data()));
+            }
+            break;
+        case 2:
+            if (!bone.translation_keys16.empty())
+            {
+                const u32 crc = ComputeOrDefaultCrc(bone.translation_crc, bone.translation_keys16.data(),
+                    bone.translation_keys16.size() * sizeof(CKeyQT16));
+                motion->_keysT16.create(crc, static_cast<u32>(bone.translation_keys16.size()),
+                    const_cast<CKeyQT16*>(bone.translation_keys16.data()));
+            }
+            break;
+        default:
+            break;
+        }
+
+        motion->_sizeT = bone.translation_size;
+        motion->_initT = bone.translation_init;
+
+        record.boneMotions[bone.bone_id] = std::move(motion);
+    }
+
+    for (u32 bone_idx = 0; bone_idx < joint_count; ++bone_idx)
+    {
+        if (record.boneMotions[bone_idx])
+            continue;
+
+        xr_unique_ptr<CMotion> fallback = xr_make_unique<CMotion>();
+        fallback->set_flags(flRKeyAbsent);
+        fallback->set_count(frame_count);
+
+        CKeyQR identity{};
+        identity.x = 0;
+        identity.y = 0;
+        identity.z = 0;
+        identity.w = static_cast<s16>(KEY_Quant);
+
+        const u32 crc = ComputeOrDefaultCrc(0, &identity, sizeof(identity));
+        fallback->_keysR.create(crc, 1, const_cast<CKeyQR*>(&identity));
+        fallback->_sizeT.set(0.f, 0.f, 0.f);
+        fallback->_initT.set(0.f, 0.f, 0.f);
+
+        record.boneMotions[bone_idx] = std::move(fallback);
+    }
+
+    return true;
 }
 } // namespace
 
@@ -462,7 +695,11 @@ bool OzzKinematics::LoadOzzAnimationsFromFile(const xr_string& relative_path)
                 return false;
             }
 
-            xr_string motion_name = BuildMotionNameFromPath(relative_path);
+            MotionMetadata metadata = ReadMotionMetadataFromArchive(archive);
+
+            xr_string motion_name = metadata.name;
+            if (motion_name.empty())
+                motion_name = BuildMotionNameFromPath(relative_path);
             if (motion_name.empty())
             {
                 motion_name = "motion_";
@@ -481,15 +718,25 @@ bool OzzKinematics::LoadOzzAnimationsFromFile(const xr_string& relative_path)
             record.id.set(0, motionLibrary.NextIndex());
 
             CMotionDef def;
-            def.bone_or_part = 0;
-            def.motion = record.id.idx;
-            def.speed = def.Quantize(1.f);
-            def.power = def.Quantize(1.f);
-            def.accrue = def.Quantize(0.f);
-            def.falloff = def.Quantize(0.f);
-            def.flags = 0;
+            def.bone_or_part = metadata.bone_or_part;
+            def.motion = metadata.motion_id;
+            const float speed = std::max(metadata.speed, 0.f);
+            const float power = std::max(metadata.power, 0.f);
+            const float accrue = std::max(metadata.accrue, 0.f);
+            const float falloff = std::max(metadata.falloff, 0.f);
+            def.speed = def.Quantize(speed);
+            def.power = def.Quantize(power);
+            def.accrue = def.Quantize(accrue);
+            def.falloff = def.Quantize(falloff);
+            def.flags = static_cast<u16>(metadata.flags);
+            if (!(def.flags & esmFX) && def.falloff >= def.accrue && def.accrue > 0)
+                def.falloff = static_cast<u16>(def.accrue - 1);
             def.marks.clear();
+
             record.definition = def;
+
+            if (!PopulateMotionRecordFromMetadata(metadata, record, static_cast<u32>(skeleton.num_joints())))
+                return false;
 
             motionLibrary.Add(std::move(record));
             loaded_any = true;
@@ -562,6 +809,9 @@ bool OzzKinematics::LoadOzzAnimationsFromArchive(ozz::io::IArchive& archive, con
         def.marks.clear();
 
         record.definition = def;
+
+        if (!PopulateMotionRecordFromMetadata(metadata, record, static_cast<u32>(skeleton.num_joints())))
+            continue;
 
         motionLibrary.Add(std::move(record));
         loaded_any = true;
@@ -1332,14 +1582,41 @@ CMotionDef* OzzKinematics::LL_GetMotionDef(MotionID id)
     return record ? &record->definition : nullptr;
 }
 
-CMotion* OzzKinematics::LL_GetRootMotion(MotionID /*id*/)
+CMotion* OzzKinematics::LL_GetRootMotion(MotionID id)
 {
-    return nullptr;
+    if (!id.valid())
+        return nullptr;
+
+    const u16 resolved_root = (rootBone != BI_NONE) ? rootBone : u16(0);
+    return LL_GetMotion(id, resolved_root);
 }
 
-CMotion* OzzKinematics::LL_GetMotion(MotionID /*id*/, u16 /*bone_id*/)
+CMotion* OzzKinematics::LL_GetMotion(MotionID id, u16 bone_id)
 {
-    return nullptr;
+    if (!id.valid() || id.slot != 0)
+        return nullptr;
+
+    if (!initialized)
+        return nullptr;
+
+    if (bone_id == BI_NONE)
+        return nullptr;
+
+    const u32 joint_count = static_cast<u32>(skeleton.num_joints());
+    if (joint_count == 0 || bone_id >= joint_count)
+        return nullptr;
+
+    EnsureMotionLibraryLoaded();
+
+    MotionRecord* record = motionLibrary.Find(id.idx);
+    if (!record)
+        return nullptr;
+
+    if (record->boneMotions.size() != joint_count)
+        return nullptr;
+
+    const xr_unique_ptr<CMotion>& motion = record->boneMotions[bone_id];
+    return motion.get();
 }
 
 void OzzKinematics::LL_BuldBoneMatrixDequatize(const CBoneData* /*bd*/, u8 /*channel_mask*/, SKeyTable& /*keys*/)

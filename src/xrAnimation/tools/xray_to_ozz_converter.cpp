@@ -467,6 +467,7 @@ void convert_animation(const AnimationConfig& config)
         }
 
         SerializeMotionMetadata(archive, metadata);
+        XRay::Animation::SerializeBoneMotions(archive, entry);
         metadata_to_write.push_back(std::move(metadata));
     }
 

@@ -395,6 +395,7 @@ bool WriteOzzAnimations(const StartupConversionParams& params,
             continue;
         archive << *entry.animation;
         SerializeMotionMetadata(archive, entry.metadata);
+        SerializeBoneMotions(archive, entry);
     }
 
     Msg("[ozz] wrote animation %s", output_string.c_str());

@@ -327,88 +327,121 @@ void ParseMotions(const Chunk& chunk, const LegacyOmfData& params, LegacyOmfData
             LegacyBoneTrack track;
             track.rotations.resize(motion.frame_count);
             track.translations.resize(motion.frame_count);
+            track.translation_init.set(0.f, 0.f, 0.f);
+            track.translation_size.set(0.f, 0.f, 0.f);
 
             const uint8_t flags = reader.ReadUInt8();
+            track.flags = flags;
             const bool rotation_present = (flags & flRKeyAbsent) == 0;
             const bool translation_present = (flags & flTKeyPresent) != 0;
             const bool high_quality_translation = (flags & flTKey16IsBit) != 0;
 
-            auto read_quaternion = [&reader]() -> Fquaternion
-            {
-                const int16_t x = reader.Read<int16_t>();
-                const int16_t y = reader.Read<int16_t>();
-                const int16_t z = reader.Read<int16_t>();
-                const int16_t w = reader.Read<int16_t>();
-                Fquaternion q;
-                q.x = static_cast<float>(x) * KEY_QuantI;
-                q.y = static_cast<float>(y) * KEY_QuantI;
-                q.z = static_cast<float>(z) * KEY_QuantI;
-                q.w = static_cast<float>(w) * KEY_QuantI;
-                q.normalize();
-                return q;
-            };
-
             if (rotation_present)
             {
-                reader.Read<u32>();
+                track.rotation_crc = reader.Read<u32>();
+                track.rotation_keys.resize(motion.frame_count);
                 for (u32 frame = 0; frame < motion.frame_count; ++frame)
-                    track.rotations[frame] = read_quaternion();
+                {
+                    CKeyQR key{};
+                    key.x = reader.Read<int16_t>();
+                    key.y = reader.Read<int16_t>();
+                    key.z = reader.Read<int16_t>();
+                    key.w = reader.Read<int16_t>();
+                    track.rotation_keys[frame] = key;
+
+                    Fquaternion q;
+                    q.x = static_cast<float>(key.x) * KEY_QuantI;
+                    q.y = static_cast<float>(key.y) * KEY_QuantI;
+                    q.z = static_cast<float>(key.z) * KEY_QuantI;
+                    q.w = static_cast<float>(key.w) * KEY_QuantI;
+                    q.normalize();
+                    track.rotations[frame] = q;
+                }
             }
             else
             {
-                const Fquaternion q = read_quaternion();
+                track.rotation_crc = 0;
+                track.rotation_keys.resize(1);
+                CKeyQR key{};
+                key.x = reader.Read<int16_t>();
+                key.y = reader.Read<int16_t>();
+                key.z = reader.Read<int16_t>();
+                key.w = reader.Read<int16_t>();
+                track.rotation_keys[0] = key;
+
+                Fquaternion q;
+                q.x = static_cast<float>(key.x) * KEY_QuantI;
+                q.y = static_cast<float>(key.y) * KEY_QuantI;
+                q.z = static_cast<float>(key.z) * KEY_QuantI;
+                q.w = static_cast<float>(key.w) * KEY_QuantI;
+                q.normalize();
                 std::fill(track.rotations.begin(), track.rotations.end(), q);
             }
 
             if (translation_present)
             {
-                reader.Read<u32>();
+                track.translation_crc = reader.Read<u32>();
                 if (high_quality_translation)
                 {
-                    xr_vector<std::array<int16_t, 3>> samples(motion.frame_count);
+                    track.translation_keys16.resize(motion.frame_count);
                     for (u32 frame = 0; frame < motion.frame_count; ++frame)
                     {
-                        samples[frame][0] = reader.Read<int16_t>();
-                        samples[frame][1] = reader.Read<int16_t>();
-                        samples[frame][2] = reader.Read<int16_t>();
+                        CKeyQT16 sample{};
+                        sample.x1 = reader.Read<int16_t>();
+                        sample.y1 = reader.Read<int16_t>();
+                        sample.z1 = reader.Read<int16_t>();
+                        track.translation_keys16[frame] = sample;
                     }
 
                     const Fvector size = reader.ReadFvector3();
                     const Fvector init = reader.ReadFvector3();
+                    track.translation_size = size;
+                    track.translation_init = init;
+
                     for (u32 frame = 0; frame < motion.frame_count; ++frame)
                     {
+                        const CKeyQT16& sample = track.translation_keys16[frame];
                         Fvector t;
-                        t.x = static_cast<float>(samples[frame][0]) * size.x + init.x;
-                        t.y = static_cast<float>(samples[frame][1]) * size.y + init.y;
-                        t.z = static_cast<float>(samples[frame][2]) * size.z + init.z;
+                        t.x = static_cast<float>(sample.x1) * size.x + init.x;
+                        t.y = static_cast<float>(sample.y1) * size.y + init.y;
+                        t.z = static_cast<float>(sample.z1) * size.z + init.z;
                         track.translations[frame] = t;
                     }
                 }
                 else
                 {
-                    xr_vector<std::array<int8_t, 3>> samples(motion.frame_count);
+                    track.translation_keys8.resize(motion.frame_count);
                     for (u32 frame = 0; frame < motion.frame_count; ++frame)
                     {
-                        samples[frame][0] = reader.ReadInt8();
-                        samples[frame][1] = reader.ReadInt8();
-                        samples[frame][2] = reader.ReadInt8();
+                        CKeyQT8 sample{};
+                        sample.x1 = reader.ReadInt8();
+                        sample.y1 = reader.ReadInt8();
+                        sample.z1 = reader.ReadInt8();
+                        track.translation_keys8[frame] = sample;
                     }
 
                     const Fvector size = reader.ReadFvector3();
                     const Fvector init = reader.ReadFvector3();
+                    track.translation_size = size;
+                    track.translation_init = init;
+
                     for (u32 frame = 0; frame < motion.frame_count; ++frame)
                     {
+                        const CKeyQT8& sample = track.translation_keys8[frame];
                         Fvector t;
-                        t.x = static_cast<float>(samples[frame][0]) * size.x + init.x;
-                        t.y = static_cast<float>(samples[frame][1]) * size.y + init.y;
-                        t.z = static_cast<float>(samples[frame][2]) * size.z + init.z;
+                        t.x = static_cast<float>(sample.x1) * size.x + init.x;
+                        t.y = static_cast<float>(sample.y1) * size.y + init.y;
+                        t.z = static_cast<float>(sample.z1) * size.z + init.z;
                         track.translations[frame] = t;
                     }
                 }
             }
             else
             {
+                track.translation_crc = 0;
                 const Fvector init = reader.ReadFvector3();
+                track.translation_init = init;
+                track.translation_size.set(0.f, 0.f, 0.f);
                 std::fill(track.translations.begin(), track.translations.end(), init);
             }
 
@@ -518,6 +551,31 @@ ConvertedOmfAnimation BuildConvertedAnimation(const LegacyOmfMotion& motion, con
     converted.name = motion.name;
     converted.metadata = motion.metadata;
     converted.animation = std::move(animation);
+    converted.frame_count = motion.frame_count;
+    converted.bone_motions.reserve(omf.bone_remap.size());
+
+    for (size_t remap_index = 0; remap_index < omf.bone_remap.size(); ++remap_index)
+    {
+        const u16 bone_id = omf.bone_remap[remap_index];
+        if (bone_id == u16(BI_NONE))
+            continue;
+
+        const LegacyBoneTrack& track = motion.bone_tracks[remap_index];
+
+        ConvertedBoneMotion bone_motion;
+        bone_motion.bone_id = bone_id;
+        bone_motion.flags = track.flags;
+        bone_motion.rotation_crc = track.rotation_crc;
+        bone_motion.translation_crc = track.translation_crc;
+        bone_motion.rotation_keys = track.rotation_keys;
+        bone_motion.translation_keys8 = track.translation_keys8;
+        bone_motion.translation_keys16 = track.translation_keys16;
+        bone_motion.translation_init = track.translation_init;
+        bone_motion.translation_size = track.translation_size;
+
+        converted.bone_motions.emplace_back(std::move(bone_motion));
+    }
+
     return converted;
 }
 
@@ -556,6 +614,82 @@ bool ConvertLegacyOmfImpl(const LegacyOmfData& omf,
     return true;
 }
 } // namespace
+
+void SerializeBoneMotions(ozz::io::OArchive& archive, const ConvertedOmfAnimation& animation)
+{
+    const uint32_t frame_count = animation.frame_count;
+    archive << frame_count;
+
+    const uint32_t bone_motion_count = static_cast<uint32_t>(animation.bone_motions.size());
+    archive << bone_motion_count;
+
+    for (const ConvertedBoneMotion& bone : animation.bone_motions)
+    {
+        archive << bone.bone_id;
+        archive << bone.flags;
+
+        uint8_t translation_format = 0;
+        if (!bone.translation_keys16.empty())
+            translation_format = 2;
+        else if (!bone.translation_keys8.empty())
+            translation_format = 1;
+        archive << translation_format;
+
+        archive << bone.rotation_crc;
+        archive << bone.translation_crc;
+
+        const uint32_t rotation_key_count = static_cast<uint32_t>(bone.rotation_keys.size());
+        archive << rotation_key_count;
+        for (const CKeyQR& key : bone.rotation_keys)
+        {
+            archive << key.x;
+            archive << key.y;
+            archive << key.z;
+            archive << key.w;
+        }
+
+        switch (translation_format)
+        {
+        case 1:
+        {
+            const uint32_t translation_key_count = static_cast<uint32_t>(bone.translation_keys8.size());
+            archive << translation_key_count;
+            for (const CKeyQT8& key : bone.translation_keys8)
+            {
+                archive << key.x1;
+                archive << key.y1;
+                archive << key.z1;
+            }
+            break;
+        }
+        case 2:
+        {
+            const uint32_t translation_key_count = static_cast<uint32_t>(bone.translation_keys16.size());
+            archive << translation_key_count;
+            for (const CKeyQT16& key : bone.translation_keys16)
+            {
+                archive << key.x1;
+                archive << key.y1;
+                archive << key.z1;
+            }
+            break;
+        }
+        default:
+        {
+            const uint32_t translation_key_count = 0;
+            archive << translation_key_count;
+            break;
+        }
+        }
+
+        archive << bone.translation_size.x;
+        archive << bone.translation_size.y;
+        archive << bone.translation_size.z;
+        archive << bone.translation_init.x;
+        archive << bone.translation_init.y;
+        archive << bone.translation_init.z;
+    }
+}
 
 bool ConvertLegacyOmf(const std::filesystem::path& omf_path,
                       const xr_vector<xr_string>& skeleton_bone_names,

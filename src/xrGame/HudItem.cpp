@@ -290,11 +290,6 @@ u32 CHudItem::PlayHUDMotion(const shared_str& M, const shared_str& M2, BOOL bMix
 {
     u32 time = 0;
 
-    if (m_object->Visual()->dcast_OzzKinematics())
-    {
-        return time;
-    }
-
     if (isHUDAnimationExist(M.c_str()))
         time = PlayHUDMotion(M, bMixIn, W, state);
     else if (isHUDAnimationExist(M2.c_str()))
