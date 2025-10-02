@@ -75,6 +75,8 @@ public:
 
     void DebugDumpPalette(const xr_vector<Fmatrix>& palette) const override;
 
+    xray::render::RENDER_NAMESPACE::COzzKinematicsVisual* dcast_OzzKinematics() override { return nullptr; }
+
 protected:
     static bool AcquirePaletteDumpTicket();
     void DumpPaletteLog(const char* tag, const char* label, const xr_vector<Fmatrix>& palette) const;

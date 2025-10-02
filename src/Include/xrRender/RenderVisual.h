@@ -10,6 +10,11 @@ class IKinematicsAnimated;
 class IParticleCustom;
 struct vis_data;
 
+namespace xray::render::RENDER_NAMESPACE
+{
+class COzzKinematicsVisual;
+}
+
 class XR_NOVTABLE IRenderVisual
 {
 public:
@@ -27,6 +32,7 @@ public:
     virtual IKinematics* dcast_PKinematics() { return nullptr; }
     virtual IKinematicsAnimated* dcast_PKinematicsAnimated() { return nullptr; }
     virtual IParticleCustom* dcast_ParticleCustom() { return nullptr; }
+    virtual xray::render::RENDER_NAMESPACE::COzzKinematicsVisual* dcast_OzzKinematics() { return nullptr; }
 };
 
 inline IRenderVisual::~IRenderVisual() = default;

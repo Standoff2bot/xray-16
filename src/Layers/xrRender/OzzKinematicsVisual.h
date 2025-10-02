@@ -41,6 +41,7 @@ public:
 
     IKinematics* dcast_PKinematics() override { return this; }
     IKinematicsAnimated* dcast_PKinematicsAnimated() override { return this; }
+    COzzKinematicsVisual* dcast_OzzKinematics() override { return this; }
 
     OzzKinematics& Kinematics() { return *this; }
     const OzzKinematics& Kinematics() const { return *this; }
