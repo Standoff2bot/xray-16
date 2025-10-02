@@ -189,6 +189,7 @@ private:
     bool LoadOzzAnimationsFromFile(const xr_string& relative_path);
     bool LoadOzzAnimationsFromArchive(ozz::io::IArchive& archive, const xr_string& source_label);
     bool LoadMotionReference(const xr_string& reference);
+    void EnsureMotionLibraryLoaded();
 
 private:
     CInifile* user_data_;
@@ -223,6 +224,7 @@ private:
     xr_unordered_map<xr_string, u16> motion_lookup_;
     xr_set<xr_string> loaded_animation_sources_;
     xr_vector<xr_string> motion_references_;
+    bool motion_library_initialized_ = false;
     IBlendDestroyCallback* blend_destroy_callback_ = nullptr;
     IUpdateTracksCallback* update_tracks_callback_ = nullptr;
     bool animation_applied_ = false;

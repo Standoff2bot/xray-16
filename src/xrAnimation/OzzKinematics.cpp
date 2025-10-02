@@ -244,14 +244,10 @@ void OzzKinematics::ResetAnimationState()
     loaded_motions_.clear();
     motion_lookup_.clear();
     loaded_animation_sources_.clear();
+    motion_library_initialized_ = false;
     blend_destroy_callback_ = nullptr;
     update_tracks_callback_ = nullptr;
     animation_applied_ = false;
-    active_cycle_blend_.reset();
-    active_cycle_motion_.invalidate();
-    active_cycle_partition_ = BI_NONE;
-    active_cycle_channel_ = 0;
-    active_cycle_motion_index_ = -1;
 }
 
 bool OzzKinematics::EnsureAnimationController()
@@ -279,8 +275,18 @@ void OzzKinematics::SetLegacyMotionReferences(const xr_vector<xr_string>& refere
     loaded_motions_.clear();
     motion_lookup_.clear();
     loaded_animation_sources_.clear();
+    motion_library_initialized_ = false;
+}
+
+void OzzKinematics::EnsureMotionLibraryLoaded()
+{
+    if (motion_library_initialized_)
+        return;
+
     for (const auto& reference : motion_references_)
         LoadMotionReference(reference);
+
+    motion_library_initialized_ = true;
 }
 
 xr_vector<xr_string> OzzKinematics::LegacyMotionNames()
@@ -307,15 +313,12 @@ bool OzzKinematics::LoadMotionReference(const xr_string& reference)
     if (!EndsWithIgnoreCase(candidate, ".ozz"))
         candidate += ".ozz";
 
-    xr_string normalized = candidate;
-    std::replace(normalized.begin(), normalized.end(), '\\', '/');
-
-    if (loaded_animation_sources_.find(normalized) != loaded_animation_sources_.end())
+    if (loaded_animation_sources_.find(candidate) != loaded_animation_sources_.end())
         return true;
 
     if (LoadOzzAnimationsFromFile(candidate))
     {
-        loaded_animation_sources_.insert(normalized);
+        loaded_animation_sources_.insert(candidate);
         return true;
     }
 
@@ -373,11 +376,6 @@ void OzzKinematics::StopAnimation()
     animation_applied_ = false;
     ClearPose();
     CalculateBones_Invalidate();
-    active_cycle_blend_.reset();
-    active_cycle_motion_.invalidate();
-    active_cycle_partition_ = BI_NONE;
-    active_cycle_channel_ = 0;
-    active_cycle_motion_index_ = -1;
 }
 
 MotionID OzzKinematics::ResolveLegacyMotionId(const xr_string& motion_name)
