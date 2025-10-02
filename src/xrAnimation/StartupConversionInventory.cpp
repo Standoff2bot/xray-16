@@ -282,13 +282,13 @@ bool FileExists(const xr_string& alias, const xr_string& relative_path)
 bool BundleExists(const LegacyVisualAsset& visual, const StartupConversionParams& params)
 {
     const xr_string relative = BuildBundleRelativePath(visual);
-    return FileExists(params.bundle_output_alias, relative);
+    return FileExists(params.ozz_output_alias, relative);
 }
 
 bool MotionExists(const LegacyMotionAsset& motion, const StartupConversionParams& params)
 {
     const xr_string relative = BuildMotionOutputRelativePath(motion);
-    return FileExists(params.animation_output_alias, relative);
+    return FileExists(params.ozz_output_alias, relative);
 }
 
 void SerializeString(ozz::io::OArchive& archive, const std::string& value)
@@ -335,7 +335,7 @@ bool WriteBundleFile(const StartupConversionParams& params,
 {
     const xr_string relative = BuildBundleRelativePath(visual);
     fs::path output_path;
-    if (!ResolveAbsolutePath(params.bundle_output_alias, relative, output_path))
+    if (!ResolveAbsolutePath(params.ozz_output_alias, relative, output_path))
     {
         Msg("! [ozz] Failed to resolve bundle output path for '%s'", visual.normalized_identifier.c_str());
         return false;
@@ -368,7 +368,7 @@ bool WriteOzzAnimations(const StartupConversionParams& params,
                         const xr_vector<ConvertedOmfAnimation>& animations)
 {
     fs::path output_path;
-    if (!ResolveAbsolutePath(params.animation_output_alias, output_relative, output_path))
+    if (!ResolveAbsolutePath(params.ozz_output_alias, output_relative, output_path))
     {
         Msg("! [ozz] Failed to resolve animation output path '%s'", output_relative.c_str());
         return false;
@@ -1004,7 +1004,7 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                     mt_it->second.asset = motion;
                     mt_it->second.output_relative = BuildMotionOutputRelativePath(*motion);
                     mt_it->second.convert = force_rebuild ||
-                        !FileExists(params.animation_output_alias, mt_it->second.output_relative);
+                        !FileExists(params.ozz_output_alias, mt_it->second.output_relative);
                 }
             }
         }

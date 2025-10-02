@@ -81,8 +81,7 @@ inline constexpr char kInventoryDigestKey[] = "inventory_digest";
 
 struct StartupConversionParams
 {
-    xr_string bundle_output_alias = "$game_meshes$";
-    xr_string animation_output_alias = "$game_anims$";
+    xr_string ozz_output_alias = "$game_meshes$";
 };
 
 struct StartupConversionStats
