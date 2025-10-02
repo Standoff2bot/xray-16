@@ -554,13 +554,11 @@ bool OzzKinematics::LoadOzzAnimationsFromArchive(ozz::io::IArchive& archive, con
 
         if (!initialized_ || animation->num_tracks() != skeleton_.num_joints())
         {
-            Msg("[ozz] Ignoring animation '%s' from '%s' due to track mismatch", motion_name.c_str(), source_label.c_str());
             continue;
         }
 
         if (motion_lookup_.find(motion_name) != motion_lookup_.end())
         {
-            Msg("[ozz] Duplicate animation '%s' encountered in '%s'", motion_name.c_str(), source_label.c_str());
             continue;
         }
 
@@ -1043,6 +1041,30 @@ Fobb& OzzKinematics::LL_GetBox(u16 bone_id)
 
 const Fbox& OzzKinematics::GetBox() const
 {
+    auto* self = const_cast<OzzKinematics*>(this);
+
+    if (!initialized_ || bone_instances_.empty())
+    {
+        self->cached_box_.invalidate();
+        return cached_box_;
+    }
+
+    Fbox computed;
+    computed.invalidate();
+
+    for (size_t idx = 0; idx < bone_instances_.size(); ++idx)
+    {
+        if (!IsBoneVisible(idx))
+            continue;
+
+        const Fmatrix& transform = bone_instances_[idx].mTransform;
+        computed.modify(transform.c);
+    }
+
+    if (!computed.is_valid())
+        computed.set_zero();
+
+    self->cached_box_ = computed;
     return cached_box_;
 }
 
