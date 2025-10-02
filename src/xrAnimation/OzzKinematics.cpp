@@ -17,8 +17,11 @@
 
 #include <algorithm>
 #include <cstring>
-#include <limits>
+#include <filesystem>
+#include <string>
 #include <vector>
+
+namespace fs = std::filesystem;
 
 namespace XRay
 {
@@ -58,6 +61,91 @@ Fobb& StubObb()
 {
     static Fobb stub;
     return stub;
+}
+
+bool EndsWithIgnoreCase(const xr_string& value, pcstr suffix)
+{
+    if (!suffix)
+        return false;
+    const size_t suffix_length = xr_strlen(suffix);
+    if (value.size() < suffix_length)
+        return false;
+    return xr_stricmp(value.c_str() + value.size() - suffix_length, suffix) == 0;
+}
+
+std::string ReadOzzString(ozz::io::IArchive& archive)
+{
+    uint32_t length = 0;
+    archive >> length;
+    std::string result;
+    if (length == 0)
+        return result;
+
+    result.resize(length);
+    archive >> ozz::io::MakeArray(result.data(), length);
+    return result;
+}
+
+struct MotionMetadata
+{
+    xr_string name;
+    uint32_t flags = 0;
+    uint16_t bone_or_part = 0;
+    uint16_t motion_id = 0;
+    float speed = 1.f;
+    float power = 1.f;
+    float accrue = 0.f;
+    float falloff = 0.f;
+};
+
+MotionMetadata ReadMotionMetadataFromArchive(ozz::io::IArchive& archive)
+{
+    MotionMetadata metadata;
+
+    std::string name = ReadOzzString(archive);
+    metadata.name = name.c_str();
+
+    archive >> metadata.flags;
+    archive >> metadata.bone_or_part;
+    archive >> metadata.motion_id;
+    archive >> metadata.speed;
+    archive >> metadata.power;
+    archive >> metadata.accrue;
+    archive >> metadata.falloff;
+
+    uint32_t mark_count = 0;
+    archive >> mark_count;
+
+    for (uint32_t mark_index = 0; mark_index < mark_count; ++mark_index)
+    {
+        ReadOzzString(archive); // mark name
+
+        uint32_t interval_count = 0;
+        archive >> interval_count;
+        for (uint32_t interval_index = 0; interval_index < interval_count; ++interval_index)
+        {
+            float start = 0.f;
+            float end = 0.f;
+            archive >> start;
+            archive >> end;
+        }
+    }
+
+    return metadata;
+}
+
+xr_string BuildMotionNameFromPath(const xr_string& path)
+{
+    xr_string name = path;
+    const size_t slash = name.find_last_of("/\\");
+    if (slash != xr_string::npos)
+        name.erase(0, slash + 1);
+
+    const size_t dot = name.find_last_of('.');
+    if (dot != xr_string::npos)
+        name.erase(dot);
+
+    return name;
 }
 } // namespace
 
@@ -153,12 +241,9 @@ void OzzKinematics::ResetAnimationState()
 {
     animation_controller_.reset();
     motion_references_.clear();
-    legacy_motion_metadata_.clear();
-    legacy_motion_library_.clear();
-    converted_motion_sources_.clear();
-    legacy_motion_lookup_.clear();
-    legacy_motion_ids_.clear();
-    legacy_motion_defs_.clear();
+    loaded_motions_.clear();
+    motion_lookup_.clear();
+    loaded_animation_sources_.clear();
     blend_destroy_callback_ = nullptr;
     update_tracks_callback_ = nullptr;
     animation_applied_ = false;
@@ -186,26 +271,19 @@ bool OzzKinematics::EnsureAnimationController()
 void OzzKinematics::SetLegacyMotionReferences(const xr_vector<xr_string>& references)
 {
     motion_references_ = references;
-    legacy_motion_metadata_.clear();
-    legacy_motion_library_.clear();
-    converted_motion_sources_.clear();
-    legacy_motion_lookup_.clear();
-    legacy_motion_ids_.clear();
-    legacy_motion_defs_.clear();
+    loaded_motions_.clear();
+    motion_lookup_.clear();
+    loaded_animation_sources_.clear();
+    for (const auto& reference : motion_references_)
+        LoadMotionReference(reference);
 }
 
 xr_vector<xr_string> OzzKinematics::LegacyMotionNames()
 {
-    if (legacy_motion_metadata_.empty() && !motion_references_.empty())
-    {
-        if (legacy_motion_library_.empty())
-            BuildLegacyMotionLibrary();
-    }
-
     xr_vector<xr_string> names;
-    names.reserve(legacy_motion_metadata_.size());
-    for (const auto& entry : legacy_motion_metadata_)
-        names.push_back(entry.first);
+    names.reserve(loaded_motions_.size());
+    for (const auto& motion : loaded_motions_)
+        names.push_back(motion.name);
 
     std::sort(names.begin(), names.end(),
         [](const xr_string& lhs, const xr_string& rhs)
@@ -215,24 +293,28 @@ xr_vector<xr_string> OzzKinematics::LegacyMotionNames()
     return names;
 }
 
-bool OzzKinematics::BuildLegacyMotionLibrary()
+bool OzzKinematics::LoadMotionReference(const xr_string& reference)
 {
-    if (motion_references_.empty())
+    if (reference.empty())
         return false;
 
-    const auto bone_names = CollectSkeletonBoneNames();
-    if (bone_names.empty())
-        return false;
+    xr_string candidate = reference;
+    if (!EndsWithIgnoreCase(candidate, ".ozz"))
+        candidate += ".ozz";
 
-    bool converted_any = false;
-    for (const auto& reference : motion_references_)
+    xr_string normalized = candidate;
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+
+    if (loaded_animation_sources_.find(normalized) != loaded_animation_sources_.end())
+        return true;
+
+    if (LoadOzzAnimationsFromFile(candidate))
     {
-        const auto candidates = ResolveMotionReference(reference);
-        for (const auto& candidate : candidates)
-            converted_any |= ConvertLegacyOmfFile(candidate, bone_names);
+        loaded_animation_sources_.insert(normalized);
+        return true;
     }
 
-    return converted_any;
+    return false;
 }
 
 bool OzzKinematics::LoadLegacyMotion(const xr_string& motion_name)
@@ -240,19 +322,17 @@ bool OzzKinematics::LoadLegacyMotion(const xr_string& motion_name)
     if (!EnsureAnimationController())
         return false;
 
-    if (legacy_motion_library_.empty() && !motion_references_.empty())
-        BuildLegacyMotionLibrary();
-
-    const auto it = legacy_motion_library_.find(motion_name);
-    if (it == legacy_motion_library_.end() || !it->second)
+    auto it = motion_lookup_.find(motion_name);
+    if (it == motion_lookup_.end())
     {
-        Msg("[OzzKinematics] Legacy motion '%s' not available", motion_name.c_str());
+        Msg("[OzzKinematics] Motion '%s' not available", motion_name.c_str());
         return false;
     }
 
-    if (!animation_controller_->LoadAnimation(it->second))
+    const LoadedMotion& motion = loaded_motions_[it->second];
+    if (!animation_controller_->LoadAnimation(motion.animation))
     {
-        Msg("[OzzKinematics] Failed to bind legacy motion '%s'", motion_name.c_str());
+        Msg("[OzzKinematics] Failed to bind motion '%s'", motion_name.c_str());
         return false;
     }
 
@@ -290,95 +370,16 @@ void OzzKinematics::StopAnimation()
     CalculateBones_Invalidate();
 }
 
-MotionID OzzKinematics::RegisterLegacyMotionId(const xr_string& motion_name)
-{
-    if (motion_name.empty())
-        return MotionID();
-
-    const auto existing = legacy_motion_lookup_.find(motion_name);
-    if (existing != legacy_motion_lookup_.end())
-        return existing->second;
-
-    if (legacy_motion_ids_.size() >= std::numeric_limits<u16>::max())
-    {
-        Msg("[OzzKinematics] Too many legacy motions registered, cannot assign MotionID for '%s'", motion_name.c_str());
-        return MotionID();
-    }
-
-    MotionID id;
-    id.set(0, static_cast<u16>(legacy_motion_ids_.size()));
-    legacy_motion_ids_.push_back(motion_name);
-    legacy_motion_lookup_.emplace(motion_name, id);
-    EnsureLegacyMotionDef(id.idx, motion_name);
-    return id;
-}
-
 MotionID OzzKinematics::ResolveLegacyMotionId(const xr_string& motion_name)
 {
     if (motion_name.empty())
         return MotionID();
 
-    const auto cached = legacy_motion_lookup_.find(motion_name);
-    if (cached != legacy_motion_lookup_.end())
-        return cached->second;
-
-    if (legacy_motion_library_.empty() && !motion_references_.empty())
-        BuildLegacyMotionLibrary();
-
-    if (legacy_motion_library_.find(motion_name) == legacy_motion_library_.end())
+    auto it = motion_lookup_.find(motion_name);
+    if (it == motion_lookup_.end())
         return MotionID();
 
-    return RegisterLegacyMotionId(motion_name);
-}
-
-void OzzKinematics::EnsureLegacyMotionDef(u16 index, const xr_string& motion_name)
-{
-    if (legacy_motion_defs_.size() <= index)
-        legacy_motion_defs_.resize(static_cast<size_t>(index) + 1);
-
-    CMotionDef& def = legacy_motion_defs_[index];
-
-    const auto meta_it = legacy_motion_metadata_.find(motion_name);
-    if (meta_it == legacy_motion_metadata_.end())
-    {
-        def.bone_or_part = 0;
-        def.motion = index;
-        def.speed = def.Quantize(1.f);
-        def.power = def.Quantize(1.f);
-        def.accrue = def.Quantize(0.f);
-        def.falloff = def.Quantize(0.f);
-        def.flags = 0;
-        def.marks.clear();
-        return;
-    }
-
-    const LegacyMotionMetadata& meta = meta_it->second;
-
-    def.bone_or_part = meta.bone_or_part;
-    def.motion = meta.motion_id;
-    const float speed = std::max(meta.speed, 0.f);
-    const float power = std::max(meta.power, 0.f);
-    const float accrue = std::max(meta.accrue, 0.f);
-    const float falloff = std::max(meta.falloff, 0.f);
-    def.speed = def.Quantize(speed);
-    def.power = def.Quantize(power);
-    def.accrue = def.Quantize(accrue);
-    def.falloff = def.Quantize(falloff);
-    def.flags = static_cast<u16>(meta.flags);
-    if (!(def.flags & esmFX) && def.falloff >= def.accrue && def.accrue > 0)
-        def.falloff = static_cast<u16>(def.accrue - 1);
-
-    def.marks.clear();
-    if (!meta.marks.empty())
-    {
-        def.marks.reserve(meta.marks.size());
-        for (const LegacyMotionMark& mark : meta.marks)
-        {
-            motion_marks converted;
-            converted.name = shared_str(mark.name.c_str());
-            def.marks.emplace_back(std::move(converted));
-        }
-    }
+    return loaded_motions_[it->second].id;
 }
 
 bool OzzKinematics::AdvanceAnimation(float dt)
@@ -416,138 +417,172 @@ bool OzzKinematics::HasLoadedAnimation() const
     return animation_controller_ && animation_controller_->HasAnimation();
 }
 
-xr_vector<xr_string> OzzKinematics::CollectSkeletonBoneNames() const
+bool OzzKinematics::LoadOzzAnimationsFromFile(const xr_string& relative_path)
 {
-    xr_vector<xr_string> names;
-    if (!initialized_)
-        return names;
-
-    const int bone_count = skeleton_.num_joints();
-    if (bone_count <= 0)
-        return names;
-
-    names.reserve(static_cast<size_t>(bone_count));
-    const auto joint_names = skeleton_.joint_names();
-    for (int idx = 0; idx < bone_count; ++idx)
-    {
-        const char* name = (static_cast<size_t>(idx) < joint_names.size() && joint_names[idx]) ? joint_names[idx] : "";
-        names.emplace_back(name ? name : "");
-    }
-    return names;
-}
-
-xr_vector<xr_string> OzzKinematics::ResolveMotionReference(const xr_string& reference) const
-{
-    xr_vector<xr_string> results;
-    if (reference.empty())
-        return results;
-
-    if (reference.find('*') != xr_string::npos)
-    {
-        FS_FileSet files;
-        FS.file_list(files, "$level$", FS_ListFiles, reference.c_str());
-        FS.file_list(files, "$game_meshes$", FS_ListFiles, reference.c_str());
-
-        xr_set<xr_string> unique;
-        for (const auto& entry : files)
-            unique.emplace(entry.name.c_str());
-
-        results.reserve(unique.size());
-        for (const auto& name : unique)
-            results.emplace_back(name);
-        return results;
-    }
-
-    xr_string candidate = reference;
-    constexpr size_t ext_length = 4;
-    if (candidate.size() < ext_length ||
-        xr_stricmp(candidate.c_str() + candidate.size() - ext_length, ".omf") != 0)
-    {
-        candidate += ".omf";
-    }
-
-    results.emplace_back(std::move(candidate));
-    return results;
-}
-
-bool OzzKinematics::ConvertLegacyOmfFile(const xr_string& relative_path, const xr_vector<xr_string>& skeleton_bone_names)
-{
-    if (converted_motion_sources_.find(relative_path) != converted_motion_sources_.end())
-        return true;
-
     string_path resolved;
-    const char* search_roots[] = { "$level$", "$game_meshes$" };
-    const char* located_root = nullptr;
-    FileStatus status(false, false);
-
-    for (const char* root : search_roots)
-    {
-        status = FS.exist(resolved, root, relative_path.c_str());
-        if (status)
-        {
-            located_root = root;
-            break;
-        }
-    }
-
-    if (!located_root)
-    {
-        Msg("[ozz] legacy animation source '%s' not found", relative_path.c_str());
+    FileStatus status = FS.exist(resolved, "$game_meshes$", relative_path.c_str());
+    if (!status)
         return false;
-    }
 
-    xr_vector<ConvertedOmfAnimation> converted;
-    bool converted_ok = false;
-
+    std::vector<std::byte> payload;
     if (status.External)
     {
-        converted_ok = ConvertLegacyOmf(std::filesystem::path(resolved), skeleton_bone_names, skeleton_, converted);
-    }
-    else
-    {
-        IReader* reader = FS.r_open(located_root, relative_path.c_str());
-        if (!reader)
+        std::error_code ec;
+        fs::path absolute = fs::weakly_canonical(fs::path(resolved), ec);
+        if (ec || !fs::exists(absolute, ec))
+            return false;
+
+        ozz::io::File file(absolute.string().c_str(), "rb");
+        if (!file.opened())
         {
-            Msg("[ozz] legacy animation source '%s' could not be opened", relative_path.c_str());
+            Msg("[ozz] failed to open animation file '%s'", absolute.string().c_str());
             return false;
         }
 
-        const size_t payload_size = static_cast<size_t>(reader->length());
-        xr_vector<std::byte> payload(payload_size);
-        if (payload_size > 0)
-            std::memcpy(payload.data(), reader->pointer(), payload_size);
+        const int64_t length = file.Size();
+        if (length < 0)
+            return false;
+
+        payload.resize(static_cast<size_t>(length));
+        if (!payload.empty())
+            file.Read(payload.data(), payload.size());
+    }
+    else
+    {
+        IReader* reader = FS.r_open("$game_meshes$", relative_path.c_str());
+        if (!reader)
+            return false;
+
+        const size_t length = static_cast<size_t>(reader->length());
+        payload.resize(length);
+        if (length > 0)
+            std::memcpy(payload.data(), reader->pointer(), length);
         FS.r_close(reader);
-
-        converted_ok = ConvertLegacyOmf(payload.data(), payload.size(), skeleton_bone_names, skeleton_, converted);
     }
 
-    if (!converted_ok)
-    {
-        Msg("[ozz] failed to convert legacy animation '%s'", relative_path.c_str());
+    ozz::io::MemoryStream stream;
+    if (payload.empty())
         return false;
+
+    if (!stream.Write(payload.data(), payload.size()))
+        return false;
+    stream.Seek(0, ozz::io::Stream::kSet);
+
+    ozz::io::IArchive archive(&stream);
+    if (archive.TestTag<ozz::animation::Animation>())
+    {
+        auto animation = std::make_shared<ozz::animation::Animation>();
+        archive >> *animation;
+
+        if (!initialized_ || animation->num_tracks() != skeleton_.num_joints())
+        {
+            Msg("[ozz] Ignoring animation from '%s' due to track mismatch", relative_path.c_str());
+            return false;
+        }
+
+        xr_string motion_name = BuildMotionNameFromPath(relative_path);
+        if (motion_name.empty())
+        {
+            motion_name = "motion_";
+            motion_name += xr_string(std::to_string(loaded_motions_.size()).c_str());
+        }
+
+        if (motion_lookup_.find(motion_name) != motion_lookup_.end())
+            return false;
+
+        LoadedMotion record;
+        record.name = motion_name;
+        record.animation = std::move(animation);
+        record.id.set(0, static_cast<u16>(loaded_motions_.size()));
+
+        CMotionDef def;
+        def.bone_or_part = 0;
+        def.motion = record.id.idx;
+        def.speed = def.Quantize(1.f);
+        def.power = def.Quantize(1.f);
+        def.accrue = def.Quantize(0.f);
+        def.falloff = def.Quantize(0.f);
+        def.flags = 0;
+        def.marks.clear();
+        record.definition = def;
+
+        loaded_motions_.push_back(std::move(record));
+        motion_lookup_.emplace(motion_name, static_cast<u16>(loaded_motions_.size() - 1));
+        return true;
     }
 
-    for (auto& entry : converted)
-    {
-        if (!entry.animation)
-            continue;
+    stream.Seek(0, ozz::io::Stream::kSet);
+    ozz::io::IArchive aggregate(&stream);
+    return LoadOzzAnimationsFromArchive(aggregate, relative_path);
+}
 
-        const xr_string motion_name = entry.name;
-        if (legacy_motion_library_.find(motion_name) != legacy_motion_library_.end())
+bool OzzKinematics::LoadOzzAnimationsFromArchive(ozz::io::IArchive& archive, const xr_string& source_label)
+{
+    uint32_t animation_count = 0;
+    archive >> animation_count;
+    if (animation_count == 0)
+        return false;
+
+    bool loaded_any = false;
+
+    for (uint32_t idx = 0; idx < animation_count; ++idx)
+    {
+        std::shared_ptr<ozz::animation::Animation> animation = std::make_shared<ozz::animation::Animation>();
+        archive >> *animation;
+
+        MotionMetadata metadata = ReadMotionMetadataFromArchive(archive);
+        xr_string motion_name = metadata.name;
+        if (motion_name.empty())
         {
-            Msg("[ozz] duplicate legacy motion '%s' encountered in '%s'", motion_name.c_str(), relative_path.c_str());
+            motion_name = BuildMotionNameFromPath(source_label);
+            if (animation_count > 1)
+            {
+                motion_name += "_";
+                motion_name += xr_string(std::to_string(idx).c_str());
+            }
+        }
+
+        if (!initialized_ || animation->num_tracks() != skeleton_.num_joints())
+        {
+            Msg("[ozz] Ignoring animation '%s' from '%s' due to track mismatch", motion_name.c_str(), source_label.c_str());
             continue;
         }
 
-        legacy_motion_metadata_[motion_name] = entry.metadata;
-        auto deleter = entry.animation.get_deleter();
-        legacy_motion_library_[motion_name] =
-            std::shared_ptr<ozz::animation::Animation>(entry.animation.release(), deleter);
-        RegisterLegacyMotionId(motion_name);
+        if (motion_lookup_.find(motion_name) != motion_lookup_.end())
+        {
+            Msg("[ozz] Duplicate animation '%s' encountered in '%s'", motion_name.c_str(), source_label.c_str());
+            continue;
+        }
+
+        LoadedMotion record;
+        record.name = motion_name;
+        record.animation = std::move(animation);
+        record.id.set(0, static_cast<u16>(loaded_motions_.size()));
+
+        CMotionDef def;
+        def.bone_or_part = metadata.bone_or_part;
+        def.motion = metadata.motion_id;
+        const float speed = std::max(metadata.speed, 0.f);
+        const float power = std::max(metadata.power, 0.f);
+        const float accrue = std::max(metadata.accrue, 0.f);
+        const float falloff = std::max(metadata.falloff, 0.f);
+        def.speed = def.Quantize(speed);
+        def.power = def.Quantize(power);
+        def.accrue = def.Quantize(accrue);
+        def.falloff = def.Quantize(falloff);
+        def.flags = static_cast<u16>(metadata.flags);
+        if (!(def.flags & esmFX) && def.falloff >= def.accrue && def.accrue > 0)
+            def.falloff = static_cast<u16>(def.accrue - 1);
+        def.marks.clear();
+
+        record.definition = def;
+
+        loaded_motions_.push_back(std::move(record));
+        motion_lookup_.emplace(motion_name, static_cast<u16>(loaded_motions_.size() - 1));
+        loaded_any = true;
     }
 
-    converted_motion_sources_.insert(relative_path);
-    return true;
+    return loaded_any;
 }
 
 bool OzzKinematics::LoadSkeletonFromStream(ozz::io::Stream* stream, pcstr debug_source)
@@ -1275,11 +1310,10 @@ CMotionDef* OzzKinematics::LL_GetMotionDef(MotionID id)
         return nullptr;
 
     const u16 index = id.idx;
-    if (index >= legacy_motion_ids_.size())
+    if (index >= loaded_motions_.size())
         return nullptr;
 
-    EnsureLegacyMotionDef(index, legacy_motion_ids_[index]);
-    return &legacy_motion_defs_[index];
+    return &loaded_motions_[index].definition;
 }
 
 CMotion* OzzKinematics::LL_GetRootMotion(MotionID /*id*/)

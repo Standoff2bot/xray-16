@@ -11,8 +11,6 @@
 #include "xrCommon/xr_set.h"
 
 #include "OzzAnimationController.h"
-#include "LegacyOmfConverter.h"
-
 #include <filesystem>
 
 #include "ozz/animation/runtime/sampling_job.h"
@@ -182,18 +180,15 @@ private:
     void ResetRuntimeState();
     void ResetAnimationState();
     bool EnsureAnimationController();
-    bool BuildLegacyMotionLibrary();
     bool LoadLegacyMotion(const xr_string& motion_name);
     MotionID ResolveLegacyMotionId(const xr_string& motion_name);
-    MotionID RegisterLegacyMotionId(const xr_string& motion_name);
-    xr_vector<xr_string> CollectSkeletonBoneNames() const;
-    xr_vector<xr_string> ResolveMotionReference(const xr_string& reference) const;
-    bool ConvertLegacyOmfFile(const xr_string& relative_path, const xr_vector<xr_string>& skeleton_bone_names);
     void ApplyAdditionalBoneTransforms(u16 bone_id, Fmatrix& transform) const;
     bool IsBoneVisible(size_t index) const;
     bool LoadSkeletonFromStream(ozz::io::Stream* stream, pcstr debug_source);
     bool FinalizeSkeletonInitialization(pcstr debug_source);
-    void EnsureLegacyMotionDef(u16 index, const xr_string& motion_name);
+    bool LoadOzzAnimationsFromFile(const xr_string& relative_path);
+    bool LoadOzzAnimationsFromArchive(ozz::io::IArchive& archive, const xr_string& source_label);
+    bool LoadMotionReference(const xr_string& reference);
 
 private:
     CInifile* user_data_;
@@ -217,13 +212,17 @@ private:
     xr_vector<KinematicsABT::additional_bone_transform> bone_offsets_;
     ozz::animation::SamplingJob::Context sampling_context_;
     xr_unique_ptr<OzzAnimationController> animation_controller_;
+    struct LoadedMotion
+    {
+        xr_string name;
+        std::shared_ptr<ozz::animation::Animation> animation;
+        CMotionDef definition;
+        MotionID id;
+    };
+    xr_vector<LoadedMotion> loaded_motions_;
+    xr_unordered_map<xr_string, u16> motion_lookup_;
+    xr_set<xr_string> loaded_animation_sources_;
     xr_vector<xr_string> motion_references_;
-    xr_unordered_map<xr_string, LegacyMotionMetadata> legacy_motion_metadata_;
-    xr_unordered_map<xr_string, std::shared_ptr<ozz::animation::Animation>> legacy_motion_library_;
-    xr_set<xr_string> converted_motion_sources_;
-    xr_vector<xr_string> legacy_motion_ids_;
-    xr_unordered_map<xr_string, MotionID> legacy_motion_lookup_;
-    xr_vector<CMotionDef> legacy_motion_defs_;
     IBlendDestroyCallback* blend_destroy_callback_ = nullptr;
     IUpdateTracksCallback* update_tracks_callback_ = nullptr;
     bool animation_applied_ = false;

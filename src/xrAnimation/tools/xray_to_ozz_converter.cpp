@@ -386,6 +386,12 @@ void convert_animation(const AnimationConfig& config)
 {
     const auto start_time = std::chrono::steady_clock::now();
 
+    if (fs::exists(fs::weakly_canonical(config.output_ozz)))
+    {
+        std::cout << "Skipping animation conversion; output already exists at " << config.output_ozz << std::endl;
+        return;
+    }
+
     XRay::Animation::LegacyVisualConversionResult skeleton_conversion;
     XRay::Animation::LegacyVisualConversionOptions skeleton_options;
     skeleton_options.build_skeleton = true;
@@ -485,6 +491,12 @@ void convert_mesh(const MeshConfig& config)
 {
     const auto start_time = std::chrono::steady_clock::now();
 
+    if (fs::exists(fs::weakly_canonical(config.output_ozz)))
+    {
+        std::cout << "Skipping mesh conversion; output already exists at " << config.output_ozz << std::endl;
+        return;
+    }
+
     XRay::Animation::LegacyVisualConversionResult conversion;
     XRay::Animation::LegacyVisualConversionOptions options;
     options.build_skeleton = true;
@@ -520,6 +532,12 @@ void convert_mesh(const MeshConfig& config)
 void convert_bundle(const BundleConfig& config)
 {
     const auto start_time = std::chrono::steady_clock::now();
+
+    if (fs::exists(fs::weakly_canonical(config.output_ozzx)))
+    {
+        std::cout << "Skipping bundle conversion; output already exists at " << config.output_ozzx << std::endl;
+        return;
+    }
 
     XRay::Animation::LegacyVisualConversionResult conversion;
     XRay::Animation::LegacyVisualConversionOptions options;

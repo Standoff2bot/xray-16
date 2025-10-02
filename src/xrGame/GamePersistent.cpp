@@ -199,7 +199,7 @@ void CGamePersistent::OnGameStart()
         return;
     }
 
-    const bool force_rebuild = !digest_matches;
+    const bool force_rebuild = false; // todo: fix once digest hashing is working correctly.
     StartupConversionStats conversion_stats;
     const bool show_loading_stage = psActorFlags.test(AF_LOADING_STAGES);
 
