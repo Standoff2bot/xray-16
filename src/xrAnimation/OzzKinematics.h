@@ -37,8 +37,8 @@ public:
     ~OzzKinematics() override;
 
     // Bootstrap from converted `.ozz` assets.
-    bool InitializeFromOzz(pcstr skeleton_path);
-    bool InitializeFromOzzBuffer(ozz::span<const std::byte> skeleton_data);
+    bool InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
+    bool InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData, const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
 
     // Pose management helpers.
     bool SetPoseLocals(ozz::span<const ozz::math::SoaTransform> locals);
@@ -52,18 +52,17 @@ public:
     void BuildSkinningPalette(xr_vector<Fmatrix>& out_matrices, bool render_space) const;
 
     // Returns whether the current skeleton has any joints.
-    bool HasBones() const { return initialized_ && !bone_instances_.empty(); }
-    bool IsInitialized() const { return initialized_; }
+    bool HasBones() const { return initialized && !boneInstances.empty(); }
+    bool IsInitialized() const { return initialized; }
 
     // Animation/runtime helpers mirrored from the legacy facade.
-    void SetLegacyMotionReferences(const xr_vector<xr_string>& references);
-    const xr_vector<xr_string>& LegacyMotionReferences() const { return motion_references_; }
+    const xr_vector<xr_string>& LegacyMotionReferences() const { return motionReferences; }
     xr_vector<xr_string> LegacyMotionNames();
     bool PlayLegacyMotion(const xr_string& motion_name);
     bool LoadAnimationFromFile(const std::filesystem::path& path);
     void StopAnimation();
     bool AdvanceAnimation(float dt);
-    bool HasActiveAnimation() const { return animation_applied_; }
+    bool HasActiveAnimation() const { return animationApplied; }
 
     bool HasLoadedAnimation() const;
 
@@ -192,27 +191,27 @@ private:
     void EnsureMotionLibraryLoaded();
 
 private:
-    CInifile* user_data_;
-    accel bone_map_by_name_;
-    accel bone_map_by_ptr_;
-    xr_vector<CBoneInstance> bone_instances_;
-    xr_vector<CBoneData*> bones_;
-    xr_vector<xr_unique_ptr<CBoneData>> bone_storage_;
-    xr_vector<Fobb> bone_boxes_;
-    u16 root_bone_;
-    u64 visible_mask_;
-    UpdateCallback update_callback_;
-    void* update_callback_param_;
-    u32 last_update_time_;
-    s32 visibility_counter_;
-    Fbox cached_box_;
-    ozz::animation::Skeleton skeleton_;
-    xr_vector<ozz::math::SoaTransform> sampled_locals_;
-    xr_vector<ozz::math::Float4x4> model_transforms_;
-    xr_vector<Fmatrix> cached_transforms_pre_callbacks_;
-    xr_vector<KinematicsABT::additional_bone_transform> bone_offsets_;
-    ozz::animation::SamplingJob::Context sampling_context_;
-    xr_unique_ptr<OzzAnimationController> animation_controller_;
+    CInifile* userData;
+    accel boneMapByName;
+    accel boneMapByPtr;
+    xr_vector<CBoneInstance> boneInstances;
+    xr_vector<CBoneData*> bones;
+    xr_vector<xr_unique_ptr<CBoneData>> boneStorage;
+    xr_vector<Fobb> boneBoxes;
+    u16 rootBone;
+    u64 visibleMask;
+    UpdateCallback updateCallback;
+    void* updateCallbackParam;
+    u32 lastUpdateTime;
+    s32 visibilityCounter;
+    Fbox cachedBox;
+    ozz::animation::Skeleton skeleton;
+    xr_vector<ozz::math::SoaTransform> sampledLocals;
+    xr_vector<ozz::math::Float4x4> modelTransforms;
+    xr_vector<Fmatrix> cachedTransformsPreCallbacks;
+    xr_vector<KinematicsABT::additional_bone_transform> boneOffsets;
+    ozz::animation::SamplingJob::Context samplingContext;
+    xr_unique_ptr<OzzAnimationController> animationController;
     struct LoadedMotion
     {
         xr_string name;
@@ -220,21 +219,22 @@ private:
         CMotionDef definition;
         MotionID id;
     };
-    xr_vector<LoadedMotion> loaded_motions_;
-    xr_unordered_map<xr_string, u16> motion_lookup_;
-    xr_set<xr_string> loaded_animation_sources_;
-    xr_vector<xr_string> motion_references_;
-    bool motion_library_initialized_ = false;
-    IBlendDestroyCallback* blend_destroy_callback_ = nullptr;
-    IUpdateTracksCallback* update_tracks_callback_ = nullptr;
-    bool animation_applied_ = false;
-    CPartition default_partition_{};
-    bool initialized_ = false;
-    xr_unique_ptr<CBlend> active_cycle_blend_;
-    MotionID active_cycle_motion_{};
-    u16 active_cycle_partition_ = BI_NONE;
-    u8 active_cycle_channel_ = 0;
-    int active_cycle_motion_index_ = -1;
+    xr_vector<LoadedMotion> loadedMotions;
+    xr_unordered_map<xr_string, u16> motionLookup;
+    xr_set<xr_string> loadedAnimationSources;
+    xr_vector<xr_string> motionReferences;
+    bool motionLibraryInitialized = false;
+    IBlendDestroyCallback* blendDestroyCallback = nullptr;
+    IUpdateTracksCallback* updateTracksCallback = nullptr;
+    bool animationApplied = false;
+    CPartition defaultPartition{};
+    bool initialized = false;
+    xr_unique_ptr<CBlend> activeCycleBlend;
+    MotionID activeCycleMotion{};
+    u16 activeCyclePartition = BI_NONE;
+    u8 activeCycleChannel = 0;
+    int activeCycleMotionIndex = -1;
+    bool animationControllerReady = false;
 };
 } // namespace Animation
 } // namespace XRay

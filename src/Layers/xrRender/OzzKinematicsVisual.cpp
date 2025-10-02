@@ -405,7 +405,7 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
     initialized_ = false;
 
     ozz::span<const std::byte> skeleton_span(reinterpret_cast<const std::byte*>(skeleton_payload_.data()), skeleton_payload_.size());
-    if (!InitializeFromOzzBuffer(skeleton_span))
+    if (!InitializeFromOzzBuffer(skeleton_span, motion_references_))
     {
         Msg("[OzzKinematicsVisual] Failed to initialize kinematics from cached payload");
         return false;
@@ -445,9 +445,6 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
 
     SetUpdateCallback(&COzzKinematicsVisual::HandleKinematicsUpdated);
     SetUpdateCallbackParam(this);
-
-    if (!motion_references_.empty())
-        SetLegacyMotionReferences(motion_references_);
 
     last_animation_update_frame_ = u32(-1);
 
@@ -539,7 +536,6 @@ void COzzKinematicsVisual::Release()
     skeleton_payload_.clear();
     mesh_payload_.clear();
     motion_references_.clear();
-    SetLegacyMotionReferences(motion_references_);
     DestroySurfaces();
     children.clear();
     bone_palette_.clear();
