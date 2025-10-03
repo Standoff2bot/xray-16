@@ -34,6 +34,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sstream>
 #include <numeric>
 #include <unordered_map>
 #include <unordered_set>
@@ -1297,7 +1298,7 @@ void finalize_influences(MeshVertex& vertex, const std::array<uint16_t, 4>& bone
         accum[bone] += weight;
     }
 
-    std::vector<std::pair<uint16_t, float>> combined(accum.begin(), accum.end());
+std::vector<std::pair<uint16_t, float>> combined(accum.begin(), accum.end());
     combined.erase(std::remove_if(combined.begin(), combined.end(),
                        [](const auto& entry)
                        {
@@ -1357,14 +1358,44 @@ void finalize_influences(MeshVertex& vertex, const std::array<uint16_t, 4>& bone
     }
 }
 
+std::optional<uint32_t> decode_vertex_format_influence_count(uint32_t vertex_format)
+{
+    switch (vertex_format)
+    {
+    case OGF_VERTEXFORMAT_FVF_NL:
+        return 0u;
+    case OGF_VERTEXFORMAT_FVF_1L:
+    case 1u: // Clear Sky / CoP compact encoding
+        return 1u;
+    case OGF_VERTEXFORMAT_FVF_2L:
+    case 2u:
+        return 2u;
+    case OGF_VERTEXFORMAT_FVF_3L:
+    case 3u:
+        return 3u;
+    case OGF_VERTEXFORMAT_FVF_4L:
+    case 4u:
+        return 4u;
+    default:
+        return std::nullopt;
+    }
+}
+
 std::vector<MeshVertex> read_mesh_vertices(const Chunk& chunk)
 {
     BinaryReader reader{ chunk.data, chunk.size };
-    const uint32_t link_type = reader.read<uint32_t>();
+    const uint32_t vertex_format = reader.read<uint32_t>();
     const uint32_t vertex_count = reader.read<uint32_t>();
 
-    if (link_type == 0 || link_type > 4)
-        throw std::runtime_error("unsupported vertex influence count in OGF mesh");
+    const auto link_type_opt = decode_vertex_format_influence_count(vertex_format);
+    if (!link_type_opt)
+    {
+        std::ostringstream message;
+        message << "unsupported vertex format in OGF mesh (0x" << std::hex << std::uppercase
+                << vertex_format << ")";
+        throw std::runtime_error(message.str());
+    }
+    const uint32_t link_type = *link_type_opt;
 
     const auto compute_vertex_size = [](uint32_t influences, bool include_tangent_basis) -> size_t
     {
@@ -1374,6 +1405,8 @@ std::vector<MeshVertex> read_mesh_vertices(const Chunk& chunk)
 
         switch (influences)
         {
+        case 0:
+            return kFloat3 + kFloat3 + tangent_basis + kFloat2;
         case 1:
             return kFloat3 + kFloat3 + tangent_basis + kFloat2 + sizeof(uint32_t);
         case 2:
@@ -1413,7 +1446,23 @@ std::vector<MeshVertex> read_mesh_vertices(const Chunk& chunk)
         std::array<uint16_t, 4> bone_ids{ 0, 0, 0, 0 };
         std::array<float, 4> raw_weights{ 0.f, 0.f, 0.f, 0.f };
 
-        if (link_type == 1)
+        if (link_type == 0)
+        {
+            vertex.position = reader.read<Fvector>();
+            vertex.normal = reader.read<Fvector>();
+            if (has_tangent_basis)
+            {
+                vertex.tangent = reader.read<Fvector>();
+                vertex.binormal = reader.read<Fvector>();
+            }
+            else
+            {
+                vertex.tangent.set(0.f, 0.f, 0.f);
+                vertex.binormal.set(0.f, 0.f, 0.f);
+            }
+            vertex.uv = reader.read<Fvector2>();
+        }
+        else if (link_type == 1)
         {
             vertex.position = reader.read<Fvector>();
             vertex.normal = reader.read<Fvector>();
