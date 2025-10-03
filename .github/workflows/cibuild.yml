@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  windows:
+  msbuild:
     name: Windows ${{ matrix.Configuration }} ${{ matrix.Platform }} (MSBuild, MSVC)
     runs-on: windows-latest
     timeout-minutes: 20

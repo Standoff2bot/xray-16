@@ -68,6 +68,7 @@ set(XRAY_ENABLE_WARNINGS
     /wd4201 # nonstandard extension used : nameless struct/union
     /wd4251 # class 'x' needs to have dll-interface to be used by clients of class 'y'
     /wd4275 # non dll-interface class 'x' used as base for dll-interface class 'y'
+    /wd4530 # C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc
 )
 
 set(XRAY_DISABLE_WARNINGS /W0)
