@@ -475,6 +475,7 @@ public:
     void model_Logging(bool bEnable) override { Models->Logging(bEnable); }
     void models_Prefetch() override;
     void models_Clear(bool b_complete) override;
+    void models_Rebuild() override;
 
     // Occlusion culling
     bool occ_visible(vis_data& V) override;

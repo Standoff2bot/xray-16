@@ -304,6 +304,11 @@ CModelPool::~CModelPool()
     xr_delete(g_pMotionsContainer);
 }
 
+void CModelPool::Rebuild()
+{
+    Destroy();
+}
+
 dxRender_Visual* CModelPool::Instance_Find(LPCSTR N)
 {
     dxRender_Visual* Model = nullptr;

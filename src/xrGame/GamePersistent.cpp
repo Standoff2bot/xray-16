@@ -3,6 +3,7 @@
 #include "xrCore/FMesh.hpp"
 #include "xrCore/xrCore.h"
 #include "xrEngine/XR_IOConsole.h"
+#include "xrEngine/Render.h"
 #include "xrMaterialSystem/GameMtlLib.h"
 #include "Include/xrRender/Kinematics.h"
 #include "xrEngine/profiler.h"
@@ -217,6 +218,15 @@ void CGamePersistent::OnGameStart()
             conversion_stats.failures,
             conversion_stats.failures == 1 ? "" : "s");
         return;
+    }
+
+    if (GEnv.Render)
+    {
+        Msg("[ozz] Refreshing model pool after startup conversion");
+        FS.rescan_pathes();
+        GEnv.Render->models_Rebuild();
+        if (!strstr(Core.Params, "-noprefetch"))
+            GEnv.Render->models_Prefetch();
     }
 
     if (show_loading_stage)

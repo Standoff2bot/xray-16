@@ -782,6 +782,7 @@ IRenderVisual* CRender::model_CreateParticles(LPCSTR name)
 }
 void CRender::models_Prefetch() { Models->Prefetch(); }
 void CRender::models_Clear(bool b_complete) { Models->ClearPool(b_complete); }
+void CRender::models_Rebuild() { Models->Rebuild(); }
 ref_shader CRender::getShader(int id)
 {
     VERIFY(id < int(Shaders.size()));
