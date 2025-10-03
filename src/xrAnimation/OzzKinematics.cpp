@@ -9,6 +9,7 @@
 #include "xrCore/FS_impl.h"
 #include "xrCore/Animation/Motion.hpp"
 #include "xrCore/_std_extensions.h"
+#include "xrMaterialSystem/GameMtlLib.h"
 
 #include "ozz/animation/runtime/skeleton_utils.h"
 #include "ozz/base/io/archive.h"
@@ -1043,6 +1044,57 @@ bool OzzKinematics::BuildBoneMetadata()
 
     if (!bones.empty() && rootBone != BI_NONE && rootBone < bones.size())
         bones[rootBone]->CalculateM2B(Fidentity);
+
+    return true;
+}
+
+bool OzzKinematics::ApplyExtendedBoneMetadata(const ExtendedBoneMetadataCollection& metadata)
+{
+    if (metadata.empty())
+        return true;
+
+    if (metadata.size() != bones.size())
+    {
+        Msg("[OzzKinematics] Bone metadata count mismatch (metadata=%zu, bones=%zu)", metadata.size(), bones.size());
+        return false;
+    }
+
+    for (size_t idx = 0; idx < metadata.size(); ++idx)
+    {
+        CBoneData* bone = bones[idx];
+        if (!bone)
+            continue;
+
+        const ExtendedBoneMetadata& source = metadata[idx];
+
+        bone->shape = source.shape;
+        bone->IK_data = source.joint;
+        bone->mass = source.mass;
+        bone->center_of_mass = source.center_of_mass;
+        bone->rest_length = source.rest_length;
+        bone->dominant_axis = source.dominant_axis;
+        bone->local_aabb_min = source.local_aabb_min;
+        bone->local_aabb_max = source.local_aabb_max;
+        bone->inverse_global_transform = source.inverse_global_transform;
+        bone->inertia_tensor = source.inertia_tensor;
+        bone->volume = source.volume;
+        bone->collision_layers.assign(source.collision_layers);
+        bone->ground_contact_candidate = source.ground_contact_candidate;
+        bone->weapon_anchor_candidate = source.weapon_anchor_candidate;
+
+        bone->game_mtl_name = shared_str();
+        bone->game_mtl_idx = 0;
+        if (!source.game_material.empty())
+        {
+            const char* material_name = source.game_material.c_str();
+            bone->game_mtl_name = shared_str(material_name);
+
+            if (GMLib.GetMaterial(material_name))
+                bone->game_mtl_idx = GMLib.GetMaterialIdx(material_name);
+            else
+                Msg("[OzzKinematics] Unknown material '%s' for bone '%s'", material_name, bone->name.c_str());
+        }
+    }
 
     return true;
 }

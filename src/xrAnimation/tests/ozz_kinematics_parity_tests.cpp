@@ -695,10 +695,35 @@ std::string ReadOzzString(ozz::io::IArchive& archive)
     return value;
 }
 
-std::string ReadOzzMotionMetadataName(ozz::io::IArchive& archive)
+struct SerializedMotionInterval
 {
-    std::string name = ReadOzzString(archive);
+    float first = 0.f;
+    float second = 0.f;
+};
 
+struct SerializedMotionMark
+{
+    std::string name;
+    std::vector<SerializedMotionInterval> intervals;
+};
+
+struct SerializedBoneMotion
+{
+    uint16_t bone_id = BI_NONE;
+    uint8_t flags = 0;
+    uint8_t translation_format = 0;
+    uint32_t rotation_crc = 0;
+    uint32_t translation_crc = 0;
+    std::vector<CKeyQR> rotation_keys;
+    std::vector<CKeyQT8> translation_keys8;
+    std::vector<CKeyQT16> translation_keys16;
+    Fvector translation_size{};
+    Fvector translation_init{};
+};
+
+struct SerializedMotionMetadata
+{
+    std::string name;
     uint32_t flags = 0;
     uint16_t bone_or_part = 0;
     uint16_t motion_id = 0;
@@ -706,40 +731,117 @@ std::string ReadOzzMotionMetadataName(ozz::io::IArchive& archive)
     float power = 0.f;
     float accrue = 0.f;
     float falloff = 0.f;
+    std::vector<SerializedMotionMark> marks;
+    uint32_t frame_count = 0;
+    std::vector<SerializedBoneMotion> bone_motions;
+};
 
-    archive >> flags;
-    archive >> bone_or_part;
-    archive >> motion_id;
-    archive >> speed;
-    archive >> power;
-    archive >> accrue;
-    archive >> falloff;
+SerializedMotionMetadata ReadOzzMotionMetadata(ozz::io::IArchive& archive)
+{
+    SerializedMotionMetadata metadata;
+
+    metadata.name = ReadOzzString(archive);
+
+    archive >> metadata.flags;
+    archive >> metadata.bone_or_part;
+    archive >> metadata.motion_id;
+    archive >> metadata.speed;
+    archive >> metadata.power;
+    archive >> metadata.accrue;
+    archive >> metadata.falloff;
 
     uint32_t mark_count = 0;
     archive >> mark_count;
+    metadata.marks.reserve(mark_count);
     for (uint32_t mark_idx = 0; mark_idx < mark_count; ++mark_idx)
     {
-        ReadOzzString(archive);
+        SerializedMotionMark mark;
+        mark.name = ReadOzzString(archive);
         uint32_t interval_count = 0;
         archive >> interval_count;
+        mark.intervals.reserve(interval_count);
         for (uint32_t interval_idx = 0; interval_idx < interval_count; ++interval_idx)
         {
-            float first = 0.f;
-            float second = 0.f;
-            archive >> first;
-            archive >> second;
+            SerializedMotionInterval interval;
+            archive >> interval.first;
+            archive >> interval.second;
+            mark.intervals.push_back(interval);
         }
+        metadata.marks.emplace_back(std::move(mark));
     }
 
-    (void)flags;
-    (void)bone_or_part;
-    (void)motion_id;
-    (void)speed;
-    (void)power;
-    (void)accrue;
-    (void)falloff;
+    archive >> metadata.frame_count;
 
-    return name;
+    uint32_t bone_motion_count = 0;
+    archive >> bone_motion_count;
+    metadata.bone_motions.resize(bone_motion_count);
+
+    for (uint32_t bone_index = 0; bone_index < bone_motion_count; ++bone_index)
+    {
+        SerializedBoneMotion bone;
+        archive >> bone.bone_id;
+        archive >> bone.flags;
+        archive >> bone.translation_format;
+        archive >> bone.rotation_crc;
+        archive >> bone.translation_crc;
+
+        uint32_t rotation_key_count = 0;
+        archive >> rotation_key_count;
+        bone.rotation_keys.resize(rotation_key_count);
+        for (uint32_t key_index = 0; key_index < rotation_key_count; ++key_index)
+        {
+            archive >> bone.rotation_keys[key_index].x;
+            archive >> bone.rotation_keys[key_index].y;
+            archive >> bone.rotation_keys[key_index].z;
+            archive >> bone.rotation_keys[key_index].w;
+        }
+
+        uint32_t translation_key_count = 0;
+        archive >> translation_key_count;
+        switch (bone.translation_format)
+        {
+        case 1:
+            bone.translation_keys8.resize(translation_key_count);
+            for (uint32_t key_index = 0; key_index < translation_key_count; ++key_index)
+            {
+                archive >> bone.translation_keys8[key_index].x1;
+                archive >> bone.translation_keys8[key_index].y1;
+                archive >> bone.translation_keys8[key_index].z1;
+            }
+            break;
+        case 2:
+            bone.translation_keys16.resize(translation_key_count);
+            for (uint32_t key_index = 0; key_index < translation_key_count; ++key_index)
+            {
+                archive >> bone.translation_keys16[key_index].x1;
+                archive >> bone.translation_keys16[key_index].y1;
+                archive >> bone.translation_keys16[key_index].z1;
+            }
+            break;
+        default:
+            for (uint32_t key_index = 0; key_index < translation_key_count; ++key_index)
+            {
+                int16_t x = 0;
+                int16_t y = 0;
+                int16_t z = 0;
+                archive >> x;
+                archive >> y;
+                archive >> z;
+            }
+            break;
+        }
+
+        archive >> bone.translation_size.x;
+        archive >> bone.translation_size.y;
+        archive >> bone.translation_size.z;
+        archive >> bone.translation_init.x;
+        archive >> bone.translation_init.y;
+        archive >> bone.translation_init.z;
+
+        metadata.bone_motions[bone_index] = std::move(bone);
+    }
+
+    return metadata;
 }
 
 std::optional<BindPoseSample> LoadLegacyBindPoseSample(const std::filesystem::path& ogf_path, const std::filesystem::path& omf_path)
@@ -894,8 +996,8 @@ std::optional<AnimationSample> LoadOzzAnimationSample(const std::filesystem::pat
                 auto animation = std::make_unique<ozz::animation::Animation>();
                 archive >> *animation;
 
-                std::string metadata_name = ReadOzzMotionMetadataName(archive);
-                if (!selected_animation && ToLowerCopy(metadata_name) == target)
+                SerializedMotionMetadata metadata = ReadOzzMotionMetadata(archive);
+                if (!selected_animation && ToLowerCopy(metadata.name) == target)
                     selected_animation = std::move(animation);
             }
         }
@@ -2174,6 +2276,160 @@ bool TestOzzBundleRuntimeHydratesKinematicsAndMeshPayload()
     return ok;
 }
 
+bool TestOzzKinematicsAppliesBoneMetadata(bool& metadata_available)
+{
+    metadata_available = false;
+    const auto bundle_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero.ozzx");
+    if (!std::filesystem::exists(bundle_path))
+    {
+        ADD_FAILURE() << "Missing test bundle: " << bundle_path;
+        return false;
+    }
+
+    XRay::Animation::OzzxBundle bundle;
+    if (!XRay::Animation::ReadOzzxBundle(bundle_path, bundle))
+    {
+        ADD_FAILURE() << "Failed to read bundle";
+        return false;
+    }
+
+    if (bundle.skeleton.empty())
+    {
+        ADD_FAILURE() << "Bundle missing skeleton payload";
+        return false;
+    }
+
+    if (bundle.bone_metadata.empty())
+        return true;
+
+    XRay::Animation::OzzKinematics kinematics;
+    const ozz::span<const std::byte> skeleton_span(reinterpret_cast<const std::byte*>(bundle.skeleton.data()), bundle.skeleton.size());
+    if (!kinematics.InitializeFromOzzBuffer(skeleton_span))
+    {
+        ADD_FAILURE() << "Failed to initialize kinematics from bundle";
+        return false;
+    }
+
+    if (!kinematics.ApplyExtendedBoneMetadata(bundle.bone_metadata))
+    {
+        ADD_FAILURE() << "Failed to apply bone metadata";
+        return false;
+    }
+
+    metadata_available = true;
+
+    const size_t expected_count = bundle.bone_metadata.size();
+    const int bone_count = kinematics.LL_BoneCount();
+    EXPECT_EQ(expected_count, static_cast<size_t>(bone_count)) << "Bone metadata count mismatch";
+    if (expected_count != static_cast<size_t>(bone_count))
+        return false;
+
+    constexpr float kEpsilon = 1e-4f;
+    bool ok = true;
+    for (size_t idx = 0; idx < expected_count; ++idx)
+    {
+        const auto& expected = bundle.bone_metadata[idx];
+        const CBoneData& bone = kinematics.LL_GetData(static_cast<u16>(idx));
+        const char* bone_name = bone.name.c_str();
+
+        EXPECT_EQ(bone.shape.type, expected.shape.type) << "Shape type mismatch for bone " << bone_name;
+        if (bone.shape.type != expected.shape.type)
+            ok = false;
+
+        if (std::memcmp(&bone.shape, &expected.shape, sizeof(SBoneShape)) != 0)
+        {
+            ADD_FAILURE() << "Shape payload mismatch for bone " << bone_name;
+            ok = false;
+        }
+
+        EXPECT_NEAR(bone.mass, expected.mass, kEpsilon) << "Mass mismatch for bone " << bone_name;
+        if (std::fabs(bone.mass - expected.mass) > kEpsilon)
+            ok = false;
+
+        EXPECT_NEAR(bone.rest_length, expected.rest_length, kEpsilon) << "Rest length mismatch for bone " << bone_name;
+        if (std::fabs(bone.rest_length - expected.rest_length) > kEpsilon)
+            ok = false;
+
+        EXPECT_NEAR(bone.inertia_tensor.x, expected.inertia_tensor.x, kEpsilon) << "Inertia X mismatch for bone " << bone_name;
+        if (std::fabs(bone.inertia_tensor.x - expected.inertia_tensor.x) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.inertia_tensor.y, expected.inertia_tensor.y, kEpsilon) << "Inertia Y mismatch for bone " << bone_name;
+        if (std::fabs(bone.inertia_tensor.y - expected.inertia_tensor.y) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.inertia_tensor.z, expected.inertia_tensor.z, kEpsilon) << "Inertia Z mismatch for bone " << bone_name;
+        if (std::fabs(bone.inertia_tensor.z - expected.inertia_tensor.z) > kEpsilon)
+            ok = false;
+
+        EXPECT_NEAR(bone.center_of_mass.x, expected.center_of_mass.x, kEpsilon) << "Center of mass X mismatch for bone " << bone_name;
+        if (std::fabs(bone.center_of_mass.x - expected.center_of_mass.x) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.center_of_mass.y, expected.center_of_mass.y, kEpsilon) << "Center of mass Y mismatch for bone " << bone_name;
+        if (std::fabs(bone.center_of_mass.y - expected.center_of_mass.y) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.center_of_mass.z, expected.center_of_mass.z, kEpsilon) << "Center of mass Z mismatch for bone " << bone_name;
+        if (std::fabs(bone.center_of_mass.z - expected.center_of_mass.z) > kEpsilon)
+            ok = false;
+
+        EXPECT_NEAR(bone.dominant_axis.x, expected.dominant_axis.x, kEpsilon) << "Dominant axis X mismatch for bone " << bone_name;
+        if (std::fabs(bone.dominant_axis.x - expected.dominant_axis.x) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.dominant_axis.y, expected.dominant_axis.y, kEpsilon) << "Dominant axis Y mismatch for bone " << bone_name;
+        if (std::fabs(bone.dominant_axis.y - expected.dominant_axis.y) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.dominant_axis.z, expected.dominant_axis.z, kEpsilon) << "Dominant axis Z mismatch for bone " << bone_name;
+        if (std::fabs(bone.dominant_axis.z - expected.dominant_axis.z) > kEpsilon)
+            ok = false;
+
+        EXPECT_NEAR(bone.local_aabb_min.x, expected.local_aabb_min.x, kEpsilon) << "Local AABB min X mismatch for bone " << bone_name;
+        if (std::fabs(bone.local_aabb_min.x - expected.local_aabb_min.x) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.local_aabb_min.y, expected.local_aabb_min.y, kEpsilon) << "Local AABB min Y mismatch for bone " << bone_name;
+        if (std::fabs(bone.local_aabb_min.y - expected.local_aabb_min.y) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.local_aabb_min.z, expected.local_aabb_min.z, kEpsilon) << "Local AABB min Z mismatch for bone " << bone_name;
+        if (std::fabs(bone.local_aabb_min.z - expected.local_aabb_min.z) > kEpsilon)
+            ok = false;
+
+        EXPECT_NEAR(bone.local_aabb_max.x, expected.local_aabb_max.x, kEpsilon) << "Local AABB max X mismatch for bone " << bone_name;
+        if (std::fabs(bone.local_aabb_max.x - expected.local_aabb_max.x) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.local_aabb_max.y, expected.local_aabb_max.y, kEpsilon) << "Local AABB max Y mismatch for bone " << bone_name;
+        if (std::fabs(bone.local_aabb_max.y - expected.local_aabb_max.y) > kEpsilon)
+            ok = false;
+        EXPECT_NEAR(bone.local_aabb_max.z, expected.local_aabb_max.z, kEpsilon) << "Local AABB max Z mismatch for bone " << bone_name;
+        if (std::fabs(bone.local_aabb_max.z - expected.local_aabb_max.z) > kEpsilon)
+            ok = false;
+
+        if (std::memcmp(&bone.inverse_global_transform, &expected.inverse_global_transform, sizeof(Fmatrix)) != 0)
+        {
+            ADD_FAILURE() << "Inverse global transform mismatch for bone " << bone_name;
+            ok = false;
+        }
+
+        EXPECT_NEAR(bone.volume, expected.volume, kEpsilon) << "Volume mismatch for bone " << bone_name;
+        if (std::fabs(bone.volume - expected.volume) > kEpsilon)
+            ok = false;
+
+        EXPECT_EQ(bone.collision_layers.get(), expected.collision_layers.get()) << "Collision layer mismatch for bone " << bone_name;
+        if (bone.collision_layers.get() != expected.collision_layers.get())
+            ok = false;
+
+        EXPECT_EQ(bone.ground_contact_candidate, expected.ground_contact_candidate) << "Ground contact flag mismatch for bone " << bone_name;
+        if (bone.ground_contact_candidate != expected.ground_contact_candidate)
+            ok = false;
+
+        EXPECT_EQ(bone.weapon_anchor_candidate, expected.weapon_anchor_candidate) << "Weapon anchor flag mismatch for bone " << bone_name;
+        if (bone.weapon_anchor_candidate != expected.weapon_anchor_candidate)
+            ok = false;
+
+        EXPECT_STREQ(bone.game_mtl_name.c_str(), expected.game_material.c_str()) << "Material mismatch for bone " << bone_name;
+        if (std::strcmp(bone.game_mtl_name.c_str(), expected.game_material.c_str()) != 0)
+            ok = false;
+    }
+
+    return ok;
+}
+
 
 bool TestModelNamingNormalizesModelIdentifiers()
 {
@@ -2312,6 +2568,15 @@ TEST(OzzKinematicsParity, AnimationPoseMatchesLegacySkeleton)
 TEST(OzzBundleRuntime, HydratesKinematicsAndMeshPayload)
 {
     EXPECT_TRUE(TestOzzBundleRuntimeHydratesKinematicsAndMeshPayload());
+}
+
+TEST(OzzKinematicsParity, BoneMetadataHydratedByRuntime)
+{
+    bool metadata_available = false;
+    const bool result = TestOzzKinematicsAppliesBoneMetadata(metadata_available);
+    if (!metadata_available)
+        return;
+    EXPECT_TRUE(result);
 }
 
 TEST(ModelNaming, NormalizesModelIdentifiers)

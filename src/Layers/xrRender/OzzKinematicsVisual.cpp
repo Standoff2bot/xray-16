@@ -411,6 +411,9 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
         return false;
     }
 
+    if (!ApplyExtendedBoneMetadata(bone_metadata_))
+        Msg("[OzzKinematicsVisual] Bone metadata application failed; falling back to defaults");
+
     if (meshes_.empty() && !mesh_payload_.empty())
     {
         ozz::io::MemoryStream mesh_stream;
@@ -478,6 +481,7 @@ bool COzzKinematicsVisual::LoadFromBundle(const char* name, const std::filesyste
     skeleton_payload_.assign(bundle.skeleton.begin(), bundle.skeleton.end());
     mesh_payload_.assign(bundle.mesh.begin(), bundle.mesh.end());
     motion_references_ = bundle.motion_refs;
+    bone_metadata_ = bundle.bone_metadata;
 
     meshes_.clear();
 
@@ -501,6 +505,7 @@ void COzzKinematicsVisual::Copy(dxRender_Visual* pFrom)
         mesh_payload_ = other->mesh_payload_;
         meshes_ = other->meshes_;
         motion_references_ = other->motion_references_;
+        bone_metadata_ = other->bone_metadata_;
 
         R_ASSERT2(InitializeFromPayload(), "Failed to copy OzzKinematicsVisual state");
     }

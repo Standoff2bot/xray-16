@@ -544,16 +544,6 @@ fs::path SkeletonCsvPath()
     return TestArtifactsDir() / "stalker_hero_bind_pose.csv";
 }
 
-[[maybe_unused]] fs::path BaselineDir()
-{
-    return ProjectRoot() / "src" / "xrAnimation" / "tests" / "baselines";
-}
-
-fs::path BaselineCasesDir()
-{
-    return ProjectRoot() / "src" / "xrAnimation" / "tests" / "baseline_cases";
-}
-
 fs::path AnimationOutputPath()
 {
     return TestArtifactsDir() / "critical_hit_grup_1.ozz";
@@ -584,16 +574,6 @@ fs::path BundleOutputPath()
     return TestArtifactsDir() / "stalker_hero.ozzx";
 }
 
-fs::path BlenderRestPoseBaselinePath()
-{
-    return BaselineCasesDir() / "stalker_hero_1_rest_pose.json";
-}
-
-fs::path CombinedBaselinePath()
-{
-    return BaselineCasesDir() / "combined_vertices.json";
-}
-
 constexpr float kMeshPositionTolerance = 1e-4f;
 constexpr float kMeshWeightTolerance = 5e-4f;
 constexpr float kMatrixTolerance = 1e-4f;
@@ -606,352 +586,9 @@ struct BaselineVertex
     int mesh_local_index = -1;
 };
 
-bool LoadJsonFile(const fs::path& path, Json& out);
-std::string BuildVertexSignatureFromComponents(double px, double py, double pz, const std::vector<std::pair<int, double>>& weights);
-
-bool LoadCombinedBaselineVertices(const ozz::animation::Skeleton& skeleton, std::unordered_map<std::string, std::vector<BaselineVertex>>& out_vertices)
-{
-    Json combined;
-    if (!LoadJsonFile(CombinedBaselinePath(), combined))
-        return false;
-
-    if (!combined.contains("vertices") || !combined["vertices"].is_array())
-    {
-        std::cerr << "combined baseline missing vertices array" << std::endl;
-        return false;
-    }
-
-    out_vertices.clear();
-
-    const Json& vertices = combined["vertices"];
-    for (const auto& vertex : vertices)
-    {
-        if (!vertex.contains("co"))
-            continue;
-
-        const auto& co = vertex["co"];
-        if (!co.is_array() || co.size() != 3)
-            continue;
-
-        std::array<double, 3> position{ co[0].get<double>(), co[1].get<double>(), co[2].get<double>() };
-
-        const Json& groups = vertex.value("groups", Json::array());
-        std::vector<std::pair<int, double>> weights;
-        weights.reserve(groups.is_array() ? groups.size() : 0);
-
-        for (const auto& group : groups)
-        {
-            const std::string group_name = group.value("group_name", std::string());
-            const double weight = group.value("weight", 0.0);
-            if (group_name.empty() || weight <= 0.f)
-                continue;
-
-            const int joint_index = ozz::animation::FindJoint(skeleton, group_name.c_str());
-            if (joint_index < 0)
-            {
-                std::cerr << "baseline vertex references unknown joint '" << group_name << "'" << std::endl;
-                continue;
-            }
-
-            weights.emplace_back(joint_index, weight);
-        }
-
-        if (weights.empty())
-            continue;
-
-        std::stable_sort(weights.begin(), weights.end(),
-            [](const auto& lhs, const auto& rhs)
-            {
-                return lhs.second > rhs.second;
-            });
-
-        if (weights.size() > 4)
-            weights.resize(4);
-
-        double weight_sum = 0.0;
-        for (const auto& entry : weights)
-            weight_sum += entry.second;
-
-        if (weight_sum > std::numeric_limits<double>::epsilon())
-        {
-            const double inv_sum = 1.0 / weight_sum;
-            for (auto& entry : weights)
-                entry.second *= inv_sum;
-        }
-
-        std::sort(weights.begin(), weights.end(),
-            [](const auto& lhs, const auto& rhs)
-            {
-                if (lhs.first != rhs.first)
-                    return lhs.first < rhs.first;
-                return lhs.second < rhs.second;
-            });
-
-        const std::string signature =
-            BuildVertexSignatureFromComponents(static_cast<double>(position[0]), static_cast<double>(position[1]), static_cast<double>(position[2]), weights);
-
-        BaselineVertex baseline_vertex;
-        baseline_vertex.position = position;
-        baseline_vertex.weights = weights;
-        baseline_vertex.mesh_local_index = vertex.value("index", -1);
-
-        out_vertices[signature].push_back(std::move(baseline_vertex));
-    }
-
-    return true;
-}
-
 int64_t QuantizeToScaledInt(double value, double scale)
 {
     return static_cast<int64_t>(std::llround(value * scale));
-}
-
-std::string BuildVertexSignatureFromComponents(double px, double py, double pz, const std::vector<std::pair<int, double>>& weights)
-{
-    std::ostringstream key;
-    key << QuantizeToScaledInt(px, 100000.0) << ',' << QuantizeToScaledInt(py, 100000.0) << ',' << QuantizeToScaledInt(pz, 100000.0);
-
-    std::vector<std::pair<int, int64_t>> quantized;
-    quantized.reserve(weights.size());
-
-    for (const auto& entry : weights)
-        quantized.emplace_back(entry.first, QuantizeToScaledInt(entry.second, 1000000.0));
-
-    std::sort(quantized.begin(), quantized.end(),
-        [](const auto& lhs, const auto& rhs)
-        {
-            if (lhs.first != rhs.first)
-                return lhs.first < rhs.first;
-            return lhs.second < rhs.second;
-        });
-
-    for (const auto& [joint, weight] : quantized)
-        key << '|' << joint << ':' << weight;
-
-    return key.str();
-}
-
-std::string BuildVertexSignature(const Json& vertex)
-{
-    if (!vertex.contains("position"))
-        return {};
-
-    const Json& position = vertex["position"];
-    if (!position.is_array() || position.size() != 3)
-        return {};
-
-    std::vector<std::pair<int, double>> weights;
-    if (vertex.contains("weights") && vertex["weights"].is_array())
-    {
-        for (const auto& entry : vertex["weights"])
-        {
-            if (!entry.is_array() || entry.size() < 2)
-                continue;
-            weights.emplace_back(entry[0].get<int>(), entry[1].get<double>());
-        }
-    }
-
-    return BuildVertexSignatureFromComponents(position[0].get<double>(), position[1].get<double>(), position[2].get<double>(), weights);
-}
-
-[[maybe_unused]] bool CollectVertexSignatures(const Json& meshes, size_t& total_vertices, std::unordered_map<std::string, size_t>& signatures)
-{
-    total_vertices = 0;
-    signatures.clear();
-
-    if (!meshes.is_array())
-        return false;
-
-    for (const auto& mesh_value : meshes)
-    {
-        if (!mesh_value.is_object())
-            return false;
-
-        if (!mesh_value.contains("vertices"))
-            return false;
-
-        const Json& vertices = mesh_value["vertices"];
-        if (!vertices.is_array())
-            return false;
-
-        total_vertices += vertices.size();
-        for (const auto& vertex : vertices)
-        {
-            const std::string signature = BuildVertexSignature(vertex);
-            if (!signature.empty())
-                signatures[signature]++;
-        }
-    }
-
-    return true;
-}
-
-bool LoadJsonFile(const fs::path& path, Json& out)
-{
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream)
-    {
-        std::cerr << "failed to open json file: " << path << std::endl;
-        return false;
-    }
-
-    try
-    {
-        stream >> out;
-    }
-    catch (const std::exception& ex)
-    {
-        std::cerr << "failed to parse json '" << path << "': " << ex.what() << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-[[maybe_unused]] bool CollectMeshSignatures(const ozz::sample::Mesh& mesh, std::unordered_map<std::string, size_t>& signatures, int& raw_vertex_count)
-{
-    signatures.clear();
-    raw_vertex_count = 0;
-
-    for (const ozz::sample::Mesh::Part& part : mesh.parts)
-    {
-        const int vertex_count = part.vertex_count();
-        const int influences = part.influences_count();
-        raw_vertex_count += vertex_count;
-
-        for (int vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
-        {
-            const int position_offset = vertex_index * ozz::sample::Mesh::Part::kPositionsCpnts;
-            if (position_offset + 2 >= static_cast<int>(part.positions.size()))
-            {
-                std::cerr << "mesh positions array truncated" << std::endl;
-                return false;
-            }
-
-            const double px = part.positions[position_offset + 0];
-            const double py = part.positions[position_offset + 1];
-            const double pz = part.positions[position_offset + 2];
-
-            std::vector<std::pair<int, double>> weights;
-            if (influences <= 0)
-            {
-                weights.emplace_back(0, 1.0);
-            }
-            else
-            {
-                const int joint_offset = vertex_index * influences;
-                if (joint_offset + influences > static_cast<int>(part.joint_indices.size()))
-                {
-                    std::cerr << "joint indices array truncated" << std::endl;
-                    return false;
-                }
-
-                double partial_sum = 0.0;
-                for (int influence = 0; influence < influences; ++influence)
-                {
-                    const uint16_t palette_index = part.joint_indices[joint_offset + influence];
-                    int skeleton_joint = palette_index;
-                    if (!mesh.joint_remaps.empty())
-                    {
-                        if (palette_index >= mesh.joint_remaps.size())
-                        {
-                            std::cerr << "joint remap index out of bounds" << std::endl;
-                            return false;
-                        }
-                        skeleton_joint = mesh.joint_remaps[palette_index];
-                    }
-
-                    double weight = 1.0;
-                    if (influences > 1)
-                    {
-                        if (influence < influences - 1)
-                        {
-                            const int weight_offset = vertex_index * (influences - 1) + influence;
-                            if (weight_offset >= static_cast<int>(part.joint_weights.size()))
-                            {
-                                std::cerr << "joint weights array truncated" << std::endl;
-                                return false;
-                            }
-                            weight = part.joint_weights[weight_offset];
-                            partial_sum += weight;
-                        }
-                        else
-                        {
-                            weight = std::max(0.0, 1.0 - partial_sum);
-                        }
-                    }
-
-                    weights.emplace_back(skeleton_joint, weight);
-                }
-            }
-
-            const std::string signature = BuildVertexSignatureFromComponents(px, py, pz, weights);
-            if (!signature.empty())
-                signatures[signature]++;
-        }
-    }
-
-    return true;
-}
-
-bool ValidateMatrix4x4(const Json& matrix, const std::string& context)
-{
-    if (!matrix.is_array() || matrix.size() != 4)
-    {
-        std::cerr << context << ": expected 4 rows" << std::endl;
-        return false;
-    }
-
-    bool ok = true;
-    for (size_t row = 0; row < 4; ++row)
-    {
-        const auto& row_data = matrix[row];
-        if (!row_data.is_array() || row_data.size() != 4)
-        {
-            std::cerr << context << ": row " << row << " malformed" << std::endl;
-            ok = false;
-        }
-    }
-    return ok;
-}
-
-bool ValidateJointPalette(const Json& palette, const ozz::animation::Skeleton& skeleton, const std::string& context)
-{
-    if (!palette.is_array())
-    {
-        std::cerr << context << ": palette not an array" << std::endl;
-        return false;
-    }
-
-    bool ok = true;
-    const int joint_count = skeleton.num_joints();
-    for (size_t idx = 0; idx < palette.size(); ++idx)
-    {
-        const auto& entry = palette[idx];
-        if (!entry.is_object())
-        {
-            std::cerr << context << ": entry " << idx << " not an object" << std::endl;
-            ok = false;
-            continue;
-        }
-
-        const int joint_index = entry.value("joint_index", -1);
-        if (joint_index < 0 || joint_index >= joint_count)
-        {
-            std::cerr << context << ": palette joint index " << joint_index << " out of bounds" << std::endl;
-            ok = false;
-        }
-
-        if (entry.contains("inverse_bind_pose"))
-        {
-            ok &= ValidateMatrix4x4(entry["inverse_bind_pose"], context + ".inverse_bind_pose");
-        }
-        if (entry.contains("skinning_matrix"))
-        {
-            ok &= ValidateMatrix4x4(entry["skinning_matrix"], context + ".skinning_matrix");
-        }
-    }
-    return ok;
 }
 
 const std::array<const char*, 4> kExpectedMultiMotionNames = {
@@ -972,49 +609,314 @@ std::string ReadString(ozz::io::IArchive& archive)
     return value;
 }
 
-bool ReadSerializedMotionMetadata(ozz::io::IArchive& archive, std::string* motion_name)
+struct SerializedMotionInterval
 {
-    std::string name = ReadString(archive);
+    float first = 0.f;
+    float second = 0.f;
+};
 
+struct SerializedMotionMark
+{
+    std::string name;
+    std::vector<SerializedMotionInterval> intervals;
+};
+
+struct SerializedBoneMotion
+{
+    uint16_t bone_id = BI_NONE;
+    uint8_t flags = 0;
+    uint8_t translation_format = 0;
+    uint32_t rotation_crc = 0;
+    uint32_t translation_crc = 0;
+    std::vector<CKeyQR> rotation_keys;
+    std::vector<CKeyQT8> translation_keys8;
+    std::vector<CKeyQT16> translation_keys16;
+    Fvector translation_size{};
+    Fvector translation_init{};
+};
+
+struct SerializedMotionMetadata
+{
+    std::string name;
     uint32_t flags = 0;
-    archive >> flags;
-
     uint16_t bone_or_part = 0;
-    archive >> bone_or_part;
-
     uint16_t motion_id = 0;
-    archive >> motion_id;
-
     float speed = 0.f;
     float power = 0.f;
     float accrue = 0.f;
     float falloff = 0.f;
-    archive >> speed;
-    archive >> power;
-    archive >> accrue;
-    archive >> falloff;
+    std::vector<SerializedMotionMark> marks;
+    uint32_t frame_count = 0;
+    std::vector<SerializedBoneMotion> bone_motions;
+};
+
+bool ReadSerializedMotionMetadata(ozz::io::IArchive& archive, SerializedMotionMetadata* metadata_out)
+{
+    SerializedMotionMetadata metadata;
+
+    metadata.name = ReadString(archive);
+
+    archive >> metadata.flags;
+    archive >> metadata.bone_or_part;
+    archive >> metadata.motion_id;
+    archive >> metadata.speed;
+    archive >> metadata.power;
+    archive >> metadata.accrue;
+    archive >> metadata.falloff;
 
     uint32_t mark_count = 0;
     archive >> mark_count;
+    metadata.marks.reserve(mark_count);
     for (uint32_t mark_index = 0; mark_index < mark_count; ++mark_index)
     {
-        std::string mark_name = ReadString(archive);
+        SerializedMotionMark mark;
+        mark.name = ReadString(archive);
 
         uint32_t interval_count = 0;
         archive >> interval_count;
+        mark.intervals.reserve(interval_count);
         for (uint32_t interval_index = 0; interval_index < interval_count; ++interval_index)
         {
-            float start = 0.f;
-            float end = 0.f;
-            archive >> start;
-            archive >> end;
+            SerializedMotionInterval interval;
+            archive >> interval.first;
+            archive >> interval.second;
+            mark.intervals.push_back(interval);
+        }
+        metadata.marks.emplace_back(std::move(mark));
+    }
+
+    archive >> metadata.frame_count;
+
+    uint32_t bone_motion_count = 0;
+    archive >> bone_motion_count;
+    metadata.bone_motions.resize(bone_motion_count);
+
+    for (uint32_t bone_index = 0; bone_index < bone_motion_count; ++bone_index)
+    {
+        SerializedBoneMotion bone;
+        archive >> bone.bone_id;
+        archive >> bone.flags;
+        archive >> bone.translation_format;
+        archive >> bone.rotation_crc;
+        archive >> bone.translation_crc;
+
+        uint32_t rotation_key_count = 0;
+        archive >> rotation_key_count;
+        bone.rotation_keys.resize(rotation_key_count);
+        for (uint32_t key_index = 0; key_index < rotation_key_count; ++key_index)
+        {
+            archive >> bone.rotation_keys[key_index].x;
+            archive >> bone.rotation_keys[key_index].y;
+            archive >> bone.rotation_keys[key_index].z;
+            archive >> bone.rotation_keys[key_index].w;
+        }
+
+        uint32_t translation_key_count = 0;
+        archive >> translation_key_count;
+        switch (bone.translation_format)
+        {
+        case 1:
+            bone.translation_keys8.resize(translation_key_count);
+            for (uint32_t key_index = 0; key_index < translation_key_count; ++key_index)
+            {
+                archive >> bone.translation_keys8[key_index].x1;
+                archive >> bone.translation_keys8[key_index].y1;
+                archive >> bone.translation_keys8[key_index].z1;
+            }
+            break;
+        case 2:
+            bone.translation_keys16.resize(translation_key_count);
+            for (uint32_t key_index = 0; key_index < translation_key_count; ++key_index)
+            {
+                archive >> bone.translation_keys16[key_index].x1;
+                archive >> bone.translation_keys16[key_index].y1;
+                archive >> bone.translation_keys16[key_index].z1;
+            }
+            break;
+        default:
+            for (uint32_t key_index = 0; key_index < translation_key_count; ++key_index)
+            {
+                int16_t x = 0;
+                int16_t y = 0;
+                int16_t z = 0;
+                archive >> x;
+                archive >> y;
+                archive >> z;
+            }
+            break;
+        }
+
+        archive >> bone.translation_size.x;
+        archive >> bone.translation_size.y;
+        archive >> bone.translation_size.z;
+        archive >> bone.translation_init.x;
+        archive >> bone.translation_init.y;
+        archive >> bone.translation_init.z;
+
+        metadata.bone_motions[bone_index] = std::move(bone);
+    }
+
+    if (metadata_out)
+        *metadata_out = std::move(metadata);
+
+    return true;
+}
+
+uint8_t DetermineTranslationFormat(const XRay::Animation::ConvertedBoneMotion& bone)
+{
+    if (!bone.translation_keys16.empty())
+        return 2;
+    if (!bone.translation_keys8.empty())
+        return 1;
+    return 0;
+}
+
+bool CompareBoneMotion(const SerializedBoneMotion& metadata_bone, const XRay::Animation::ConvertedBoneMotion& expected_bone,
+    const std::string& motion_name)
+{
+    bool ok = true;
+    const uint16_t bone_id = metadata_bone.bone_id;
+
+    if (metadata_bone.flags != expected_bone.flags)
+    {
+        std::cerr << "motion '" << motion_name << "' bone " << bone_id << " flags mismatch: metadata="
+                  << static_cast<int>(metadata_bone.flags) << " expected=" << static_cast<int>(expected_bone.flags) << std::endl;
+        ok = false;
+    }
+
+    if (metadata_bone.rotation_crc != expected_bone.rotation_crc)
+    {
+        std::cerr << "motion '" << motion_name << "' bone " << bone_id << " rotation CRC mismatch: metadata="
+                  << metadata_bone.rotation_crc << " expected=" << expected_bone.rotation_crc << std::endl;
+        ok = false;
+    }
+
+    if (metadata_bone.translation_crc != expected_bone.translation_crc)
+    {
+        std::cerr << "motion '" << motion_name << "' bone " << bone_id << " translation CRC mismatch: metadata="
+                  << metadata_bone.translation_crc << " expected=" << expected_bone.translation_crc << std::endl;
+        ok = false;
+    }
+
+    const uint8_t expected_format = DetermineTranslationFormat(expected_bone);
+    if (metadata_bone.translation_format != expected_format)
+    {
+        std::cerr << "motion '" << motion_name << "' bone " << bone_id << " translation format mismatch: metadata="
+                  << static_cast<int>(metadata_bone.translation_format) << " expected=" << static_cast<int>(expected_format) << std::endl;
+        ok = false;
+    }
+
+    if (metadata_bone.rotation_keys.size() != expected_bone.rotation_keys.size())
+    {
+        std::cerr << "motion '" << motion_name << "' bone " << bone_id << " rotation key count mismatch: metadata="
+                  << metadata_bone.rotation_keys.size() << " expected=" << expected_bone.rotation_keys.size() << std::endl;
+        ok = false;
+    }
+    else
+    {
+        for (size_t idx = 0; idx < metadata_bone.rotation_keys.size(); ++idx)
+        {
+            const CKeyQR& actual = metadata_bone.rotation_keys[idx];
+            const CKeyQR& expected = expected_bone.rotation_keys[idx];
+            if (actual.x != expected.x || actual.y != expected.y || actual.z != expected.z || actual.w != expected.w)
+            {
+                std::cerr << "motion '" << motion_name << "' bone " << bone_id << " rotation key mismatch at index " << idx << std::endl;
+                ok = false;
+                break;
+            }
         }
     }
 
-    if (motion_name)
-        *motion_name = std::move(name);
+    auto compare_translation_keys8 = [&](const std::vector<CKeyQT8>& metadata_keys, const xr_vector<CKeyQT8>& expected_keys)
+    {
+        if (metadata_keys.size() != expected_keys.size())
+        {
+            std::cerr << "motion '" << motion_name << "' bone " << bone_id << " translation key count mismatch (8-bit): metadata="
+                      << metadata_keys.size() << " expected=" << expected_keys.size() << std::endl;
+            ok = false;
+            return;
+        }
+        for (size_t idx = 0; idx < metadata_keys.size(); ++idx)
+        {
+            const CKeyQT8& actual = metadata_keys[idx];
+            const CKeyQT8& expected = expected_keys[idx];
+            if (actual.x1 != expected.x1 || actual.y1 != expected.y1 || actual.z1 != expected.z1)
+            {
+                std::cerr << "motion '" << motion_name << "' bone " << bone_id << " translation key mismatch (8-bit) at index " << idx << std::endl;
+                ok = false;
+                break;
+            }
+        }
+    };
 
-    return true;
+    auto compare_translation_keys16 = [&](const std::vector<CKeyQT16>& metadata_keys, const xr_vector<CKeyQT16>& expected_keys)
+    {
+        if (metadata_keys.size() != expected_keys.size())
+        {
+            std::cerr << "motion '" << motion_name << "' bone " << bone_id << " translation key count mismatch (16-bit): metadata="
+                      << metadata_keys.size() << " expected=" << expected_keys.size() << std::endl;
+            ok = false;
+            return;
+        }
+        for (size_t idx = 0; idx < metadata_keys.size(); ++idx)
+        {
+            const CKeyQT16& actual = metadata_keys[idx];
+            const CKeyQT16& expected = expected_keys[idx];
+            if (actual.x1 != expected.x1 || actual.y1 != expected.y1 || actual.z1 != expected.z1)
+            {
+                std::cerr << "motion '" << motion_name << "' bone " << bone_id << " translation key mismatch (16-bit) at index " << idx << std::endl;
+                ok = false;
+                break;
+            }
+        }
+    };
+
+    switch (expected_format)
+    {
+    case 1:
+        compare_translation_keys8(metadata_bone.translation_keys8, expected_bone.translation_keys8);
+        if (!metadata_bone.translation_keys16.empty())
+        {
+            std::cerr << "motion '" << motion_name << "' bone " << bone_id << " unexpected 16-bit translation keys present" << std::endl;
+            ok = false;
+        }
+        break;
+    case 2:
+        compare_translation_keys16(metadata_bone.translation_keys16, expected_bone.translation_keys16);
+        if (!metadata_bone.translation_keys8.empty())
+        {
+            std::cerr << "motion '" << motion_name << "' bone " << bone_id << " unexpected 8-bit translation keys present" << std::endl;
+            ok = false;
+        }
+        break;
+    default:
+        if (!metadata_bone.translation_keys8.empty() || !metadata_bone.translation_keys16.empty())
+        {
+            std::cerr << "motion '" << motion_name << "' bone " << bone_id << " unexpected translation keys present for static track" << std::endl;
+            ok = false;
+        }
+        break;
+    }
+
+    constexpr float kFloatTolerance = 1e-4f;
+    auto check_float = [&](float lhs, float rhs, const char* label)
+    {
+        if (std::fabs(lhs - rhs) > kFloatTolerance)
+        {
+            std::cerr << "motion '" << motion_name << "' bone " << bone_id << " " << label << " mismatch: metadata=" << lhs << " expected=" << rhs
+                      << std::endl;
+            ok = false;
+        }
+    };
+
+    check_float(metadata_bone.translation_size.x, expected_bone.translation_size.x, "translation_size.x");
+    check_float(metadata_bone.translation_size.y, expected_bone.translation_size.y, "translation_size.y");
+    check_float(metadata_bone.translation_size.z, expected_bone.translation_size.z, "translation_size.z");
+    check_float(metadata_bone.translation_init.x, expected_bone.translation_init.x, "translation_init.x");
+    check_float(metadata_bone.translation_init.y, expected_bone.translation_init.y, "translation_init.y");
+    check_float(metadata_bone.translation_init.z, expected_bone.translation_init.z, "translation_init.z");
+
+    return ok;
 }
 
 bool LoadAnimationByName(const fs::path& path, const std::string& motion_name, ozz::animation::Animation& animation_out)
@@ -1056,8 +958,9 @@ bool LoadAnimationByName(const fs::path& path, const std::string& motion_name, o
         ozz::animation::Animation animation;
         archive >> animation;
 
-        std::string metadata_name;
-        ReadSerializedMotionMetadata(archive, &metadata_name);
+        SerializedMotionMetadata metadata;
+        ReadSerializedMotionMetadata(archive, &metadata);
+        const std::string& metadata_name = metadata.name;
 
         if (!found)
         {
@@ -1153,15 +1056,6 @@ fs::path ResolveConverterBinary()
 #endif
 }
 
-fs::path ResolveViewerBinary()
-{
-#ifdef _WIN32
-    return ResolveBinary("ozz_animation_viewer.exe");
-#else
-    return ResolveBinary("ozz_animation_viewer");
-#endif
-}
-
 std::string BuildCommand(const fs::path& binary, const std::vector<std::string>& args)
 {
     const fs::path binary_dir = binary.parent_path();
@@ -1219,11 +1113,8 @@ bool ConvertSkeleton(bool force)
     std::error_code ec;
     fs::create_directories(output_dir, ec);
 
-    if (force && fs::exists(output_file))
+    if (fs::exists(output_file))
         fs::remove(output_file);
-
-    if (!force && fs::exists(output_file))
-        return true;
 
     std::vector<std::string> args = { "skeleton", SkeletonInputPath().string(), output_file.string(), "--dump-bind", SkeletonCsvPath().string() };
 
@@ -1245,11 +1136,8 @@ bool ConvertMesh(bool force)
     std::error_code ec;
     fs::create_directories(output_dir, ec);
 
-    if (force && fs::exists(output_file))
+    if (fs::exists(output_file))
         fs::remove(output_file);
-
-    if (!force && fs::exists(output_file))
-        return true;
 
     std::vector<std::string> args = {
         "mesh",
@@ -1274,11 +1162,8 @@ bool ConvertBundle(bool force)
     std::error_code ec;
     fs::create_directories(TestArtifactsDir(), ec);
 
-    if (force && fs::exists(output_file))
+    if (fs::exists(output_file))
         fs::remove(output_file);
-
-    if (!force && fs::exists(output_file))
-        return true;
 
     std::vector<std::string> args = { "bundle", SkeletonInputPath().string(), output_file.string() };
 
@@ -1292,32 +1177,17 @@ bool ConvertBundle(bool force)
     return fs::exists(output_file);
 }
 
-bool EnsureSkeletonGenerated()
-{
-    static bool cached = false;
-    static bool status = false;
-    if (!cached)
-    {
-        status = ConvertSkeleton(false);
-        cached = true;
-    }
-    return status;
-}
-
 bool ConvertAnimation(bool force)
 {
-    if (!EnsureSkeletonGenerated())
+    if (!ConvertSkeleton(true))
         return false;
 
     const fs::path output_file = AnimationOutputPath();
     std::error_code ec;
     fs::create_directories(TestArtifactsDir(), ec);
 
-    if (force && fs::exists(output_file))
+    if (fs::exists(output_file))
         fs::remove(output_file);
-
-    if (!force && fs::exists(output_file))
-        return true;
 
     std::vector<std::string> args = { "animation", AnimationInputPath().string(), output_file.string(), SkeletonInputPath().string(), "--metadata",
         AnimationMetadataPath().string() };
@@ -1332,19 +1202,16 @@ bool ConvertAnimation(bool force)
     return fs::exists(output_file);
 }
 
-bool ConvertSpecificMotionInternal(const std::string& motion_name, bool force, const fs::path& output_file, bool optimize)
+bool ConvertSpecificMotionInternal(const std::string& motion_name, const fs::path& output_file, bool optimize)
 {
-    if (!EnsureSkeletonGenerated())
+    if (!ConvertSkeleton(true))
         return false;
 
     std::error_code ec;
     fs::create_directories(TestArtifactsDir(), ec);
 
-    if (force && fs::exists(output_file))
+    if (fs::exists(output_file))
         fs::remove(output_file);
-
-    if (!force && fs::exists(output_file))
-        return true;
 
     std::vector<std::string> args = {
         "animation",
@@ -1369,12 +1236,12 @@ bool ConvertSpecificMotionInternal(const std::string& motion_name, bool force, c
 
 bool ConvertSpecificMotion(const std::string& motion_name, bool force)
 {
-    return ConvertSpecificMotionInternal(motion_name, force, SingleAnimationOutputPath(), false);
+    return ConvertSpecificMotionInternal(motion_name, SingleAnimationOutputPath(), false);
 }
 
 bool ConvertSpecificMotionOptimized(const std::string& motion_name, bool force)
 {
-    return ConvertSpecificMotionInternal(motion_name, force, SingleAnimationOptimizedOutputPath(), true);
+    return ConvertSpecificMotionInternal(motion_name, SingleAnimationOptimizedOutputPath(), true);
 }
 
 template <typename T>
@@ -1419,7 +1286,7 @@ bool LoadOzz(const fs::path& path, T& object)
     }
 }
 
-[[maybe_unused]] int FindJoint(const ozz::animation::Skeleton& skeleton, const std::string& name)
+int FindJoint(const ozz::animation::Skeleton& skeleton, const std::string& name)
 {
     const int index = ozz::animation::FindJoint(skeleton, name.c_str());
     if (index < 0)
@@ -2028,7 +1895,7 @@ bool TestOptimizedAnimationMatchesSource()
         return false;
     }
 
-    if (!EnsureSkeletonGenerated())
+    if (!ConvertSkeleton(true))
         return false;
 
     ozz::animation::Skeleton skeleton;
@@ -2162,8 +2029,9 @@ bool TestMultipleAnimationConversion()
             return false;
         }
 
-        std::string metadata_name;
-        ReadSerializedMotionMetadata(archive, &metadata_name);
+        SerializedMotionMetadata metadata;
+        ReadSerializedMotionMetadata(archive, &metadata);
+        const std::string& metadata_name = metadata.name;
         if (metadata_name != name)
         {
             std::cerr << "metadata name mismatch for animation '" << name << "', metadata reports '" << metadata_name << "'" << std::endl;
@@ -2183,6 +2051,112 @@ bool TestMultipleAnimationConversion()
     }
 
     return true;
+}
+
+bool TestAnimationMetadataIncludesBoneMotions()
+{
+    if (!ConvertAnimation(true))
+        return false;
+
+    ozz::animation::Skeleton skeleton;
+    if (!LoadOzz(SkeletonOutputPath(), skeleton))
+        return false;
+
+    xr_vector<xr_string> bone_names;
+    const auto joint_names = skeleton.joint_names();
+    bone_names.reserve(joint_names.size());
+    for (const char* name : joint_names)
+        bone_names.emplace_back(name ? name : "");
+
+    xr_vector<XRay::Animation::ConvertedOmfAnimation> converted;
+    if (!XRay::Animation::ConvertLegacyOmf(AnimationInputPath(), bone_names, skeleton, converted))
+    {
+        std::cerr << "ConvertLegacyOmf failed" << std::endl;
+        return false;
+    }
+
+    std::unordered_map<std::string, const XRay::Animation::ConvertedOmfAnimation*> expected_by_name;
+    expected_by_name.reserve(converted.size());
+    for (const auto& entry : converted)
+        expected_by_name.emplace(std::string(entry.name.c_str()), &entry);
+
+    ozz::io::File file(AnimationOutputPath().string().c_str(), "rb");
+    if (!file.opened())
+    {
+        std::cerr << "failed to open animation archive: " << AnimationOutputPath() << std::endl;
+        return false;
+    }
+
+    ozz::io::IArchive archive(&file);
+    if (archive.TestTag<ozz::animation::Animation>())
+    {
+        std::cerr << "expected multi-animation archive but found single animation" << std::endl;
+        return false;
+    }
+
+    file.Seek(0, ozz::io::File::kSet);
+    archive = ozz::io::IArchive(&file);
+
+    uint32_t animation_count = 0;
+    archive >> animation_count;
+
+    bool ok = true;
+
+    for (uint32_t index = 0; index < animation_count; ++index)
+    {
+        ozz::animation::Animation animation;
+        archive >> animation;
+
+        SerializedMotionMetadata metadata;
+        ReadSerializedMotionMetadata(archive, &metadata);
+
+        auto expected_it = expected_by_name.find(metadata.name);
+        if (expected_it == expected_by_name.end())
+        {
+            std::cerr << "unexpected metadata entry '" << metadata.name << "'" << std::endl;
+            ok = false;
+            continue;
+        }
+
+        const auto& expected = *expected_it->second;
+
+        if (metadata.frame_count != expected.frame_count)
+        {
+            std::cerr << "motion '" << metadata.name << "' frame count mismatch: metadata=" << metadata.frame_count
+                      << " expected=" << expected.frame_count << std::endl;
+            ok = false;
+        }
+
+        std::unordered_map<uint16_t, const XRay::Animation::ConvertedBoneMotion*> expected_bones;
+        expected_bones.reserve(expected.bone_motions.size());
+        for (const auto& bone : expected.bone_motions)
+            expected_bones.emplace(bone.bone_id, &bone);
+
+        for (const auto& bone : metadata.bone_motions)
+        {
+            auto expected_bone_it = expected_bones.find(bone.bone_id);
+            if (expected_bone_it == expected_bones.end())
+            {
+                std::cerr << "motion '" << metadata.name << "' unexpected bone id " << bone.bone_id << std::endl;
+                ok = false;
+                continue;
+            }
+
+            if (!CompareBoneMotion(bone, *expected_bone_it->second, metadata.name))
+                ok = false;
+
+            expected_bones.erase(expected_bone_it);
+        }
+
+        if (!expected_bones.empty())
+        {
+            for (const auto& missing : expected_bones)
+                std::cerr << "motion '" << metadata.name << "' missing bone id " << missing.first << std::endl;
+            ok = false;
+        }
+    }
+
+    return ok;
 }
 
 bool TestAnimationNamesPreserved()
@@ -2238,9 +2212,10 @@ bool TestAnimationNamesPreserved()
             return false;
         }
 
-        std::string metadata_name;
-        ReadSerializedMotionMetadata(archive, &metadata_name);
+        SerializedMotionMetadata metadata;
+        ReadSerializedMotionMetadata(archive, &metadata);
 
+        const std::string& metadata_name = metadata.name;
         if (metadata_name.empty())
         {
             std::cerr << "metadata missing name for animation index " << i << std::endl;
@@ -2287,7 +2262,7 @@ bool TestAssetBundleContainsSkeletonAndMesh()
     if (!XRay::Animation::ReadOzzxBundle(BundleOutputPath(), bundle))
         return false;
 
-    if (bundle.version < 2u)
+    if (bundle.version != 1u)
     {
         std::cerr << "unexpected bundle version " << bundle.version << std::endl;
         return false;
@@ -2308,6 +2283,12 @@ bool TestAssetBundleContainsSkeletonAndMesh()
     if (bundle.motion_refs.empty())
     {
         std::cerr << "bundle missing motion references" << std::endl;
+        return false;
+    }
+
+    if (bundle.bone_metadata.empty())
+    {
+        std::cerr << "bundle missing bone metadata" << std::endl;
         return false;
     }
 
@@ -2557,6 +2538,11 @@ TEST(ConverterIntegration, AnimationMatchesReference)
 TEST(ConverterIntegration, MultipleAnimationConversion)
 {
     EXPECT_TRUE(TestMultipleAnimationConversion());
+}
+
+TEST(ConverterIntegration, AnimationMetadataIncludesBoneMotions)
+{
+    EXPECT_TRUE(TestAnimationMetadataIncludesBoneMotions());
 }
 
 TEST(ConverterIntegration, AnimationNamesPreserved)

@@ -77,6 +77,7 @@ private:
     xr_vector<COzzSkinnedSurface*> surfaces_;
     xr_vector<Fmatrix> bone_palette_;
     xr_vector<xr_string> motion_references_;
+    XRay::Animation::ExtendedBoneMetadataCollection bone_metadata_;
     u32 last_animation_update_frame_ = u32(-1);
     bool initialized_ = false;
 };

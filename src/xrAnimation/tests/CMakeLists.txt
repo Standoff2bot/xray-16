@@ -82,6 +82,7 @@ target_sources(ozz_kinematics_tests PRIVATE
 
 target_link_libraries(ozz_kinematics_tests PRIVATE
     xrAnimation
+    xrMaterialSystem
     ozz_animation
     ozz_base
     gtest

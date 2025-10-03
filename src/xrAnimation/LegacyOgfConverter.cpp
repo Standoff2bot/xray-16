@@ -2,6 +2,7 @@
 
 #include "LegacyOgfConverter.h"
 
+#include "ExtendedBoneMetadata.h"
 #include "OzzConversion.h"
 
 #include "xrCore/xrCore.h"
@@ -264,6 +265,20 @@ struct BoneRecord
     Fmatrix global_transform{};
     float mass = 0.f;
     Fvector center_of_mass{};
+    SBoneShape shape{};
+    SJointIKData joint_ik{};
+    std::string game_material;
+
+    float rest_length = 0.f;
+    Fvector dominant_axis{};
+    Fvector local_aabb_min{};
+    Fvector local_aabb_max{};
+    Fmatrix inverse_global_transform{};
+    Fvector inertia_tensor{};
+    float volume = 0.f;
+    Flags32 collision_layers{};
+    bool ground_contact_candidate = false;
+    bool weapon_anchor_candidate = false;
 };
 
 struct MotionMark
@@ -662,25 +677,25 @@ void ReadIkData(const Chunk& chunk, std::vector<BoneRecord>& bones)
     {
         const u32 version = reader.read<u32>();
 
-        reader.read_stringz(); // game material
-        (void)reader.read_struct<SBoneShape>();
+        bone.game_material = reader.read_stringz();
+        bone.shape = reader.read_struct<SBoneShape>();
 
-        reader.read<u32>(); // joint type
+        bone.joint_ik.type = static_cast<EJointType>(reader.read<u32>());
         for (int axis = 0; axis < 3; ++axis)
         {
-            reader.read<float>(); // min
-            reader.read<float>(); // max
-            reader.read<float>(); // spring
-            reader.read<float>(); // damping
+            auto& limit = bone.joint_ik.limits[axis];
+            limit.limit.x = reader.read<float>();
+            limit.limit.y = reader.read<float>();
+            limit.spring_factor = reader.read<float>();
+            limit.damping_factor = reader.read<float>();
         }
 
-        reader.read<float>(); // spring factor
-        reader.read<float>(); // damping factor
-        reader.read<u32>();   // IK flags
-        reader.read<float>(); // break force
-        reader.read<float>(); // break torque
-        if (version > 0)
-            reader.read<float>(); // friction
+        bone.joint_ik.spring_factor = reader.read<float>();
+        bone.joint_ik.damping_factor = reader.read<float>();
+        bone.joint_ik.ik_flags.assign(reader.read<u32>());
+        bone.joint_ik.break_force = reader.read<float>();
+        bone.joint_ik.break_torque = reader.read<float>();
+        bone.joint_ik.friction = version > 0 ? reader.read<float>() : 0.f;
 
         bone.rest_rotation = reader.read_fvector3();
         bone.rest_translation = reader.read_fvector3();
@@ -748,6 +763,435 @@ void ComputeGlobalTransforms(std::vector<BoneRecord>& bones)
         }
 }
 
+constexpr float kVectorEpsilon = 1e-6f;
+constexpr float kGroundHeightThreshold = 0.12f;
+constexpr float kDownAlignmentThreshold = -0.7f;
+constexpr float kPi = 3.14159265358979323846f;
+
+Fvector NormalizeOrDefault(const Fvector& value, const Fvector& fallback)
+{
+    Fvector result = value;
+    if (result.square_magnitude() <= kVectorEpsilon)
+    {
+        result.set(fallback.x, fallback.y, fallback.z);
+        if (result.square_magnitude() <= kVectorEpsilon)
+            result.set(0.f, 1.f, 0.f);
+    }
+    result.normalize_safe();
+    return result;
+}
+
+Fmatrix ExtractRotation(const Fmatrix& source)
+{
+    Fmatrix rotation = source;
+    rotation.c.set(0.f, 0.f, 0.f);
+    rotation._44_ = 1.f;
+    return rotation;
+}
+
+Fvector ComputeDominantAxis(const BoneRecord& bone)
+{
+    Fvector default_axis;
+    default_axis.set(0.f, 1.f, 0.f);
+    Fvector fallback = NormalizeOrDefault(bone.local_transform.c, default_axis);
+
+    const SBoneShape& shape = bone.shape;
+    const Fmatrix rotation = ExtractRotation(bone.local_transform);
+
+    if (shape.type == SBoneShape::stBox)
+    {
+        const Fvector& halfsize = shape.box.m_halfsize;
+        float extents[3] = { halfsize.x, halfsize.y, halfsize.z };
+        int axis_index = 0;
+        float max_extent = extents[0];
+        for (int idx = 1; idx < 3; ++idx)
+        {
+            if (extents[idx] > max_extent)
+            {
+                axis_index = idx;
+                max_extent = extents[idx];
+            }
+        }
+
+        if (max_extent > kVectorEpsilon)
+        {
+            Fvector local_axis;
+            switch (axis_index)
+            {
+            case 0: local_axis.set(shape.box.m_rotate.i); break;
+            case 1: local_axis.set(shape.box.m_rotate.j); break;
+            default: local_axis.set(shape.box.m_rotate.k); break;
+            }
+
+            if (local_axis.square_magnitude() > kVectorEpsilon)
+            {
+                Fvector oriented_axis;
+                rotation.transform_dir(oriented_axis, local_axis);
+                return NormalizeOrDefault(oriented_axis, fallback);
+            }
+        }
+    }
+    else if (shape.type == SBoneShape::stCylinder)
+    {
+        Fvector axis = shape.cylinder.m_direction;
+        if (axis.square_magnitude() > kVectorEpsilon)
+        {
+            axis.normalize_safe();
+            Fvector oriented_axis;
+            rotation.transform_dir(oriented_axis, axis);
+            return NormalizeOrDefault(oriented_axis, fallback);
+        }
+    }
+
+    return fallback;
+}
+
+void ExpandBounds(Fvector& min, Fvector& max, const Fvector& point)
+{
+    min.x = std::min(min.x, point.x);
+    min.y = std::min(min.y, point.y);
+    min.z = std::min(min.z, point.z);
+    max.x = std::max(max.x, point.x);
+    max.y = std::max(max.y, point.y);
+    max.z = std::max(max.z, point.z);
+}
+
+std::pair<Fvector, Fvector> ComputeLocalAabb(const BoneRecord& bone)
+{
+    Fvector bounds_min;
+    bounds_min.set(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+    Fvector bounds_max;
+    bounds_max.set(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+
+    bool has_points = false;
+    auto emit_point = [&](const Fvector& local_point)
+    {
+        Fvector parent_point;
+        bone.local_transform.transform_tiny(parent_point, local_point);
+        ExpandBounds(bounds_min, bounds_max, parent_point);
+        has_points = true;
+    };
+
+    const SBoneShape& shape = bone.shape;
+
+    switch (shape.type)
+    {
+    case SBoneShape::stBox:
+    {
+        const Fvector& center = shape.box.m_translate;
+        const Fvector& halfsize = shape.box.m_halfsize;
+        if (halfsize.square_magnitude() > kVectorEpsilon)
+        {
+            const Fvector axes[3] = {
+                Fvector().set(shape.box.m_rotate.i),
+                Fvector().set(shape.box.m_rotate.j),
+                Fvector().set(shape.box.m_rotate.k),
+            };
+
+            for (int x_sign = -1; x_sign <= 1; x_sign += 2)
+            {
+                for (int y_sign = -1; y_sign <= 1; y_sign += 2)
+                {
+                    for (int z_sign = -1; z_sign <= 1; z_sign += 2)
+                    {
+                        Fvector corner = center;
+                        Fvector offset = axes[0];
+                        offset.mul(static_cast<float>(x_sign) * halfsize.x);
+                        corner.add(offset);
+                        offset = axes[1];
+                        offset.mul(static_cast<float>(y_sign) * halfsize.y);
+                        corner.add(offset);
+                        offset = axes[2];
+                        offset.mul(static_cast<float>(z_sign) * halfsize.z);
+                        corner.add(offset);
+                        emit_point(corner);
+                    }
+                }
+            }
+        }
+        break;
+    }
+    case SBoneShape::stSphere:
+    {
+        Fvector center;
+        bone.local_transform.transform_tiny(center, shape.sphere.P);
+        const float radius = shape.sphere.R;
+        if (radius > 0.f)
+        {
+            Fvector radius_vec;
+            radius_vec.set(radius, radius, radius);
+            Fvector min_point = center;
+            min_point.sub(radius_vec);
+            Fvector max_point = center;
+            max_point.add(radius_vec);
+            ExpandBounds(bounds_min, bounds_max, min_point);
+            ExpandBounds(bounds_min, bounds_max, max_point);
+            has_points = true;
+        }
+        else
+        {
+            emit_point(shape.sphere.P);
+        }
+        break;
+    }
+    case SBoneShape::stCylinder:
+    {
+        const float radius = shape.cylinder.m_radius;
+        const float height = shape.cylinder.m_height;
+        Fvector dir = shape.cylinder.m_direction;
+        if (radius > 0.f && height > 0.f && dir.square_magnitude() > kVectorEpsilon)
+        {
+            dir.normalize_safe();
+            Fvector up;
+            up.set(0.f, 1.f, 0.f);
+            if (std::fabs(dir.dotproduct(up)) > 0.9f)
+                up.set(1.f, 0.f, 0.f);
+
+            Fvector perp1;
+            perp1.crossproduct(up, dir);
+            if (perp1.square_magnitude() <= kVectorEpsilon)
+            {
+                perp1.set(1.f, 0.f, 0.f);
+                if (std::fabs(dir.dotproduct(perp1)) > 0.9f)
+                    perp1.set(0.f, 0.f, 1.f);
+                perp1.crossproduct(perp1, dir);
+            }
+            perp1.normalize_safe();
+
+            Fvector perp2;
+            perp2.crossproduct(dir, perp1);
+            perp2.normalize_safe();
+
+            const float half_height = height * 0.5f;
+            const Fvector center = shape.cylinder.m_center;
+
+            for (int axis_sign = -1; axis_sign <= 1; axis_sign += 2)
+            {
+                Fvector cap_center = center;
+                Fvector axis_offset = dir;
+                axis_offset.mul(static_cast<float>(axis_sign) * half_height);
+                cap_center.add(axis_offset);
+
+                for (int u_sign = -1; u_sign <= 1; u_sign += 2)
+                {
+                    for (int v_sign = -1; v_sign <= 1; v_sign += 2)
+                    {
+                        Fvector point = cap_center;
+                        Fvector offset_u = perp1;
+                        offset_u.mul(static_cast<float>(u_sign) * radius);
+                        point.add(offset_u);
+                        Fvector offset_v = perp2;
+                        offset_v.mul(static_cast<float>(v_sign) * radius);
+                        point.add(offset_v);
+                        emit_point(point);
+                    }
+                }
+            }
+
+            emit_point(center);
+        }
+        else
+        {
+            emit_point(shape.cylinder.m_center);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+
+    if (!has_points)
+        emit_point(bone.local_transform.c);
+
+    return { bounds_min, bounds_max };
+}
+
+float ComputeShapeVolume(const SBoneShape& shape)
+{
+    switch (shape.type)
+    {
+    case SBoneShape::stBox:
+        return 8.f * shape.box.m_halfsize.x * shape.box.m_halfsize.y * shape.box.m_halfsize.z;
+    case SBoneShape::stSphere:
+        return (4.f / 3.f) * kPi * shape.sphere.R * shape.sphere.R * shape.sphere.R;
+    case SBoneShape::stCylinder:
+        return kPi * shape.cylinder.m_radius * shape.cylinder.m_radius * shape.cylinder.m_height;
+    default:
+        return 0.f;
+    }
+}
+
+Fvector ComputeInertiaTensor(const SBoneShape& shape, float mass)
+{
+    Fvector inertia;
+    inertia.set(0.f, 0.f, 0.f);
+    if (mass <= kVectorEpsilon)
+        return inertia;
+
+    switch (shape.type)
+    {
+    case SBoneShape::stBox:
+    {
+        const float hx = shape.box.m_halfsize.x;
+        const float hy = shape.box.m_halfsize.y;
+        const float hz = shape.box.m_halfsize.z;
+        inertia.x = (mass / 3.f) * (hy * hy + hz * hz);
+        inertia.y = (mass / 3.f) * (hx * hx + hz * hz);
+        inertia.z = (mass / 3.f) * (hx * hx + hy * hy);
+        break;
+    }
+    case SBoneShape::stSphere:
+    {
+        const float val = 0.4f * mass * shape.sphere.R * shape.sphere.R;
+        inertia.set(val, val, val);
+        break;
+    }
+    case SBoneShape::stCylinder:
+    {
+        Fvector dir = shape.cylinder.m_direction;
+        if (dir.square_magnitude() <= kVectorEpsilon)
+        {
+            const float val = (mass / 12.f) * (3.f * shape.cylinder.m_radius * shape.cylinder.m_radius +
+                                              shape.cylinder.m_height * shape.cylinder.m_height);
+            inertia.set(val, val, val);
+            break;
+        }
+
+        dir.normalize_safe();
+        float components[3] = { std::fabs(dir.x), std::fabs(dir.y), std::fabs(dir.z) };
+        int axis_index = 0;
+        float max_component = components[0];
+        for (int idx = 1; idx < 3; ++idx)
+        {
+            if (components[idx] > max_component)
+            {
+                max_component = components[idx];
+                axis_index = idx;
+            }
+        }
+
+        const float radius = shape.cylinder.m_radius;
+        const float height = shape.cylinder.m_height;
+        const float axial = 0.5f * mass * radius * radius;
+        const float radial = (mass / 12.f) * (3.f * radius * radius + height * height);
+
+        float* values[3] = { &inertia.x, &inertia.y, &inertia.z };
+        *values[axis_index] = axial;
+        *values[(axis_index + 1) % 3] = radial;
+        *values[(axis_index + 2) % 3] = radial;
+        break;
+    }
+    default:
+        break;
+    }
+
+    return inertia;
+}
+
+bool ContainsToken(const std::string& text, std::string_view token)
+{
+    return text.find(token) != std::string::npos;
+}
+
+u32 SynthesizeCollisionLayers(const BoneRecord& bone)
+{
+    std::string name_lower = ToLowerCopy(bone.name);
+    std::string material_lower = ToLowerCopy(bone.game_material);
+
+    u32 layers = BoneCollisionLayerNone;
+
+    if (ContainsToken(name_lower, "weapon") || ContainsToken(name_lower, "wpn") || ContainsToken(material_lower, "weapon"))
+        layers |= BoneCollisionLayerWeapon;
+
+    if (ContainsToken(name_lower, "spine") || ContainsToken(name_lower, "pelvis") || ContainsToken(name_lower, "torso") ||
+        ContainsToken(name_lower, "thigh") || ContainsToken(name_lower, "calf") || ContainsToken(name_lower, "clavicle") ||
+        ContainsToken(name_lower, "upperarm") || ContainsToken(name_lower, "forearm") || ContainsToken(material_lower, "metal") ||
+        ContainsToken(material_lower, "rigid"))
+    {
+        layers |= BoneCollisionLayerRigidBody;
+    }
+
+    if (ContainsToken(name_lower, "arm") || ContainsToken(name_lower, "leg") || ContainsToken(name_lower, "hand") ||
+        ContainsToken(name_lower, "head") || ContainsToken(name_lower, "neck") || ContainsToken(material_lower, "flesh") ||
+        ContainsToken(material_lower, "skin") || ContainsToken(material_lower, "cloth"))
+    {
+        layers |= BoneCollisionLayerSoftTissue;
+    }
+
+    if (bone.mass > 1.f)
+        layers |= BoneCollisionLayerRigidBody;
+    else if (bone.mass <= 0.2f)
+        layers |= BoneCollisionLayerSoftTissue;
+
+    if (layers == BoneCollisionLayerNone)
+        layers = BoneCollisionLayerSoftTissue;
+
+    return layers;
+}
+
+bool IsGroundContactCandidate(const BoneRecord& bone, float min_global_y)
+{
+    Fvector down;
+    down.set(0.f, -1.f, 0.f);
+
+    Fvector axis = bone.dominant_axis;
+    axis.normalize_safe();
+
+    const bool aligned_down = axis.dotproduct(down) <= kDownAlignmentThreshold;
+    const bool near_ground = std::fabs(bone.global_transform.c.y - min_global_y) <= kGroundHeightThreshold;
+
+    std::string name_lower = ToLowerCopy(bone.name);
+    const bool name_match = ContainsToken(name_lower, "foot") || ContainsToken(name_lower, "feet") ||
+                            ContainsToken(name_lower, "toe") || ContainsToken(name_lower, "paw") ||
+                            ContainsToken(name_lower, "hoof") || ContainsToken(name_lower, "ankle");
+
+    return near_ground && (name_match || aligned_down);
+}
+
+bool IsWeaponAnchorCandidate(const BoneRecord& bone)
+{
+    std::string name_lower = ToLowerCopy(bone.name);
+    std::string material_lower = ToLowerCopy(bone.game_material);
+
+    const bool name_match = ContainsToken(name_lower, "hand") || ContainsToken(name_lower, "weapon") ||
+        ContainsToken(name_lower, "wpn") || ContainsToken(name_lower, "grip") || ContainsToken(name_lower, "palm");
+
+    const bool material_match = ContainsToken(material_lower, "weapon") || ContainsToken(material_lower, "metal");
+
+    return name_match || material_match;
+}
+
+void ComputeExtendedBoneMetadata(std::vector<BoneRecord>& bones)
+{
+    if (bones.empty())
+        return;
+
+    float min_global_y = std::numeric_limits<float>::max();
+    for (const auto& bone : bones)
+        min_global_y = std::min(min_global_y, bone.global_transform.c.y);
+
+    for (auto& bone : bones)
+    {
+        bone.rest_length = bone.local_transform.c.magnitude();
+        bone.dominant_axis = ComputeDominantAxis(bone);
+
+        const auto [aabb_min, aabb_max] = ComputeLocalAabb(bone);
+        bone.local_aabb_min = aabb_min;
+        bone.local_aabb_max = aabb_max;
+
+        bone.inverse_global_transform = bone.global_transform;
+        if (!bone.inverse_global_transform.invert_b(bone.global_transform))
+            bone.inverse_global_transform.identity();
+
+        bone.volume = ComputeShapeVolume(bone.shape);
+        bone.inertia_tensor = ComputeInertiaTensor(bone.shape, bone.mass);
+
+        bone.collision_layers.assign(SynthesizeCollisionLayers(bone));
+        bone.ground_contact_candidate = IsGroundContactCandidate(bone, min_global_y);
+        bone.weapon_anchor_candidate = IsWeaponAnchorCandidate(bone);
+    }
+}
+
 std::vector<BoneRecord> LoadSkeletonBonesFromOgf(const std::byte* data, size_t size)
 {
     const auto chunks = ParseChunks(data, size);
@@ -765,6 +1209,7 @@ std::vector<BoneRecord> LoadSkeletonBonesFromOgf(const std::byte* data, size_t s
     ComputeHierarchy(bones);
     ComputeLocalTransforms(bones);
     ComputeGlobalTransforms(bones);
+    ComputeExtendedBoneMetadata(bones);
     return bones;
 }
 
@@ -1730,6 +2175,29 @@ void ConvertLegacyVisualToOzzBundleImpl(const LegacyVisualInput& input,
             out_result.bones.emplace_back(std::move(entry));
         }
 
+        out_result.bone_metadata.clear();
+        out_result.bone_metadata.reserve(bones.size());
+        for (const auto& bone : bones)
+        {
+            ExtendedBoneMetadata metadata;
+            metadata.shape = bone.shape;
+            metadata.joint = bone.joint_ik;
+            metadata.game_material = bone.game_material.c_str();
+            metadata.mass = bone.mass;
+            metadata.center_of_mass = bone.center_of_mass;
+            metadata.rest_length = bone.rest_length;
+            metadata.dominant_axis = bone.dominant_axis;
+            metadata.local_aabb_min = bone.local_aabb_min;
+            metadata.local_aabb_max = bone.local_aabb_max;
+            metadata.inverse_global_transform = bone.inverse_global_transform;
+            metadata.inertia_tensor = bone.inertia_tensor;
+            metadata.volume = bone.volume;
+            metadata.collision_layers.assign(bone.collision_layers);
+            metadata.ground_contact_candidate = bone.ground_contact_candidate;
+            metadata.weapon_anchor_candidate = bone.weapon_anchor_candidate;
+            out_result.bone_metadata.emplace_back(std::move(metadata));
+        }
+
         if (options.build_skeleton)
         {
             serialize_skeleton(*out_result.skeleton, out_result.skeleton_binary);
@@ -1745,6 +2213,7 @@ void ConvertLegacyVisualToOzzBundleImpl(const LegacyVisualInput& input,
         out_result.bone_names.clear();
         out_result.bones.clear();
         out_result.skeleton_binary.clear();
+        out_result.bone_metadata.clear();
     }
 
     if (options.build_mesh)

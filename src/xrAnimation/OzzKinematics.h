@@ -10,6 +10,7 @@
 #include "xrCommon/xr_unordered_map.h"
 
 #include "OzzAnimationController.h"
+#include "ExtendedBoneMetadata.h"
 #include <filesystem>
 
 #include "ozz/animation/runtime/sampling_job.h"
@@ -40,6 +41,7 @@ public:
     // Bootstrap from converted `.ozz` assets.
     bool InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
     bool InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData, const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
+    bool ApplyExtendedBoneMetadata(const ExtendedBoneMetadataCollection& metadata);
 
     // Pose management helpers.
     bool SetPoseLocals(ozz::span<const ozz::math::SoaTransform> locals);

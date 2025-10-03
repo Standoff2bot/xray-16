@@ -15,6 +15,15 @@
 3. **Telemetry & Documentation**
    - Capture frame-cost deltas between legacy and Ozz paths, publish lightweight dashboards/logs, and fold the findings into README and workflow docs.
 
+## Converter Bone Metadata Enhancements
+- **BoneRecord extension**: Add physics metadata (`SBoneShape`, `SJointIKData`, `game_mtl`, `mass`, `center_of_mass`) plus synthesized fields: `rest_length`, dominant axis, local AABB, inverse global transform, volume, inertia tensor, collision layer flags, ground-contact and weapon-anchor hints.
+- **Bake-time workflow**:
+  * Parse IK chunk and populate the extended records while building hierarchy.
+  * Compute derived quantities after global transforms are known.
+  * Bump `.ozzx` version; serialize a bone-metadata block in bundles.
+  * Update `COzzKinematicsVisual` to hydrate `CBoneData` with the captured metadata.
+- **Usage goals**: restore parity for physics shells, enable richer ragdoll mass distributions, and expose groundwork for future IK/anchor logic without revisiting the converter again.
+
 ## Execution Checklist
 1. **Design the Loading Hook**
    - Inspect `IGame_Persistent::OnGameStart()` / `Prefetch()` to slot a conversion stage immediately after the OGF/OMF fetch, honouring the existing `LoadTitle()` flow.
