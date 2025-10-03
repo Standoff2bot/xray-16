@@ -139,18 +139,17 @@ target_sources_grouped(
     xrDebug_macros.h
 )
 
-if (WIN32)
-    target_sources_grouped(
-        TARGET xrCore
-        NAME "Debug core\\DxErr"
-        FILES
-        Debug/dxerr.cpp
-        Debug/dxerr.h
-        Debug/DXGetErrorDescription.inl
-        Debug/DXGetErrorString.inl
-        Debug/DXTrace.inl
-    )
-endif()
+target_sources_grouped(
+    TARGET xrCore
+    NAME "Debug core\\DxErr"
+    CONDITION $<PLATFORM_ID:Windows>
+    FILES
+    Debug/dxerr.cpp
+    Debug/dxerr.h
+    Debug/DXGetErrorDescription.inl
+    Debug/DXGetErrorString.inl
+    Debug/DXTrace.inl
+)
 
 target_sources_grouped(
     TARGET xrCore

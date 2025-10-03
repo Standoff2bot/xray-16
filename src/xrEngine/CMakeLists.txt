@@ -332,8 +332,6 @@ target_sources_grouped(
     TARGET xrEngine
     NAME "Render\\Execution & 3D\\Shaders\\Textures"
     FILES
-    $<$<STREQUAL:$<PLATFORM_ID>,Windows>:tntQAVI.cpp>
-    $<$<STREQUAL:$<PLATFORM_ID>,Windows>:tntQAVI.h>
     xrImage_Resampler.cpp
     xrImage_Resampler.h
     xrTheora_Stream.cpp
@@ -342,16 +340,24 @@ target_sources_grouped(
     xrTheora_Surface.h
 )
 
-if (WIN32)
-    target_sources_grouped(
-        TARGET xrEngine
-        NAME "Render\\Execution & 3D\\TextConsole"
-        FILES
-        Text_Console.cpp
-        Text_Console.h
-        Text_Console_WndProc.cpp
-    )
-endif()
+target_sources_grouped(
+    TARGET xrEngine
+    NAME "Render\\Execution & 3D\\Shaders\\Textures"
+    CONDITION $<PLATFORM_ID:Windows>
+    FILES
+    tntQAVI.cpp
+    tntQAVI.h
+)
+
+target_sources_grouped(
+    TARGET xrEngine
+    NAME "Render\\Execution & 3D\\TextConsole"
+    CONDITION $<PLATFORM_ID:Windows>
+    FILES
+    Text_Console.cpp
+    Text_Console.h
+    Text_Console_WndProc.cpp
+)
 
 target_sources_grouped(
     TARGET xrEngine
