@@ -2523,19 +2523,21 @@ target_compile_definitions(xrGame
 )
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "LCC")
-    # E2K hack: MCST lcc compiler does not support object files greater than 4Gb due to a bug in EDG frontend
-    target_compile_options(xrGame
-        PRIVATE
-        -g0
-    )
-    message("Debug information generation is disabled for xrGame, because MCST lcc compiler does not support object files greater than 4 GB (EDG frontend bug).")
-elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    # Especially when Unity build is enabled, xrGame exceeds .obj file format limits
-    target_compile_options(xrGame
-        PRIVATE
-        /bigobj
-    )
+    message("Debug information generation will be disabled for xrGame, because "
+            "MCST lcc compiler does not support object files greater than 4 GB due to EDG frontend bug.")
 endif()
+
+target_compile_options(xrGame
+    PRIVATE
+    # E2K hack: MCST lcc compiler does not support object files greater than 4Gb due to a bug in EDG frontend
+    $<$<CXX_COMPILER_ID:LCC>:-g0>
+
+    # Especially when Unity build is enabled, xrGame exceeds .obj file format limits
+    $<$<CXX_COMPILER_ID:MSVC>:/bigobj>
+
+    # Disable specific warnings
+    $<$<CXX_COMPILER_ID:MSVC>:/wd4250> # 'class1' : inherits 'class2::member' via dominance
+)
 
 set_target_properties(xrGame PROPERTIES
     PREFIX ""

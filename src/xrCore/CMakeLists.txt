@@ -492,6 +492,9 @@ else()
 endif()
 
 target_compile_definitions(xrCore
+    PUBLIC
+    $<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>
+
     PRIVATE
     XRCORE_EXPORTS
     CMAKE_INSTALL_FULL_LIBDIR=\"${CMAKE_INSTALL_FULL_LIBDIR}\"
@@ -504,6 +507,7 @@ target_compile_definitions(xrCore
     GIT_INFO_CURRENT_COMMIT=\"${XRAY_GIT_SHA1}\"
     GIT_INFO_CURRENT_BRANCH=\"${XRAY_GIT_BRANCH}\"
     OPENSSL_NO_DEPRECATED
+    $<$<PLATFORM_ID:Windows>:USE_OPENSSL>
 )
 
 if (MEMORY_ALLOCATOR STREQUAL "mimalloc")

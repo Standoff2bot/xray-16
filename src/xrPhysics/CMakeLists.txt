@@ -422,6 +422,11 @@ target_compile_definitions(xrPhysics
     PURE_DYNAMIC_CAST
 )
 
+target_compile_options(xrPhysics
+    PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/wd4756> # overflow in constant arithmetic
+)
+
 set_target_properties(xrPhysics PROPERTIES
     PREFIX ""
 )

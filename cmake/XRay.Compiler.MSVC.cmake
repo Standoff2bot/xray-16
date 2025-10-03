@@ -1,56 +1,76 @@
 include_guard()
 
-# The MSVC compiler settings:
-# Set properties:
-set(CMAKE_VS_USE_DEBUG_LIBRARIES "$<CONFIG:Debug>")
-
 # Clear predefined flags which we going to define ourselves
-string(REGEX REPLACE "/EH[a-z]+" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS}) # exceptions
-string(REGEX REPLACE "/Z(7|i|I)" "" CMAKE_CXX_FLAGS_DEBUG ${CMAKE_CXX_FLAGS_DEBUG}) # debug information format
+# Exceptions
+string(REGEX REPLACE "/EH[a-z]+" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 
-# Enable standard C++ exceptions everywhere except ReleaseMasterGold
-add_compile_options($<$<NOT:$<CONFIG:ReleaseMasterGold>>:/EHsc>)
+# Debug information format
+string(REGEX REPLACE "/Z(7|i|I)" "" CMAKE_CXX_FLAGS_DEBUG ${CMAKE_CXX_FLAGS_DEBUG})
+
+# Debug information
+string(REGEX REPLACE "/DEBUG:(NONE|FULL|FASTLINK)" "" CMAKE_STATIC_LINKER_FLAGS ${CMAKE_STATIC_LINKER_FLAGS})
+string(REGEX REPLACE "/DEBUG:(NONE|FULL|FASTLINK)" "" CMAKE_SHARED_LINKER_FLAGS ${CMAKE_SHARED_LINKER_FLAGS})
+string(REGEX REPLACE "/DEBUG:(NONE|FULL|FASTLINK)" "" CMAKE_EXE_LINKER_FLAGS ${CMAKE_EXE_LINKER_FLAGS})
+
+# Incremental LTCG
+string(REGEX REPLACE "/LTCG:INCREMENTAL" "" CMAKE_STATIC_LINKER_FLAGS ${CMAKE_STATIC_LINKER_FLAGS})
+string(REGEX REPLACE "/LTCG:INCREMENTAL" "" CMAKE_SHARED_LINKER_FLAGS ${CMAKE_SHARED_LINKER_FLAGS})
+string(REGEX REPLACE "/LTCG:INCREMENTAL" "" CMAKE_EXE_LINKER_FLAGS ${CMAKE_EXE_LINKER_FLAGS})
+
+# Set properties:
+set(CMAKE_VS_USE_DEBUG_LIBRARIES $<CONFIG:Debug>)
+
+# The MSVC compiler settings:
+add_compile_options(
+    /GS-         # Disable buffer security check. XXX: consider to enable in Debug
+    /MP          # Enable multi-process
+    /Gy          # Function-level linking
+    /fp:fast     # Fast floating-point model
+    /Zi          # Use PDB debug information format
+    /Zf          # Faster PDB generation
+
+    # C++ standard conformance:
+    /permissive- # C++ standard conformance
+    /Zc:inline   # Ensure C++ standard conformance for inlines, remove unreferenced COMDATs
+
+    # Optimization:
+    $<$<CONFIG:Release,ReleaseMasterGold>:/O2>  # Maximize speed
+    $<$<CONFIG:Release,ReleaseMasterGold>:/Ot>  # Favor speed
+    $<$<CONFIG:Release,ReleaseMasterGold>:/Ob2> # Inline function expansion: any suitable
+    $<$<CONFIG:Release,ReleaseMasterGold>:/Oi>  # Generate intrinsic functions
+
+    # Enable standard C++ exceptions everywhere except ReleaseMasterGold
+    $<$<NOT:$<CONFIG:ReleaseMasterGold>>:/EHsc>
+
+    /FC # Full paths in diagnostic messages
+)
 
 # Disable MS STL exceptions on ReleaseMasterGold
 add_compile_definitions($<$<CONFIG:ReleaseMasterGold>:_HAS_EXCEPTIONS=0>)
 
-# Enable debug information for all configurations and allow parallel PDB writes
-add_compile_options(
-    /Zi
-    /FS
+# The MSVC linker settings:
+add_link_options(
+    /LARGEADDRESSAWARE # Application can handle addresses larger than 2 GBs
+    /DEBUG:FULL        # Always generate full debug information
+
+    # Optimizations:
+    $<$<CONFIG:Release,ReleaseMasterGold>:/OPT:REF>  # Remove unused references
+    $<$<CONFIG:ReleaseMasterGold>:/OPT:ICF>          # COMDAT folding, still disabled on Release for better debugging
+    $<$<CONFIG:Release>:/LTCG:INCREMENTAL>           # Incremental LTCG on Release
+    $<$<CONFIG:ReleaseMasterGold>:/LTCG>             # Full LTCG on ReleaseMasterGold
 )
 
-# Enable SSE2 for 32-bit build
-# (on x64 it's always enabled and produces error if try to to enable it)
-add_compile_options($<$<EQUAL:${CMAKE_SIZEOF_VOID_P},4>:/arch:SSE2>)
+set(XRAY_ENABLE_WARNINGS
+    /WX # Treat warnings as errors
+    /W2 # Enable level 2 warnings
 
-# Disable specific warnings
-add_compile_options(
+    # Disable specific warnings:
     /wd4201 # nonstandard extension used : nameless struct/union
     /wd4251 # class 'x' needs to have dll-interface to be used by clients of class 'y'
     /wd4275 # non dll-interface class 'x' used as base for dll-interface class 'y'
-    /wd4458 # declaration hides class member
 )
 
-# The MSVC linker settings:
-add_link_options("/LARGEADDRESSAWARE")
-
-set(XRAY_DISABLE_WARNINGS "/w")
-
-set(XRAY_ENABLE_WARNINGS
-    /W3
-)
-
-add_compile_definitions(
-    MSVC
-    dSINGLE
-    WIN32
-    USE_OPENSSL
-    IMGUI_DISABLE_OBSOLETE_KEYIO
-    IMGUI_DISABLE_OBSOLETE_FUNCTIONS
-    IMGUI_DEFINE_MATH_OPERATORS
-    _CRT_SECURE_NO_WARNINGS
-)
+set(XRAY_DISABLE_WARNINGS /W0)
 
 set(_xray_vs_platform "")
 if (DEFINED CMAKE_VS_PLATFORM_NAME AND CMAKE_VS_PLATFORM_NAME)

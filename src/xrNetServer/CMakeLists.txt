@@ -45,15 +45,9 @@ target_include_directories(xrNetServer
 target_link_libraries(xrNetServer
     PRIVATE
     xrCore
+    $<$<PLATFORM_ID:Windows>:Ws2_32>
+    $<$<PLATFORM_ID:Windows>:dxguid>
 )
-
-if (WIN32)
-    target_link_libraries(xrNetServer
-        PRIVATE
-        Ws2_32
-        dxguid
-    )
-endif()
 
 target_compile_definitions(xrNetServer
     PRIVATE
