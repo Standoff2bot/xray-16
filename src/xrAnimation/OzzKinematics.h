@@ -184,6 +184,21 @@ public:
         xr_vector<xr_unique_ptr<CMotion>> boneMotions;
     };
 
+    struct ActiveBlendEntry
+    {
+        ActiveBlendEntry() = default;
+        ActiveBlendEntry(ActiveBlendEntry&&) = default;
+        ActiveBlendEntry& operator=(ActiveBlendEntry&&) = default;
+        ActiveBlendEntry(const ActiveBlendEntry&) = delete;
+        ActiveBlendEntry& operator=(const ActiveBlendEntry&) = delete;
+
+        xr_unique_ptr<CBlend> blend;
+        MotionID motionId{};
+        u16 partition = BI_NONE;
+        u8 channel = 0;
+        u16 recordIndex = u16(-1);
+    };
+
 private:
     void NotImplemented(pcstr function_name) const;
     bool BuildBoneMetadata();
@@ -200,6 +215,10 @@ private:
     bool LoadOzzAnimationsFromArchive(ozz::io::IArchive& archive, const xr_string& source_label);
     bool LoadMotionReference(const xr_string& reference);
     void EnsureMotionLibraryLoaded();
+    int FindActiveBlendIndex(u16 partition, u8 channel) const;
+    void RemoveActiveBlend(size_t index, bool notifyDestroy);
+    void ClearActiveBlends(bool notifyDestroy);
+    void ResetAnimationControllerState();
 
 private:
     CInifile* userData;
@@ -280,11 +299,8 @@ private:
     bool animationApplied = false;
     CPartition defaultPartition{};
     bool initialized = false;
-    xr_unique_ptr<CBlend> activeCycleBlend;
-    MotionID activeCycleMotion{};
-    u16 activeCyclePartition = BI_NONE;
-    u8 activeCycleChannel = 0;
-    int activeCycleMotionIndex = -1;
+    xr_vector<ActiveBlendEntry> activeBlends;
+    MotionID controllerMotion{};
     bool animationControllerReady = false;
 };
 } // namespace Animation

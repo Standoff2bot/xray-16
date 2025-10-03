@@ -476,8 +476,6 @@ void OzzKinematics::ResetRuntimeState()
 
 void OzzKinematics::ResetAnimationState()
 {
-    if (animationController)
-        animationController->ClearAnimation();
     motionReferences.clear();
     motionLibrary.Reset();
     motionLibraryBuilt = false;
@@ -498,6 +496,62 @@ void OzzKinematics::EnsureMotionLibraryLoaded()
         LoadMotionReference(reference);
 
     motionLibraryBuilt = true;
+}
+
+int OzzKinematics::FindActiveBlendIndex(u16 partition, u8 channel) const
+{
+    const u16 resolvedPartition = (partition == BI_NONE) ? u16(0) : partition;
+    for (size_t index = 0; index < activeBlends.size(); ++index)
+    {
+        const ActiveBlendEntry& entry = activeBlends[index];
+        if (entry.partition == resolvedPartition && entry.channel == channel)
+            return static_cast<int>(index);
+    }
+    return -1;
+}
+
+void OzzKinematics::RemoveActiveBlend(size_t index, bool notifyDestroy)
+{
+    if (index >= activeBlends.size())
+        return;
+
+    ActiveBlendEntry& entry = activeBlends[index];
+    if (notifyDestroy && blendDestroyCallback && entry.blend)
+        blendDestroyCallback->BlendDestroy(*entry.blend);
+
+    activeBlends.erase(activeBlends.begin() + index);
+
+    if (activeBlends.empty())
+        ResetAnimationControllerState();
+}
+
+void OzzKinematics::ClearActiveBlends(bool notifyDestroy)
+{
+    if (activeBlends.empty())
+    {
+        ResetAnimationControllerState();
+        return;
+    }
+
+    if (notifyDestroy && blendDestroyCallback)
+    {
+        for (ActiveBlendEntry& entry : activeBlends)
+        {
+            if (entry.blend)
+                blendDestroyCallback->BlendDestroy(*entry.blend);
+        }
+    }
+
+    activeBlends.clear();
+    ResetAnimationControllerState();
+}
+
+void OzzKinematics::ResetAnimationControllerState()
+{
+    controllerMotion.invalidate();
+    if (animationController)
+        animationController->ClearAnimation();
+    animationApplied = false;
 }
 
 xr_vector<xr_string> OzzKinematics::LegacyMotionNames()
@@ -549,6 +603,8 @@ bool OzzKinematics::LoadLegacyMotion(const xr_string& motion_name)
         return false;
     }
 
+    controllerMotion = record->id;
+
     animationApplied = false;
     CalculateBones_Invalidate();
     return true;
@@ -567,6 +623,7 @@ bool OzzKinematics::LoadAnimationFromFile(const std::filesystem::path& path)
     if (!animationController->LoadAnimation(path))
         return false;
 
+    controllerMotion.invalidate();
     animationApplied = false;
     CalculateBones_Invalidate();
     return true;
@@ -574,11 +631,7 @@ bool OzzKinematics::LoadAnimationFromFile(const std::filesystem::path& path)
 
 void OzzKinematics::StopAnimation()
 {
-    if (!animationController)
-        return;
-
-    animationController->ClearAnimation();
-    animationApplied = false;
+    ClearActiveBlends(true);
     ClearPose();
     CalculateBones_Invalidate();
 }
@@ -1696,34 +1749,63 @@ CBlend* OzzKinematics::LL_PlayCycle(u16 partition, MotionID motion, BOOL bMixing
         return nullptr;
     }
 
-    if (!animationController->LoadAnimation(record->animation))
-        return nullptr;
-
+    const u16 resolvedPartition = (partition == BI_NONE) ? u16(0) : partition;
     const bool mixing = !!bMixing;
     const bool stop_at_end = !!noloop;
-    const float def_speed = record->definition.Speed();
-    float playback_speed = Speed;
-    if (fis_zero(playback_speed))
-        playback_speed = !fis_zero(def_speed) ? def_speed : 1.f;
 
-    animationController->SetLooping(!stop_at_end);
-    animationController->SetPlaybackSpeed(playback_speed);
+    if (!mixing && !activeBlends.empty())
+        ClearActiveBlends(true);
 
-    animationApplied = false;
-    CalculateBones_Invalidate();
+    if (!controllerMotion.valid() || controllerMotion != record->id)
+    {
+        if (!animationController->LoadAnimation(record->animation))
+            return nullptr;
 
-    activeCycleBlend = xr_make_unique<CBlend>();
-    CBlend& blend = *activeCycleBlend;
+        controllerMotion = record->id;
+        animationApplied = false;
+        CalculateBones_Invalidate();
+    }
+
+    const int existingIndex = FindActiveBlendIndex(resolvedPartition, channel);
+    if (existingIndex >= 0)
+        RemoveActiveBlend(static_cast<size_t>(existingIndex), true);
+
+    activeBlends.emplace_back();
+    ActiveBlendEntry& entry = activeBlends.back();
+    entry.partition = resolvedPartition;
+    entry.channel = channel;
+    entry.recordIndex = motionIndex;
+    entry.motionId = record->id;
+
+    entry.blend = xr_make_unique<CBlend>();
+    if (!entry.blend)
+    {
+        activeBlends.pop_back();
+        return nullptr;
+    }
+
+    CBlend& blend = *entry.blend;
     blend.set_accrue_state();
     blend.blendAmount = mixing ? EPS_S : 1.f;
     blend.blendAccrue = blendAccrue;
     blend.blendFalloff = blendFalloff;
     blend.blendPower = 1.f;
+
+    const float def_speed = record->definition.Speed();
+    float playback_speed = Speed;
+    if (fis_zero(playback_speed))
+        playback_speed = !fis_zero(def_speed) ? def_speed : 1.f;
     blend.speed = playback_speed;
+
     blend.motionID = record->id;
     blend.timeCurrent = 0.f;
-    blend.timeTotal = record->animation->duration();
-    const u16 resolvedPartition = (partition == BI_NONE) ? u16(0) : partition;
+    const float animationDuration = record->animation ? record->animation->duration() : 0.f;
+    float motionLength = animationDuration;
+    if (motionLength <= 0.f && record->frameCount > 0)
+        motionLength = static_cast<float>(record->frameCount) * SAMPLE_SPF;
+    if (motionLength <= 0.f)
+        motionLength = SAMPLE_SPF;
+    blend.timeTotal = motionLength;
     blend.bone_or_part = resolvedPartition;
     blend.stop_at_end = stop_at_end;
     blend.playing = true;
@@ -1734,12 +1816,11 @@ CBlend* OzzKinematics::LL_PlayCycle(u16 partition, MotionID motion, BOOL bMixing
     blend.fall_at_end = blend.stop_at_end && (channel > 1);
     blend.dwFrame = Device.dwFrame ? Device.dwFrame - 1 : 0;
 
-    activeCycleMotion = record->id;
-    activeCyclePartition = resolvedPartition;
-    activeCycleChannel = channel;
-    activeCycleMotionIndex = static_cast<int>(motionIndex);
+    animationController->SetLooping(!stop_at_end);
+    animationController->SetPlaybackSpeed(playback_speed);
+    animationApplied = false;
 
-    return &blend;
+    return activeBlends.size() ? activeBlends.back().blend.get() : nullptr;
 }
 
 CBlend* OzzKinematics::LL_PlayCycle(
@@ -1753,8 +1834,25 @@ CBlend* OzzKinematics::LL_PlayCycle(
         CallbackParam, channel);
 }
 
-void OzzKinematics::LL_CloseCycle(u16 /*partition*/, u8 /*mask_channel*/)
+void OzzKinematics::LL_CloseCycle(u16 partition, u8 mask_channel)
 {
+    if (activeBlends.empty())
+        return;
+
+    const u16 resolvedPartition = (partition == BI_NONE) ? u16(0) : partition;
+    size_t index = 0;
+    while (index < activeBlends.size())
+    {
+        const ActiveBlendEntry& entry = activeBlends[index];
+        const bool partitionMatch = (partition == BI_NONE) || (entry.partition == resolvedPartition);
+        const bool channelMatch = (mask_channel & (1 << entry.channel)) != 0;
+        if (partitionMatch && channelMatch)
+        {
+            RemoveActiveBlend(index, true);
+            continue;
+        }
+        ++index;
+    }
 }
 
 void OzzKinematics::LL_SetChannelFactor(u16 /*channel*/, float /*factor*/)
@@ -1768,45 +1866,47 @@ void OzzKinematics::UpdateTracks()
 
 void OzzKinematics::LL_UpdateTracks(float dt, bool b_force, bool leave_blends)
 {
-    if (activeCycleBlend && animationController)
+    if (!activeBlends.empty() && animationController)
     {
-        animationController->SetLooping(!activeCycleBlend->stop_at_end);
-        animationController->SetPlaybackSpeed(activeCycleBlend->speed);
+        const CBlend* primaryBlend = activeBlends.front().blend.get();
+        if (primaryBlend)
+        {
+            animationController->SetLooping(!primaryBlend->stop_at_end);
+            animationController->SetPlaybackSpeed(primaryBlend->speed);
+        }
     }
 
     const bool advanced = AdvanceAnimation(dt);
 
-    if (activeCycleBlend)
+    if (!activeBlends.empty())
     {
-        CBlend& blend = *activeCycleBlend;
-        if (b_force || blend.dwFrame != Device.dwFrame)
+        size_t index = 0;
+        while (index < activeBlends.size())
         {
-            blend.dwFrame = Device.dwFrame;
-            const bool finished = blend.update(dt, blend.Callback);
-            if (finished && !leave_blends)
+            ActiveBlendEntry& entry = activeBlends[index];
+            CBlend& blend = *entry.blend;
+
+            if (b_force || blend.dwFrame != Device.dwFrame)
             {
-                if (blendDestroyCallback)
-                    blendDestroyCallback->BlendDestroy(blend);
-
-                if (animationController)
-                    animationController->ClearAnimation();
-                animationApplied = false;
-
-                activeCycleBlend.reset();
-                activeCycleMotion.invalidate();
-                activeCyclePartition = BI_NONE;
-                activeCycleChannel = 0;
-                activeCycleMotionIndex = -1;
+                blend.dwFrame = Device.dwFrame;
+                const bool finished = blend.update(dt, blend.Callback);
+                if (finished && !leave_blends)
+                {
+                    RemoveActiveBlend(index, true);
+                    continue;
+                }
             }
+
+            ++index;
         }
     }
 
     if (updateTracksCallback)
         (*updateTracksCallback)(dt, *this);
 
-    if (advanced && blendDestroyCallback)
+    if (advanced && activeBlends.empty())
     {
-        // Blend destruction is handled above when cycles complete.
+        // When all blends are removed the controller state has already been reset.
     }
 }
 
