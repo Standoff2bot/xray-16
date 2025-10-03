@@ -212,7 +212,9 @@ void CGamePersistent::OnGameStart()
         force_rebuild ? "rebuilding all assets" : "refreshing missing assets",
         stored_display.c_str(), computed_digest.c_str());
 
-    if (!ConvertInventoryToOzz(inventory, conversion_params, force_rebuild, conversion_stats))
+    bool didConvert = ConvertInventoryToOzz(inventory, conversion_params, force_rebuild, conversion_stats);
+
+    if (!didConvert)
     {
         Msg("! [ozz] Startup conversion failed (%zu failure%s)",
             conversion_stats.failures,
@@ -220,10 +222,11 @@ void CGamePersistent::OnGameStart()
         return;
     }
 
-    if (GEnv.Render)
+    if (didConvert)
     {
         Msg("[ozz] Refreshing model pool after startup conversion");
-        FS.rescan_pathes();
+        FS_Path* mesh_path = FS.get_path("$game_meshes$"); // yohji TODO - this rescan doesn't work -> ModelPool.cpp l59
+        FS.rescan_path(mesh_path->m_Path, TRUE);
         GEnv.Render->models_Rebuild();
         if (!strstr(Core.Params, "-noprefetch"))
             GEnv.Render->models_Prefetch();

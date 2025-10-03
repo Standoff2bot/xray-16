@@ -32,12 +32,41 @@
 #include "ModelNaming.h"
 
 #include <filesystem>
+#include <optional>
+#include <system_error>
 
 extern bool ENGINE_API g_bRendering;
 
 namespace xray::render::RENDER_NAMESPACE
 {
 using xray::render::detail::NormalizeModelIdentifier;
+
+namespace
+{
+constexpr pcstr kOzzBundleExtension = ".ozzx";
+
+std::optional<std::filesystem::path> ResolveOzzBundlePath(const shared_str& identifier)
+{
+    xr_string candidate = identifier.c_str();
+    if (candidate.length() < xr_strlen(kOzzBundleExtension) ||
+        candidate.compare(candidate.length() - xr_strlen(kOzzBundleExtension),
+                           xr_strlen(kOzzBundleExtension), kOzzBundleExtension) != 0)
+    {
+        candidate += kOzzBundleExtension;
+    }
+
+    string_path resolved;
+    if (FS.exist(resolved, "$game_meshes$", candidate.c_str())) // yohji TODO: this doesn't work
+        return std::filesystem::path(resolved);
+
+    std::error_code ec;
+    std::filesystem::path direct(resolved);
+    if (std::filesystem::exists(direct, ec) && !ec)
+        return direct;
+
+    return std::nullopt;
+}
+} // namespace
 
 dxRender_Visual* CModelPool::Instance_Create(u32 type)
 {
@@ -306,7 +335,50 @@ CModelPool::~CModelPool()
 
 void CModelPool::Rebuild()
 {
+    VERIFY(!g_bRendering);
+
+    xr_vector<shared_str> paths_to_reload;
+    for (auto& entry : Models)
+    {
+        paths_to_reload.push_back(entry.name.c_str());
+    }
+
     Destroy();
+
+    xr_vector<shared_str> reloaded_bundles;
+    xr_vector<shared_str> failed_bundles;
+
+    for (auto& entry : paths_to_reload)
+    {
+        auto bundle_path = ResolveOzzBundlePath(entry);
+        if (!bundle_path)
+        {
+            Msg("! [ozz] ModelPool::Rebuild: unable to resolve bundle path for '%s'", entry);
+            failed_bundles.push_back(entry);
+            continue;
+        }
+
+        reloaded_bundles.push_back(entry);
+    }
+
+    g_pMotionsContainer->clean(false);
+
+    for (auto& entry : reloaded_bundles)
+    {
+        Create(entry.c_str());
+    }
+
+    if (!reloaded_bundles.empty())
+    {
+        Msg("[ozz] ModelPool rebuilt %zu bundle visual%s", reloaded_bundles.size(),
+            reloaded_bundles.size() == 1 ? "" : "s");
+    }
+
+    if (!failed_bundles.empty())
+    {
+        for (const auto& identifier : failed_bundles)
+            Msg("! [ozz] ModelPool::Rebuild: bundle reload failed for '%s'", identifier.c_str());
+    }
 }
 
 dxRender_Visual* CModelPool::Instance_Find(LPCSTR N)
