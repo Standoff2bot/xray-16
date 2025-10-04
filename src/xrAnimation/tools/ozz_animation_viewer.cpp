@@ -743,6 +743,7 @@ protected:
 
         for (uint32_t bone_index = 0; bone_index < bone_motion_count; ++bone_index)
         {
+            ozz::log::LogV() << "[metadata] motion=" << metadata.name.c_str() << " index=" << bone_index << std::endl;
             BoneMotionData bone;
             auto* stream = archive.stream();
 

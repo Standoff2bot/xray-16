@@ -260,6 +260,7 @@ struct BoneRecord
     std::string name;
     std::string parent_name;
     int parent_index = -1;
+    Fobb obb{};
     Fvector rest_translation{};
     Fvector rest_rotation{}; // XYZ angles in radians (engine convention)
     Fmatrix local_transform{};
@@ -393,6 +394,37 @@ struct PositionQuantizedHasher
         for (int32_t component : key.components)
             combine(std::hash<int32_t>{}(component));
         return hash;
+    }
+};
+
+struct BoneBoundsBuilder
+{
+    Fvector min;
+    Fvector max;
+    bool has_points = false;
+
+    BoneBoundsBuilder()
+    {
+        reset();
+    }
+
+    void reset()
+    {
+        const float max_float = std::numeric_limits<float>::max();
+        min.set(max_float, max_float, max_float);
+        max.set(-max_float, -max_float, -max_float);
+        has_points = false;
+    }
+
+    void AddPoint(const Fvector& point)
+    {
+        min.x = std::min(min.x, point.x);
+        min.y = std::min(min.y, point.y);
+        min.z = std::min(min.z, point.z);
+        max.x = std::max(max.x, point.x);
+        max.y = std::max(max.y, point.y);
+        max.z = std::max(max.z, point.z);
+        has_points = true;
     }
 };
 
@@ -664,7 +696,7 @@ std::vector<BoneRecord> ReadBoneNames(const Chunk& chunk)
         BoneRecord record;
         record.name = reader.read_stringz();
         record.parent_name = reader.read_stringz();
-        reader.skip(sizeof(Fobb));
+        record.obb = reader.read_struct<Fobb>();
         bones.emplace_back(std::move(record));
     }
 
@@ -2014,7 +2046,8 @@ std::vector<SurfaceDefinition> CollectSurfaces(const std::byte* data, size_t siz
 ozz::sample::Mesh build_mesh(const std::vector<MeshVertex>& vertices,
     const std::vector<uint16_t>& indices,
     const std::vector<BoneRecord>& bones,
-    const SurfaceMetadata& metadata)
+    const SurfaceMetadata& metadata,
+    std::vector<BoneBoundsBuilder>* bone_bounds)
 {
     std::unordered_map<uint16_t, uint16_t> joint_map;
     std::vector<uint16_t> joint_remaps;
@@ -2060,6 +2093,14 @@ ozz::sample::Mesh build_mesh(const std::vector<MeshVertex>& vertices,
 
             converted.joint_indices[influence] = it->second;
             converted.joint_weights[influence] = weight;
+
+            if (bone_bounds && bone_index < bones.size() && weight > std::numeric_limits<float>::epsilon())
+            {
+                const Fmatrix& inverse_global = bones[bone_index].inverse_global_transform;
+                Fvector local_point;
+                inverse_global.transform_tiny(local_point, source.position);
+                (*bone_bounds)[bone_index].AddPoint(local_point);
+            }
         }
 
         if (weight_sum <= std::numeric_limits<float>::epsilon())
@@ -2233,6 +2274,7 @@ void ConvertLegacyVisualToOzzBundleImpl(const LegacyVisualInput& input,
         {
             ExtendedBoneMetadata metadata;
             metadata.shape = bone.shape;
+            metadata.obb = bone.obb;
             metadata.joint = bone.joint_ik;
             metadata.game_material = bone.game_material.c_str();
             metadata.mass = bone.mass;
@@ -2277,11 +2319,43 @@ void ConvertLegacyVisualToOzzBundleImpl(const LegacyVisualInput& input,
         std::vector<ozz::sample::Mesh> meshes;
         meshes.reserve(surfaces.size());
 
+        std::vector<BoneBoundsBuilder> mesh_bounds;
+        if (!bones.empty())
+            mesh_bounds.resize(bones.size());
+
         for (auto& surface : surfaces)
         {
             if (options.deduplicate_vertices)
                 deduplicate_vertices(surface.vertices, surface.indices);
-            meshes.push_back(build_mesh(surface.vertices, surface.indices, bones, surface.metadata));
+
+            meshes.push_back(build_mesh(surface.vertices, surface.indices, bones, surface.metadata,
+                mesh_bounds.empty() ? nullptr : &mesh_bounds));
+        }
+
+        if (!mesh_bounds.empty())
+        {
+            constexpr float kMinHalfExtent = 0.001f; // 1 mm minimum to keep physics happy
+            for (size_t idx = 0; idx < bones.size(); ++idx)
+            {
+                BoneRecord& bone = bones[idx];
+                const BoneBoundsBuilder& bounds = mesh_bounds[idx];
+                if (!bounds.has_points)
+                    continue;
+
+                Fobb obb;
+                obb.m_rotate.identity();
+                obb.m_translate.add(bounds.min, bounds.max);
+                obb.m_translate.mul(0.5f);
+                obb.m_halfsize.sub(bounds.max, bounds.min);
+                obb.m_halfsize.mul(0.5f);
+                obb.m_halfsize.x = std::max(obb.m_halfsize.x, kMinHalfExtent);
+                obb.m_halfsize.y = std::max(obb.m_halfsize.y, kMinHalfExtent);
+                obb.m_halfsize.z = std::max(obb.m_halfsize.z, kMinHalfExtent);
+
+                bone.obb = obb;
+                if (idx < out_result.bone_metadata.size())
+                    out_result.bone_metadata[idx].obb = obb;
+            }
         }
 
         out_result.mesh_surface_count = meshes.size();

@@ -230,6 +230,8 @@ void CGamePersistent::OnGameStart()
         if (g_player_hud)
             g_player_hud->detach_kinematics();
         GEnv.Render->models_Rebuild();
+        if (g_player_hud)
+            g_player_hud->reload();
     }
 
     if (show_loading_stage)

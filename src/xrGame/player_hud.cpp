@@ -68,30 +68,36 @@ void player_hud_motion_container::load(IKinematicsAnimated* model, const shared_
 
                 _GetItem(anm.c_str(), 2, str_item);
                 pm.m_anim_speed = xr_strlen(str_item) > 0 ? atof(str_item) : 1.f;
-            }
-
-            // and load all motions for it
-            for (u32 i = 0; i <= 8; ++i)
-            {
-                string512 buff;
-                if (i == 0)
-                    xr_strcpy(buff, pm.m_base_name.c_str());
-                else
-                    xr_sprintf(buff, "%s%d", pm.m_base_name.c_str(), i);
-
-                MotionID motion_ID = model->ID_Cycle_Safe(buff);
-                if (motion_ID.valid())
-                {
-                    pm.m_animations.emplace_back(motion_descr{ std::move(motion_ID), buff });
-#ifdef DEBUG
-                    Msg("base=[%s] name=[%s]", pm.m_base_name.c_str(), buff);
-#endif // #ifdef DEBUG
-                }
-            }
-            R_ASSERT2(!pm.m_animations.empty(), make_string("motion not found [%s]", pm.m_base_name.c_str()).c_str());
-
-            m_anims.emplace(name, std::move(pm));
         }
+
+        // and load all motions for it
+        for (u32 i = 0; i <= 8; ++i)
+        {
+            string512 buff;
+            if (i == 0)
+                xr_strcpy(buff, pm.m_base_name.c_str());
+            else
+                xr_sprintf(buff, "%s%d", pm.m_base_name.c_str(), i);
+
+            MotionID motion_ID = model->ID_Cycle_Safe(buff);
+            if (motion_ID.valid())
+            {
+                pm.m_animations.emplace_back(motion_descr{ std::move(motion_ID), buff });
+#ifdef DEBUG
+                Msg("base=[%s] name=[%s]", pm.m_base_name.c_str(), buff);
+#endif // #ifdef DEBUG
+            }
+#ifdef DEBUG
+            else
+            {
+                Msg("[player_hud] missing motion '%s' in section '%s'", buff, sect.c_str());
+            }
+#endif
+        }
+        R_ASSERT2(!pm.m_animations.empty(), make_string("motion not found [%s]", pm.m_base_name.c_str()).c_str());
+
+        m_anims.emplace(name, std::move(pm));
+    }
     }
 }
 
@@ -435,7 +441,7 @@ u32 attachable_hud_item::anim_play(const shared_str& anm_name_b, BOOL bMixIn, co
     const motion_descr& M = anm->m_animations[rnd_idx];
 
     IKinematicsAnimated* ka = smart_cast<IKinematicsAnimated*>(m_model);
-    const u32 ret = m_parent->anim_play(m_attach_place_idx, M.mid, bMixIn, md, speed, m_monolithic ? ka : ka);
+    const u32 ret = m_parent->anim_play(m_attach_place_idx, M.mid, bMixIn, md, speed, m_monolithic ? ka : nullptr);
 
     if (ka)
     {
@@ -517,9 +523,14 @@ player_hud::~player_hud()
     m_pool.clear();
 }
 
-void player_hud::load(const shared_str& player_hud_sect)
+void player_hud::reload()
 {
-    if (player_hud_sect == m_sect_name)
+    load(m_sect_name, true);
+}
+
+void player_hud::load(const shared_str& player_hud_sect, bool forceReload)
+{
+    if (player_hud_sect == m_sect_name && !forceReload)
         return;
 
     m_sect_name = player_hud_sect;
@@ -644,6 +655,9 @@ u32 player_hud::motion_length(const shared_str& anim_name, const shared_str& hud
 u32 player_hud::motion_length(const MotionID& M, const CMotionDef*& md, float speed, IKinematicsAnimated* itemModel) const
 {
     IKinematicsAnimated* model = itemModel ? itemModel : m_model;
+    if (!model)
+        return 0;
+
     md = model->LL_GetMotionDef(M);
     VERIFY(md);
     if (md->flags & esmStopAtEnd)

@@ -16,7 +16,7 @@ namespace
 {
 constexpr char kOzzxMagic[8] = { 'O', 'Z', 'Z', 'X', 'P', 'A', 'C', 'K' };
 constexpr char kBoneMetadataMagic[4] = { 'B', 'M', 'D', 'T' };
-constexpr std::uint32_t kBoneMetadataVersion = 1u;
+constexpr std::uint32_t kBoneMetadataVersion = 2u;
 constexpr char kUserDataMagic[4] = { 'U', 'D', 'T', 'A' };
 
 void LogReadFailure(const std::filesystem::path& path, const char* stage, std::streampos position,
@@ -71,7 +71,7 @@ static bool ReadBoneMetadataBlock(std::ifstream& stream, const std::filesystem::
         return false;
     }
 
-    if (metadata_version != kBoneMetadataVersion)
+    if (metadata_version != 1u && metadata_version != kBoneMetadataVersion)
     {
         std::cerr << "Unsupported bone metadata version in .ozzx bundle: " << metadata_version << std::endl;
         return false;
@@ -97,6 +97,19 @@ static bool ReadBoneMetadataBlock(std::ifstream& stream, const std::filesystem::
         {
             LogReadFailure(path, "read bone metadata shape", field_offset);
             return false;
+        }
+        if (metadata_version >= 2u)
+        {
+            field_offset = stream.tellg();
+            if (!ReadFully(stream, &entry.obb, sizeof(entry.obb)))
+            {
+                LogReadFailure(path, "read bone metadata obb", field_offset);
+                return false;
+            }
+        }
+        else
+        {
+            entry.obb.invalidate();
         }
         field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.joint, sizeof(entry.joint)))
@@ -226,6 +239,8 @@ static bool WriteBoneMetadataBlock(std::ofstream& stream, const ExtendedBoneMeta
     for (const auto& entry : metadata)
     {
         if (!WriteFully(stream, &entry.shape, sizeof(entry.shape)))
+            return false;
+        if (!WriteFully(stream, &entry.obb, sizeof(entry.obb)))
             return false;
         if (!WriteFully(stream, &entry.joint, sizeof(entry.joint)))
             return false;
@@ -479,7 +494,7 @@ bool WriteOzzxBundle(const std::filesystem::path& path, const OzzxBundle& bundle
         return false;
     }
 
-    const std::uint32_t version = 1u;
+    const std::uint32_t version = bundle.version;
 
     const std::uint32_t skeleton_size = static_cast<std::uint32_t>(bundle.skeleton.size());
     const std::uint32_t mesh_size = static_cast<std::uint32_t>(bundle.mesh.size());

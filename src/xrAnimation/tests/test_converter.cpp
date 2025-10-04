@@ -2262,7 +2262,7 @@ bool TestAssetBundleContainsSkeletonAndMesh()
     if (!XRay::Animation::ReadOzzxBundle(BundleOutputPath(), bundle))
         return false;
 
-    if (bundle.version != 1u)
+    if (bundle.version != 2u)
     {
         std::cerr << "unexpected bundle version " << bundle.version << std::endl;
         return false;

@@ -484,6 +484,11 @@ bool COzzKinematicsVisual::LoadFromBundle(const char* name, const std::filesyste
     skeleton_payload_.assign(bundle.skeleton.begin(), bundle.skeleton.end());
     mesh_payload_.assign(bundle.mesh.begin(), bundle.mesh.end());
     motion_references_ = bundle.motion_refs;
+#ifdef DEBUG
+    Msg("[OzzKinematicsVisual] '%s' motion refs: %zu", name, motion_references_.size());
+    for (const auto& ref : motion_references_)
+        Msg("[OzzKinematicsVisual]   ref '%s'", ref.c_str());
+#endif
     bone_metadata_ = bundle.bone_metadata;
     user_data_payload_.assign(bundle.user_data.begin(), bundle.user_data.end());
 

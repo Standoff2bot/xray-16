@@ -2,6 +2,7 @@
 
 #include "xrCore/Animation/Bone.hpp"
 #include "xrCore/_matrix.h"
+#include "xrCore/_obb.h"
 #include "xrCommon/xr_string.h"
 #include "xrCommon/xr_vector.h"
 
@@ -20,6 +21,7 @@ enum BoneCollisionLayer : u32
 struct ExtendedBoneMetadata
 {
     SBoneShape shape{};
+    Fobb obb{};
     SJointIKData joint{};
     xr_string game_material;
 
@@ -42,4 +44,3 @@ struct ExtendedBoneMetadata
 using ExtendedBoneMetadataCollection = xr_vector<ExtendedBoneMetadata>;
 } // namespace Animation
 } // namespace XRay
-

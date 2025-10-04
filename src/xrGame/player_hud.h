@@ -127,8 +127,9 @@ class player_hud
 public:
     player_hud() = default;
     ~player_hud();
-    void load(const shared_str& model_name);
+    void load(const shared_str& model_name, bool forceReload = false);
     void load_default() { load("actor_hud_05"); };
+    void reload();
     void update(const Fmatrix& trans);
     void render_hud(u32 context_id, IRenderable* root);
     void render_item_ui() const;

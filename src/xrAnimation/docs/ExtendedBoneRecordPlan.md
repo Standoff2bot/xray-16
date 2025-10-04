@@ -1,7 +1,7 @@
 Extended BoneRecord Plan
 
 ## Status – 2025-10-02
-- `.ozzx` bundle header stays at version 1; a tagged metadata block carries the extended bone payload for every joint.
+- `.ozzx` bundle header now targets version 2; a tagged metadata block carries the extended bone payload for every joint.
 - Converter emits rest-length, dominant axis, collision hints, and physics descriptors; runtime hydrates `CBoneData` via `ApplyExtendedBoneMetadata`.
 - Parity automation covers metadata hydration through `OzzKinematicsAppliesBoneMetadata` and converter bundle tests.
 

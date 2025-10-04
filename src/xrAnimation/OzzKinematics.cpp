@@ -67,6 +67,76 @@ Fobb& StubObb()
     return stub;
 }
 
+Fobb BuildFallbackObbFromShape(const SBoneShape& shape)
+{
+    constexpr float kMinHalfExtent = 0.001f;
+    Fobb result;
+    result.invalidate();
+
+    switch (shape.type)
+    {
+    case SBoneShape::stBox:
+    {
+        result.m_rotate = shape.box.m_rotate;
+        result.m_translate = shape.box.m_translate;
+        result.m_halfsize = shape.box.m_halfsize;
+        break;
+    }
+    case SBoneShape::stSphere:
+    {
+        result.identity();
+        result.m_translate = shape.sphere.P;
+        const float radius = std::max(shape.sphere.R, kMinHalfExtent);
+        result.m_halfsize.set(radius, radius, radius);
+        break;
+    }
+    case SBoneShape::stCylinder:
+    {
+        Fvector axis = shape.cylinder.m_direction;
+        if (axis.square_magnitude() <= EPS_L)
+            axis.set(0.f, 1.f, 0.f);
+        axis.normalize_safe();
+
+        Fvector up;
+        up.set(0.f, 1.f, 0.f);
+        if (std::fabs(axis.dotproduct(up)) > 0.99f)
+            up.set(1.f, 0.f, 0.f);
+
+        Fvector right;
+        right.crossproduct(up, axis);
+        if (right.square_magnitude() <= EPS_L)
+        {
+            right.set(1.f, 0.f, 0.f);
+            right.crossproduct(up, axis);
+        }
+        right.normalize_safe();
+
+        Fvector forward;
+        forward.crossproduct(axis, right);
+        forward.normalize_safe();
+
+        result.m_rotate.i = right;
+        result.m_rotate.j = axis;
+        result.m_rotate.k = forward;
+        result.m_translate = shape.cylinder.m_center;
+
+        const float radius = std::max(shape.cylinder.m_radius, kMinHalfExtent);
+        const float half_height = std::max(shape.cylinder.m_height * 0.5f, kMinHalfExtent);
+        result.m_halfsize.set(radius, half_height, radius);
+        break;
+    }
+    default:
+        result.identity();
+        result.m_halfsize.set(kMinHalfExtent, kMinHalfExtent, kMinHalfExtent);
+        break;
+    }
+
+    result.m_halfsize.x = std::max(result.m_halfsize.x, kMinHalfExtent);
+    result.m_halfsize.y = std::max(result.m_halfsize.y, kMinHalfExtent);
+    result.m_halfsize.z = std::max(result.m_halfsize.z, kMinHalfExtent);
+    return result;
+}
+
 bool EndsWithIgnoreCase(const xr_string& value, pcstr suffix)
 {
     if (!suffix)
@@ -517,8 +587,16 @@ void OzzKinematics::EnsureMotionLibraryLoaded()
 
     motionLibrary.Reset();
 
+#ifdef DEBUG
+    Msg("[OzzKinematics] building motion library (%zu refs)", static_cast<size_t>(motionReferences.size()));
+#endif
     for (const auto& reference : motionReferences)
+    {
+#ifdef DEBUG
+        Msg("[OzzKinematics]   loading ref '%s'", reference.c_str());
+#endif
         LoadMotionReference(reference);
+    }
 
     motionLibraryBuilt = true;
 }
@@ -816,6 +894,7 @@ bool OzzKinematics::LoadOzzAnimationsFromFile(const xr_string& relative_path)
             if (!PopulateMotionRecordFromMetadata(metadata, record, static_cast<u32>(skeleton.num_joints())))
                 return false;
 
+            Msg("[OzzKinematics]   added motion '%s' from '%s'", motion_name.c_str(), relative_path.c_str());
             motionLibrary.Add(std::move(record));
             loaded_any = true;
         }
@@ -891,6 +970,7 @@ bool OzzKinematics::LoadOzzAnimationsFromArchive(ozz::io::IArchive& archive, con
         if (!PopulateMotionRecordFromMetadata(metadata, record, static_cast<u32>(skeleton.num_joints())))
             continue;
 
+        Msg("[OzzKinematics]   added motion '%s' from '%s'", motion_name.c_str(), source_label.c_str());
         motionLibrary.Add(std::move(record));
         loaded_any = true;
     }
@@ -1092,6 +1172,14 @@ bool OzzKinematics::ApplyExtendedBoneMetadata(const ExtendedBoneMetadataCollecti
         const ExtendedBoneMetadata& source = metadata[idx];
 
         bone->shape = source.shape;
+        if (_valid(source.obb))
+        {
+            bone->obb = source.obb;
+        }
+        else
+        {
+            bone->obb = BuildFallbackObbFromShape(source.shape);
+        }
         bone->IK_data = source.joint;
         bone->mass = source.mass;
         bone->center_of_mass = source.center_of_mass;

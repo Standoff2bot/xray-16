@@ -2342,6 +2342,12 @@ bool TestOzzKinematicsAppliesBoneMetadata(bool& metadata_available)
             ok = false;
         }
 
+        if (std::memcmp(&bone.obb, &expected.obb, sizeof(Fobb)) != 0)
+        {
+            ADD_FAILURE() << "OBB payload mismatch for bone " << bone_name;
+            ok = false;
+        }
+
         EXPECT_NEAR(bone.mass, expected.mass, kEpsilon) << "Mass mismatch for bone " << bone_name;
         if (std::fabs(bone.mass - expected.mass) > kEpsilon)
             ok = false;
