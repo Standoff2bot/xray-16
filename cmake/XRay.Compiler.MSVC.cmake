@@ -73,33 +73,23 @@ set(XRAY_ENABLE_WARNINGS
 
 set(XRAY_DISABLE_WARNINGS /W0)
 
-set(_xray_vs_platform "")
-if (DEFINED CMAKE_VS_PLATFORM_NAME AND CMAKE_VS_PLATFORM_NAME)
-    set(_xray_vs_platform "${CMAKE_VS_PLATFORM_NAME}")
-elseif (CMAKE_GENERATOR_PLATFORM)
-    set(_xray_vs_platform "${CMAKE_GENERATOR_PLATFORM}")
-elseif (CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(_xray_vs_platform "x64")
+if (CMAKE_VS_PLATFORM_NAME)
+    set(XRAY_PLATFORM ${CMAKE_VS_PLATFORM_NAME})
+    string(REPLACE "Win32" "x86" XRAY_PLATFORM ${XRAY_PLATFORM})
 else()
-    set(_xray_vs_platform "x86")
+    set(XRAY_PLATFORM ${CMAKE_SYSTEM_PROCESSOR})
+    string(REPLACE "AMD64" "x64" XRAY_PLATFORM ${XRAY_PLATFORM})
 endif()
 
-string(TOLOWER "${_xray_vs_platform}" _xray_vs_platform_lower)
-if (_xray_vs_platform_lower STREQUAL "win32" OR _xray_vs_platform_lower STREQUAL "x86")
-    set(XRAY_SDK_PLATFORM "x86")
-elseif (_xray_vs_platform_lower STREQUAL "x64" OR _xray_vs_platform_lower STREQUAL "amd64")
-    set(XRAY_SDK_PLATFORM "x64")
-elseif (_xray_vs_platform_lower STREQUAL "arm64")
-    set(XRAY_SDK_PLATFORM "ARM64")
-else()
-    set(XRAY_SDK_PLATFORM "${_xray_vs_platform}")
-endif()
-unset(_xray_vs_platform_lower)
+mark_as_advanced(XRAY_PLATFORM)
 
-set(XRAY_SDK_DIR "${CMAKE_SOURCE_DIR}/sdk" CACHE PATH "Path to the bundled X-Ray Windows SDK")
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/sdk")
+list(APPEND CMAKE_LIBRARY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/sdk/libraries/${XRAY_PLATFORM}")
+
+set(XRAY_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sdk" CACHE PATH "Path to the bundled Windows OpenXRay dependencies")
 set(XRAY_SDK_INCLUDE_DIR "${XRAY_SDK_DIR}/include")
-set(XRAY_SDK_LIBRARY_DIR "${XRAY_SDK_DIR}/libraries/${XRAY_SDK_PLATFORM}")
-set(XRAY_SDK_BINARY_DIR "${XRAY_SDK_DIR}/binaries/${XRAY_SDK_PLATFORM}")
+set(XRAY_SDK_LIBRARY_DIR "${XRAY_SDK_DIR}/libraries/${XRAY_PLATFORM}")
+set(XRAY_SDK_BINARY_DIR "${XRAY_SDK_DIR}/binaries/${XRAY_PLATFORM}")
 
 foreach(_xray_required_dir XRAY_SDK_DIR XRAY_SDK_INCLUDE_DIR XRAY_SDK_LIBRARY_DIR)
     if (NOT EXISTS "${${_xray_required_dir}}")
@@ -144,62 +134,6 @@ function(xray_define_imported_library target)
     endif()
 endfunction()
 
-if (NOT TARGET JPEG::JPEG)
-    xray_define_imported_library(JPEG::JPEG
-        PATH "${XRAY_SDK_LIBRARY_DIR}/jpeg-static.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}"
-    )
-endif()
-
-if (NOT TARGET LZO::LZO)
-    xray_define_imported_library(LZO::LZO
-        PATH "${XRAY_SDK_LIBRARY_DIR}/lzo.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}"
-    )
-endif()
-
-if (NOT TARGET Ogg::Ogg)
-    xray_define_imported_library(Ogg::Ogg
-        PATH "${XRAY_SDK_LIBRARY_DIR}/libogg_static.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}"
-    )
-endif()
-
-if (NOT TARGET Vorbis::Vorbis)
-    xray_define_imported_library(Vorbis::Vorbis
-        PATH "${XRAY_SDK_LIBRARY_DIR}/libvorbis_static.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}"
-    )
-endif()
-
-if (NOT TARGET Vorbis::VorbisFile)
-    xray_define_imported_library(Vorbis::VorbisFile
-        PATH "${XRAY_SDK_LIBRARY_DIR}/libvorbisfile.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}"
-    )
-endif()
-
-if (NOT TARGET Theora::Theora)
-    xray_define_imported_library(Theora::Theora
-        PATH "${XRAY_SDK_LIBRARY_DIR}/libtheora_static.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}"
-    )
-endif()
-
-if (NOT TARGET OpenAL::OpenAL)
-    xray_define_imported_library(OpenAL::OpenAL
-        PATH "${XRAY_SDK_LIBRARY_DIR}/OpenAL32.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}/AL"
-    )
-endif()
-
-if (NOT TARGET OpenSSL::Crypto)
-    xray_define_imported_library(OpenSSL::Crypto
-        PATH "${XRAY_SDK_LIBRARY_DIR}/libcrypto.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}"
-    )
-endif()
-
 if (MEMORY_ALLOCATOR STREQUAL "mimalloc" AND NOT TARGET mimalloc)
     xray_define_imported_library(mimalloc
         PATH "${XRAY_SDK_LIBRARY_DIR}/mimalloc-static.lib"
@@ -208,23 +142,9 @@ if (MEMORY_ALLOCATOR STREQUAL "mimalloc" AND NOT TARGET mimalloc)
     )
 endif()
 
-if (NOT TARGET xray::BugTrap)
-    xray_define_imported_library(xray::BugTrap
-        PATH "${XRAY_SDK_LIBRARY_DIR}/BugTrap.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}"
-    )
-endif()
-
 if (NOT TARGET SDL2::SDL2)
     xray_define_imported_library(SDL2::SDL2
         PATH "${XRAY_SDK_LIBRARY_DIR}/SDL2.lib"
-        INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}/SDL2"
-    )
-endif()
-
-if (NOT TARGET SDL2::SDL2main)
-    xray_define_imported_library(SDL2::SDL2main
-        PATH "${XRAY_SDK_LIBRARY_DIR}/SDL2main.lib"
         INCLUDE_DIRS "${XRAY_SDK_INCLUDE_DIR}/SDL2"
     )
 endif()

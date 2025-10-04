@@ -140,16 +140,8 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_options(-Og)
 endif()
 
-if (NOT WIN32)
-    find_package(SDL2 2.0.18 REQUIRED)
-    find_package(OpenAL REQUIRED)
-    find_package(JPEG)
-    find_package(Ogg REQUIRED)
-    find_package(Vorbis REQUIRED)
-    find_package(Theora REQUIRED)
-    find_package(LZO REQUIRED)
-    find_package(mimalloc NAMES mimalloc2 mimalloc2.0 mimalloc)
-endif()
+find_package(SDL2 2.0.18 REQUIRED)
+find_package(mimalloc NAMES mimalloc2 mimalloc2.0 mimalloc)
 
 # Memory allocator option
 if (mimalloc_FOUND)

@@ -450,38 +450,23 @@ target_include_directories(xrCore
 target_link_libraries(xrCore
     PUBLIC
     xrMiscMath
+    $<$<NOT:$<PLATFORM_ID:Windows>>:pthread>
+    $<$<PLATFORM_ID:FreeBSD,OpenBSD,NetBSD,DragonFlyBSD>:execinfo>
+    SDL2::SDL2
+
     PRIVATE
     xrAPI
+    LZO::LZO
+    $<$<STREQUAL:${MEMORY_ALLOCATOR},mimalloc>:mimalloc>
+    $<$<BOOL:${JPEG_FOUND}>:JPEG::JPEG>
+    $<$<PLATFORM_ID:Windows>:BugTrap>
+    $<$<PLATFORM_ID:Windows>:DbgHelp>
+    $<$<PLATFORM_ID:Windows>:FaultRep>
+    $<$<PLATFORM_ID:Windows>:Winmm>
+    $<$<PLATFORM_ID:Windows>:OpenSSL::Crypto>
 )
 
-if (WIN32)
-    target_link_libraries(xrCore
-        PUBLIC
-        Winmm
-        SDL2::SDL2
-
-        PRIVATE
-        xray::BugTrap
-        OpenSSL::Crypto
-        LZO::LZO
-        JPEG::JPEG
-        $<$<STREQUAL:${MEMORY_ALLOCATOR},mimalloc>:mimalloc>
-        DbgHelp
-        FaultRep
-    )
-else()
-    target_link_libraries(xrCore
-        PUBLIC
-        pthread
-        $<$<PLATFORM_ID:FreeBSD,OpenBSD,NetBSD,DragonFlyBSD>:execinfo>
-        SDL2::SDL2
-
-        PRIVATE
-        $<$<STREQUAL:${MEMORY_ALLOCATOR},mimalloc>:mimalloc>
-        $<$<BOOL:${JPEG_FOUND}>:JPEG::JPEG>
-        LZO::LZO
-    )
-
+if (NOT WIN32)
     if (NOT CMAKE_SYSTEM_NAME STREQUAL "OpenBSD" AND NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD" AND NOT HAIKU)
         target_link_libraries(xrCore
             PRIVATE

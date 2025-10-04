@@ -59,6 +59,19 @@ if (WIN32)
     include_directories("${XRAY_SDK_INCLUDE_DIR}/SDL2")
 endif()
 
+if (WIN32)
+    find_package(BugTrap REQUIRED)
+    find_package(OpenSSL REQUIRED)
+endif()
+
+find_package(LZO REQUIRED)
+find_package(OpenAL REQUIRED)
+find_package(Ogg REQUIRED)
+find_package(Vorbis REQUIRED)
+find_package(Theora REQUIRED)
+
+find_package(JPEG)
+
 # https://gitlab.kitware.com/cmake/cmake/-/issues/25650
 if (CMAKE_VERSION VERSION_EQUAL "3.28.2" AND CMAKE_UNITY_BUILD)
     message(WARNING

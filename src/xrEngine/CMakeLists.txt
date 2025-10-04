@@ -437,23 +437,12 @@ target_link_libraries(xrEngine
     xrNetServer
     xrScriptEngine
     xrSound
+    $<$<PLATFORM_ID:Windows>:DiscordGameSDK>
     OpenAL::OpenAL
     Ogg::Ogg
     Theora::Theora
+    $<$<PLATFORM_ID:Windows>:Vfw32>
 )
-
-if (WIN32)
-    target_link_libraries(xrEngine
-        PRIVATE
-        Vfw32
-        DiscordGameSDK
-    )
-else()
-    target_link_libraries(xrEngine
-        PRIVATE
-        SDL2::SDL2
-    )
-endif()
 
 if (WIN32)
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)

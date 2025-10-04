@@ -1,0 +1,20 @@
+find_path(BUGTRAP_INCLUDE_DIR
+    NAMES BugTrap.h
+    PATH_SUFFIXES include
+)
+
+find_library(BUGTRAP_LIBRARY
+    NAMES BugTrap
+)
+
+mark_as_advanced(
+    BUGTRAP_INCLUDE_DIR
+    BUGTRAP_LIBRARY
+)
+
+add_library(BugTrap STATIC IMPORTED GLOBAL)
+
+set_target_properties(BugTrap PROPERTIES
+    IMPORTED_LOCATION "${BUGTRAP_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${BUGTRAP_INCLUDE_DIR}"
+)
