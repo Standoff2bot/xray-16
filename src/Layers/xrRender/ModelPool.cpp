@@ -409,6 +409,8 @@ dxRender_Visual* CModelPool::Create(const char* name, IReader* data)
     const xr_string normalized = NormalizeModelIdentifier(name);
     VERIFY(normalized.size() < sizeof(low_name));
     xr_strcpy(low_name, normalized.c_str());
+    const char* ext = strext(name);
+    const bool wants_omf = ext && 0 == xr_stricmp(ext, ".omf");
     //	Msg						("-CREATE %s",low_name);
 
     // 0. Search POOL
@@ -428,13 +430,34 @@ dxRender_Visual* CModelPool::Create(const char* name, IReader* data)
 
         if (nullptr == Base)
         {
+            if (wants_omf)
+            {
+                const shared_str bundle_identifier(normalized.c_str());
+                if (auto bundle_path = ResolveOzzBundlePath(bundle_identifier))
+                {
+                    auto* bundle_visual = static_cast<COzzKinematicsVisual*>(Instance_Create(MT_OZZ_BUNDLE));
+                    if (!bundle_visual->LoadFromBundle(bundle_identifier.c_str(), *bundle_path))
+                    {
+                        xr_delete(bundle_visual);
+                    }
+                    else
+                    {
+                        Instance_Register(bundle_identifier.c_str(), bundle_visual);
+                        Base = bundle_visual;
+                    }
+                }
+            }
+
             // 2. If not found
-            bAllowChildrenDuplicate = FALSE;
-            if (data)
-                Base = Instance_Load(low_name, data, TRUE);
-            else
-                Base = Instance_Load(low_name, TRUE);
-            bAllowChildrenDuplicate = TRUE;
+            if (!Base)
+            {
+                bAllowChildrenDuplicate = FALSE;
+                if (data)
+                    Base = Instance_Load(low_name, data, TRUE);
+                else
+                    Base = Instance_Load(low_name, TRUE);
+                bAllowChildrenDuplicate = TRUE;
+            }
 #ifdef _EDITOR
             if (!Base)
                 return 0;

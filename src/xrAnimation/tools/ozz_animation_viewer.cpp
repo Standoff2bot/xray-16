@@ -394,6 +394,17 @@ std::string FormatFloat(float value, int precision = 6)
     return oss.str();
 }
 
+const char* DescribeTranslationFormat(uint8_t format)
+{
+    switch (format)
+    {
+    case 1: return "Quantized8";
+    case 2: return "Quantized16";
+    case 0: return "None";
+    default: return "Unknown";
+    }
+}
+
 std::string GetFileStem(const char* path)
 {
     if (path == nullptr)
@@ -476,6 +487,19 @@ struct MotionMarkData
     std::vector<std::pair<float, float>> intervals;
 };
 
+struct BoneMotionData
+{
+    uint16_t bone_id = 0;
+    uint8_t flags = 0;
+    uint8_t translation_format = 0;
+    uint32_t rotation_crc = 0;
+    uint32_t translation_crc = 0;
+    uint32_t rotation_key_count = 0;
+    uint32_t translation_key_count = 0;
+    std::array<float, 3> translation_size{ { 0.f, 0.f, 0.f } };
+    std::array<float, 3> translation_init{ { 0.f, 0.f, 0.f } };
+};
+
 struct MotionMetadataData
 {
     std::string name;
@@ -487,6 +511,8 @@ struct MotionMetadataData
     float accrue = 0.f;
     float falloff = 0.f;
     std::vector<MotionMarkData> marks;
+    uint32_t frame_count = 0;
+    std::vector<BoneMotionData> bone_motions;
 };
 
 class DearImGuiLayer
@@ -705,6 +731,102 @@ protected:
                 archive >> end;
                 mark.intervals[interval_index] = { start, end };
             }
+        }
+
+        uint32_t frame_count = 0;
+        archive >> frame_count;
+        metadata.frame_count = frame_count;
+
+        uint32_t bone_motion_count = 0;
+        archive >> bone_motion_count;
+        metadata.bone_motions.resize(bone_motion_count);
+
+        for (uint32_t bone_index = 0; bone_index < bone_motion_count; ++bone_index)
+        {
+            BoneMotionData bone;
+            auto* stream = archive.stream();
+
+            auto read_value = [stream](auto& value) -> bool
+            {
+                return stream->Read(&value, sizeof(value)) == sizeof(value);
+            };
+
+            if (!read_value(bone.bone_id) || !read_value(bone.flags) ||
+                !read_value(bone.translation_format) || !read_value(bone.rotation_crc) ||
+                !read_value(bone.translation_crc))
+            {
+                ozz::log::Err() << "Failed to read bone metadata header for index " << bone_index << std::endl;
+                break;
+            }
+
+            if (!read_value(bone.rotation_key_count))
+            {
+                ozz::log::Err() << "Failed to read rotation key count for bone index " << bone_index << std::endl;
+                break;
+            }
+
+            for (uint32_t key_index = 0; key_index < bone.rotation_key_count; ++key_index)
+            {
+                int16_t components[4] = {};
+                if (stream->Read(components, sizeof(components)) != sizeof(components))
+                {
+                    ozz::log::Err() << "Failed to read rotation key data for bone index " << bone_index << std::endl;
+                    break;
+                }
+            }
+
+            if (!read_value(bone.translation_key_count))
+            {
+                ozz::log::Err() << "Failed to read translation key count for bone index " << bone_index << std::endl;
+                break;
+            }
+
+            switch (bone.translation_format)
+            {
+            case 1:
+            {
+                const size_t bytes = static_cast<size_t>(bone.translation_key_count) * 3;
+                std::vector<uint8_t> buffer(bytes);
+                if (stream->Read(buffer.data(), bytes) != bytes)
+                {
+                    ozz::log::Err() << "Failed to read quantized8 translation data for bone index " << bone_index << std::endl;
+                    break;
+                }
+                break;
+            }
+            case 2:
+            {
+                const size_t bytes = static_cast<size_t>(bone.translation_key_count) * 3 * sizeof(int16_t);
+                std::vector<int16_t> buffer(bytes / sizeof(int16_t));
+                if (stream->Read(buffer.data(), bytes) != bytes)
+                {
+                    ozz::log::Err() << "Failed to read quantized16 translation data for bone index " << bone_index << std::endl;
+                    break;
+                }
+                break;
+            }
+            default:
+            {
+                const size_t bytes = static_cast<size_t>(bone.translation_key_count) * 3 * sizeof(float);
+                std::vector<float> buffer(bytes / sizeof(float));
+                if (stream->Read(buffer.data(), bytes) != bytes)
+                {
+                    ozz::log::Err() << "Failed to read uncompressed translation data for bone index " << bone_index << std::endl;
+                    break;
+                }
+                break;
+            }
+            }
+
+            if (!read_value(bone.translation_size[0]) || !read_value(bone.translation_size[1]) ||
+                !read_value(bone.translation_size[2]) || !read_value(bone.translation_init[0]) ||
+                !read_value(bone.translation_init[1]) || !read_value(bone.translation_init[2]))
+            {
+                ozz::log::Err() << "Failed to read translation bounds for bone index " << bone_index << std::endl;
+                break;
+            }
+
+            metadata.bone_motions[bone_index] = std::move(bone);
         }
 
         return metadata;
@@ -2316,6 +2438,8 @@ private:
                 ImGui::Text("Motion ID: %u", metadata->motion_id);
                 ImGui::Text("Speed: %.3f  Power: %.3f", metadata->speed, metadata->power);
                 ImGui::Text("Accrue: %.3f  Falloff: %.3f", metadata->accrue, metadata->falloff);
+                ImGui::Text("Frame Count: %u", metadata->frame_count);
+                ImGui::Text("Bone Tracks: %zu", metadata->bone_motions.size());
                 if (!metadata->marks.empty())
                 {
                     ImGui::SeparatorText("Marks");
@@ -2334,6 +2458,56 @@ private:
                         }
                         mark_stream << "]";
                         ImGui::BulletText("%s", mark_stream.str().c_str());
+                    }
+                }
+
+                if (!metadata->bone_motions.empty() && ImGui::CollapsingHeader("Bone Motions", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    const auto joint_names = skeleton_.joint_names();
+                    const int joint_count = skeleton_.num_joints();
+
+                    if (ImGui::BeginTable("BoneMotionTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableSetupColumn("Bone");
+                        ImGui::TableSetupColumn("Flags");
+                        ImGui::TableSetupColumn("Rot Keys");
+                        ImGui::TableSetupColumn("Trans Keys");
+                        ImGui::TableSetupColumn("Trans Format");
+                        ImGui::TableSetupColumn("CRC (rot/trans)");
+                        ImGui::TableSetupColumn("Translation Range");
+                        ImGui::TableHeadersRow();
+
+                        for (const BoneMotionData& bone : metadata->bone_motions)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            const bool valid_index = static_cast<int>(bone.bone_id) < joint_count;
+                            const char* joint_name = valid_index ? joint_names[bone.bone_id] : "<invalid>";
+                            ImGui::Text("%u (%s)", bone.bone_id, joint_name ? joint_name : "");
+
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("0x%02X", bone.flags);
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::Text("%u", bone.rotation_key_count);
+
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%u", bone.translation_key_count);
+
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::TextUnformatted(DescribeTranslationFormat(bone.translation_format));
+
+                            ImGui::TableSetColumnIndex(5);
+                            ImGui::Text("0x%08X / 0x%08X", bone.rotation_crc, bone.translation_crc);
+
+                            ImGui::TableSetColumnIndex(6);
+                            const std::array<float, 3>& size = bone.translation_size;
+                            const std::array<float, 3>& init = bone.translation_init;
+                            ImGui::Text("size=(%.3f, %.3f, %.3f)\ninit=(%.3f, %.3f, %.3f)",
+                                size[0], size[1], size[2], init[0], init[1], init[2]);
+                        }
+
+                        ImGui::EndTable();
                     }
                 }
             }

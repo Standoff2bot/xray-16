@@ -84,7 +84,7 @@ void player_hud_motion_container::load(IKinematicsAnimated* model, const shared_
                 {
                     pm.m_animations.emplace_back(motion_descr{ std::move(motion_ID), buff });
 #ifdef DEBUG
-//					Msg(" alias=[%s] base=[%s] name=[%s]",pm.m_alias_name.c_str(), pm.m_base_name.c_str(), buff);
+                    Msg("base=[%s] name=[%s]", pm.m_base_name.c_str(), buff);
 #endif // #ifdef DEBUG
                 }
             }
@@ -435,7 +435,7 @@ u32 attachable_hud_item::anim_play(const shared_str& anm_name_b, BOOL bMixIn, co
     const motion_descr& M = anm->m_animations[rnd_idx];
 
     IKinematicsAnimated* ka = smart_cast<IKinematicsAnimated*>(m_model);
-    const u32 ret = m_parent->anim_play(m_attach_place_idx, M.mid, bMixIn, md, speed, m_monolithic ? ka : nullptr);
+    const u32 ret = m_parent->anim_play(m_attach_place_idx, M.mid, bMixIn, md, speed, m_monolithic ? ka : ka);
 
     if (ka)
     {
@@ -616,7 +616,7 @@ void player_hud::render_hud(u32 context_id, IRenderable* root)
         return;
 
     if (m_model)
-        GEnv.Render->add_Visual(context_id, root, m_model->dcast_RenderVisual(), Fidentity);
+        GEnv.Render->add_Visual(context_id, root, m_model->dcast_RenderVisual(), m_transform);
 
     if (item0)
         item0->render(context_id, root);
@@ -938,7 +938,7 @@ void player_hud::detach_item(CHudItem* item)
 void player_hud::calc_transform(u16 attach_slot_idx, const Fmatrix& offset, Fmatrix& result) const
 {
     const attachable_hud_item* item = m_attached_items[attach_slot_idx];
-    if (item && !item->m_monolithic)
+    if (item && !item->m_monolithic && m_model)
     {
         IKinematics* k = smart_cast<IKinematics*>(m_model);
         const Fmatrix ancor_m = k->LL_GetTransform(m_ancors[attach_slot_idx]);

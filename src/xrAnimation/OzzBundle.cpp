@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <string>
 
 namespace XRay
 {
@@ -16,6 +17,18 @@ namespace
 constexpr char kOzzxMagic[8] = { 'O', 'Z', 'Z', 'X', 'P', 'A', 'C', 'K' };
 constexpr char kBoneMetadataMagic[4] = { 'B', 'M', 'D', 'T' };
 constexpr std::uint32_t kBoneMetadataVersion = 1u;
+constexpr char kUserDataMagic[4] = { 'U', 'D', 'T', 'A' };
+
+void LogReadFailure(const std::filesystem::path& path, const char* stage, std::streampos position,
+    const std::string& context = {})
+{
+    std::cerr << "[OzzBundle] " << stage;
+    if (!context.empty())
+        std::cerr << ": " << context;
+    if (position != std::streampos(-1))
+        std::cerr << " (offset " << static_cast<std::streamoff>(position) << ")";
+    std::cerr << " — " << path << std::endl;
+}
 }
 
 static bool ReadFully(std::ifstream& stream, void* buffer, std::size_t size)
@@ -30,7 +43,7 @@ static bool WriteFully(std::ofstream& stream, const void* buffer, std::size_t si
     return static_cast<bool>(stream);
 }
 
-static bool ReadBoneMetadataBlock(std::ifstream& stream, ExtendedBoneMetadataCollection& out_metadata)
+static bool ReadBoneMetadataBlock(std::ifstream& stream, const std::filesystem::path& path, ExtendedBoneMetadataCollection& out_metadata)
 {
     const std::streampos checkpoint = stream.tellg();
 
@@ -51,8 +64,12 @@ static bool ReadBoneMetadataBlock(std::ifstream& stream, ExtendedBoneMetadataCol
     }
 
     std::uint32_t metadata_version = 0;
+    const auto version_offset = stream.tellg();
     if (!ReadFully(stream, &metadata_version, sizeof(metadata_version)))
+    {
+        LogReadFailure(path, "read bone metadata version", version_offset);
         return false;
+    }
 
     if (metadata_version != kBoneMetadataVersion)
     {
@@ -61,8 +78,12 @@ static bool ReadBoneMetadataBlock(std::ifstream& stream, ExtendedBoneMetadataCol
     }
 
     std::uint32_t count = 0;
+    const auto count_offset = stream.tellg();
     if (!ReadFully(stream, &count, sizeof(count)))
+    {
+        LogReadFailure(path, "read bone metadata count", count_offset);
         return false;
+    }
 
     out_metadata.clear();
     out_metadata.resize(count);
@@ -71,51 +92,111 @@ static bool ReadBoneMetadataBlock(std::ifstream& stream, ExtendedBoneMetadataCol
     {
         auto& entry = out_metadata[index];
 
+        auto field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.shape, sizeof(entry.shape)))
+        {
+            LogReadFailure(path, "read bone metadata shape", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.joint, sizeof(entry.joint)))
+        {
+            LogReadFailure(path, "read bone metadata joint", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.mass, sizeof(entry.mass)))
+        {
+            LogReadFailure(path, "read bone metadata mass", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.center_of_mass, sizeof(entry.center_of_mass)))
+        {
+            LogReadFailure(path, "read bone metadata center_of_mass", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.rest_length, sizeof(entry.rest_length)))
+        {
+            LogReadFailure(path, "read bone metadata rest_length", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.dominant_axis, sizeof(entry.dominant_axis)))
+        {
+            LogReadFailure(path, "read bone metadata dominant_axis", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.local_aabb_min, sizeof(entry.local_aabb_min)))
+        {
+            LogReadFailure(path, "read bone metadata local_aabb_min", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.local_aabb_max, sizeof(entry.local_aabb_max)))
+        {
+            LogReadFailure(path, "read bone metadata local_aabb_max", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.inverse_global_transform, sizeof(entry.inverse_global_transform)))
+        {
+            LogReadFailure(path, "read bone metadata inverse_global_transform", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.inertia_tensor, sizeof(entry.inertia_tensor)))
+        {
+            LogReadFailure(path, "read bone metadata inertia_tensor", field_offset);
             return false;
+        }
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &entry.volume, sizeof(entry.volume)))
+        {
+            LogReadFailure(path, "read bone metadata volume", field_offset);
             return false;
+        }
 
         std::uint32_t layers = 0;
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &layers, sizeof(layers)))
+        {
+            LogReadFailure(path, "read bone metadata collision layers", field_offset);
             return false;
+        }
         entry.collision_layers.assign(layers);
 
         std::uint8_t ground = 0;
         std::uint8_t weapon = 0;
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &ground, sizeof(ground)) || !ReadFully(stream, &weapon, sizeof(weapon)))
+        {
+            LogReadFailure(path, "read bone metadata contact flags", field_offset);
             return false;
+        }
         entry.ground_contact_candidate = ground != 0;
         entry.weapon_anchor_candidate = weapon != 0;
 
         std::uint32_t material_length = 0;
+        field_offset = stream.tellg();
         if (!ReadFully(stream, &material_length, sizeof(material_length)))
+        {
+            LogReadFailure(path, "read bone metadata material length", field_offset);
             return false;
+        }
 
         xr_string material;
         material.resize(material_length);
         if (material_length > 0)
         {
+            field_offset = stream.tellg();
             if (!ReadFully(stream, material.data(), material_length))
+            {
+                LogReadFailure(path, "read bone metadata material payload", field_offset);
                 return false;
+            }
         }
         entry.game_material = std::move(material);
     }
@@ -193,25 +274,91 @@ static bool WriteBoneMetadataBlock(std::ofstream& stream, const ExtendedBoneMeta
     return true;
 }
 
+static bool ReadUserDataBlock(std::ifstream& stream, const std::filesystem::path& path, std::vector<std::uint8_t>& out_user_data)
+{
+    const std::streampos checkpoint = stream.tellg();
+
+    char magic[sizeof(kUserDataMagic)] = {};
+    if (!ReadFully(stream, magic, sizeof(magic)))
+    {
+        stream.clear();
+        stream.seekg(checkpoint, std::ios::beg);
+        out_user_data.clear();
+        return true;
+    }
+
+    if (std::memcmp(magic, kUserDataMagic, sizeof(kUserDataMagic)) != 0)
+    {
+        stream.seekg(checkpoint, std::ios::beg);
+        out_user_data.clear();
+        return true;
+    }
+
+    std::uint32_t data_size = 0;
+    const auto size_offset = stream.tellg();
+    if (!ReadFully(stream, &data_size, sizeof(data_size)))
+    {
+        LogReadFailure(path, "read user data size", size_offset);
+        return false;
+    }
+
+    out_user_data.clear();
+    out_user_data.resize(data_size);
+    if (data_size > 0)
+    {
+        const auto payload_offset = stream.tellg();
+        if (!ReadFully(stream, out_user_data.data(), data_size))
+        {
+            LogReadFailure(path, "read user data payload", payload_offset);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool WriteUserDataBlock(std::ofstream& stream, const std::vector<std::uint8_t>& user_data)
+{
+    if (user_data.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
+    {
+        std::cerr << "User data payload too large for .ozzx bundle: " << user_data.size() << std::endl;
+        return false;
+    }
+
+    if (!WriteFully(stream, kUserDataMagic, sizeof(kUserDataMagic)))
+        return false;
+
+    const std::uint32_t data_size = static_cast<std::uint32_t>(user_data.size());
+    if (!WriteFully(stream, &data_size, sizeof(data_size)))
+        return false;
+
+    if (data_size > 0 && !WriteFully(stream, user_data.data(), user_data.size()))
+        return false;
+
+    return true;
+}
+
 bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
 {
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
     {
-        std::cerr << "Failed to open .ozzx bundle: " << path << std::endl;
+        LogReadFailure(path, "open bundle", std::streampos(-1));
         return false;
     }
 
     char magic[sizeof(kOzzxMagic)] = {};
+    const auto magic_offset = stream.tellg();
     if (!ReadFully(stream, magic, sizeof(magic)))
     {
-        std::cerr << "Failed to read bundle magic from: " << path << std::endl;
+        LogReadFailure(path, "read bundle magic", magic_offset);
         return false;
     }
 
     if (std::memcmp(magic, kOzzxMagic, sizeof(kOzzxMagic)) != 0)
     {
-        std::cerr << "Unexpected bundle magic in: " << path << std::endl;
+        const std::string actual(magic, magic + sizeof(kOzzxMagic));
+        LogReadFailure(path, "unexpected bundle magic", magic_offset, actual);
         return false;
     }
 
@@ -219,11 +366,12 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
     std::uint32_t skeleton_size = 0;
     std::uint32_t mesh_size = 0;
 
+    const auto header_offset = stream.tellg();
     if (!ReadFully(stream, &version, sizeof(version)) ||
         !ReadFully(stream, &skeleton_size, sizeof(skeleton_size)) ||
         !ReadFully(stream, &mesh_size, sizeof(mesh_size)))
     {
-        std::cerr << "Failed to read bundle header from: " << path << std::endl;
+        LogReadFailure(path, "read bundle header", header_offset);
         return false;
     }
 
@@ -231,30 +379,39 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
     out_bundle.skeleton.resize(skeleton_size);
     out_bundle.mesh.resize(mesh_size);
 
+    const auto skeleton_offset = stream.tellg();
     if (!ReadFully(stream, out_bundle.skeleton.data(), out_bundle.skeleton.size()))
     {
-        std::cerr << "Failed to read skeleton payload from: " << path << std::endl;
+        LogReadFailure(path, "read skeleton payload", skeleton_offset);
         return false;
     }
 
+    const auto mesh_offset = stream.tellg();
     if (!ReadFully(stream, out_bundle.mesh.data(), out_bundle.mesh.size()))
     {
-        std::cerr << "Failed to read mesh payload from: " << path << std::endl;
+        LogReadFailure(path, "read mesh payload", mesh_offset);
         return false;
     }
 
-    if (!ReadBoneMetadataBlock(stream, out_bundle.bone_metadata))
+    if (!ReadBoneMetadataBlock(stream, path, out_bundle.bone_metadata))
     {
-        std::cerr << "Failed to read bone metadata block from: " << path << std::endl;
+        LogReadFailure(path, "read bone metadata block", stream.tellg());
+        return false;
+    }
+
+    if (!ReadUserDataBlock(stream, path, out_bundle.user_data))
+    {
+        LogReadFailure(path, "read user data block", stream.tellg());
         return false;
     }
 
     out_bundle.motion_refs.clear();
 
     std::uint32_t motion_ref_count = 0;
+    const auto motion_count_offset = stream.tellg();
     if (!ReadFully(stream, &motion_ref_count, sizeof(motion_ref_count)))
     {
-        std::cerr << "Failed to read motion reference count from: " << path << std::endl;
+        LogReadFailure(path, "read motion reference count", motion_count_offset);
         return false;
     }
 
@@ -264,9 +421,10 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
         for (std::uint32_t index = 0; index < motion_ref_count; ++index)
         {
             std::uint32_t length = 0;
+            const auto ref_length_offset = stream.tellg();
             if (!ReadFully(stream, &length, sizeof(length)))
             {
-                std::cerr << "Failed to read motion reference length from: " << path << std::endl;
+                LogReadFailure(path, "read motion reference length", ref_length_offset);
                 return false;
             }
 
@@ -275,9 +433,10 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
 
             if (length > 0)
             {
+                const auto ref_data_offset = stream.tellg();
                 if (!ReadFully(stream, entry.data(), length))
                 {
-                    std::cerr << "Failed to read motion reference data from: " << path << std::endl;
+                    LogReadFailure(path, "read motion reference data", ref_data_offset);
                     return false;
                 }
             }
@@ -350,6 +509,15 @@ bool WriteOzzxBundle(const std::filesystem::path& path, const OzzxBundle& bundle
     {
         std::cerr << "Failed to write bone metadata block: " << path << std::endl;
         return false;
+    }
+
+    if (!bundle.user_data.empty())
+    {
+        if (!WriteUserDataBlock(stream, bundle.user_data))
+        {
+            std::cerr << "Failed to write user data block: " << path << std::endl;
+            return false;
+        }
     }
 
     if (!WriteFully(stream, &motion_ref_count, sizeof(motion_ref_count)))

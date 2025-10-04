@@ -153,6 +153,10 @@ public:
     u32 motion_length(const MotionID& M, const CMotionDef*& md, float speed, IKinematicsAnimated* itemModel) const;
     u32 motion_length(const shared_str& anim_name, const shared_str& hud_name, const CMotionDef*& md);
     void OnMovementChanged(ACTOR_DEFS::EMoveCommand cmd) const;
+    void detach_kinematics()
+    {
+        m_model = nullptr;
+    }
 
 private:
     void load_ancors();

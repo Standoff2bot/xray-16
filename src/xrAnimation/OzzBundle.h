@@ -21,6 +21,7 @@ struct OzzxBundle
     std::vector<std::uint8_t> mesh;
     xr_vector<xr_string> motion_refs;
     ExtendedBoneMetadataCollection bone_metadata;
+    std::vector<std::uint8_t> user_data;
 };
 
 bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle);

@@ -12,6 +12,7 @@
 #include "OzzAnimationController.h"
 #include "ExtendedBoneMetadata.h"
 #include <filesystem>
+#include <vector>
 
 #include "ozz/animation/runtime/sampling_job.h"
 #include "ozz/animation/runtime/skeleton.h"
@@ -42,6 +43,7 @@ public:
     bool InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
     bool InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData, const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
     bool ApplyExtendedBoneMetadata(const ExtendedBoneMetadataCollection& metadata);
+    bool LoadUserDataFromBuffer(const std::vector<std::uint8_t>& buffer);
 
     // Pose management helpers.
     bool SetPoseLocals(ozz::span<const ozz::math::SoaTransform> locals);
@@ -224,6 +226,7 @@ private:
 
 private:
     CInifile* userData;
+    xr_unique_ptr<CInifile> userDataOwner;
     accel boneMapByName;
     accel boneMapByPtr;
     xr_vector<CBoneInstance> boneInstances;

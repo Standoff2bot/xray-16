@@ -52,6 +52,7 @@ struct LegacyVisualConversionResult
     std::vector<std::uint8_t> mesh_binary;
     size_t mesh_surface_count = 0;
     ExtendedBoneMetadataCollection bone_metadata;
+    std::vector<std::uint8_t> user_data;
 };
 
 bool ConvertLegacyVisualToOzzBundle(const LegacyVisualInput& input,

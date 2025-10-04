@@ -458,6 +458,7 @@ enum : uint32_t
     kChunkSwidata = OGF_SWIDATA,
     kChunkMotionRefs = OGF_S_MOTION_REFS,
     kChunkMotionRefs2 = OGF_S_MOTION_REFS2,
+    kChunkUserData = OGF_S_USERDATA,
 };
 
 } // namespace
@@ -2192,6 +2193,8 @@ void ConvertLegacyVisualToOzzBundleImpl(const LegacyVisualInput& input,
     const std::byte* data = input.buffer.data();
     const size_t size = input.buffer.size();
 
+    const auto chunks = ParseChunks(data, size);
+
     std::vector<BoneRecord> bones;
     const bool need_skeleton = options.build_skeleton || options.build_mesh;
 
@@ -2304,6 +2307,18 @@ void ConvertLegacyVisualToOzzBundleImpl(const LegacyVisualInput& input,
     out_result.motion_refs.reserve(motion_refs.size());
     for (const auto& ref : motion_refs)
         out_result.motion_refs.emplace_back(ref.c_str());
+
+    if (const auto user_data_it = chunks.find(kChunkUserData); user_data_it != chunks.end())
+    {
+        const Chunk& chunk = user_data_it->second;
+        out_result.user_data.resize(chunk.size);
+        if (chunk.size > 0)
+            std::memcpy(out_result.user_data.data(), chunk.data, chunk.size);
+    }
+    else
+    {
+        out_result.user_data.clear();
+    }
 }
 
 bool ConvertLegacyVisualToOzzBundle(const LegacyVisualInput& input,

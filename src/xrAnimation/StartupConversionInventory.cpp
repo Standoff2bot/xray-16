@@ -350,6 +350,7 @@ bool WriteBundleFile(const StartupConversionParams& params,
     bundle.mesh = conversion.mesh_binary;
     bundle.motion_refs = conversion.motion_refs;
     bundle.bone_metadata = conversion.bone_metadata;
+    bundle.user_data = conversion.user_data;
 
     const std::string path_string = output_path.string();
 

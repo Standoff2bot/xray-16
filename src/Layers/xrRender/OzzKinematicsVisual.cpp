@@ -411,6 +411,9 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
         return false;
     }
 
+    if (!LoadUserDataFromBuffer(user_data_payload_) && !user_data_payload_.empty())
+        Msg("[OzzKinematicsVisual] Failed to initialize user data from bundle payload");
+
     if (!ApplyExtendedBoneMetadata(bone_metadata_))
         Msg("[OzzKinematicsVisual] Bone metadata application failed; falling back to defaults");
 
@@ -482,6 +485,7 @@ bool COzzKinematicsVisual::LoadFromBundle(const char* name, const std::filesyste
     mesh_payload_.assign(bundle.mesh.begin(), bundle.mesh.end());
     motion_references_ = bundle.motion_refs;
     bone_metadata_ = bundle.bone_metadata;
+    user_data_payload_.assign(bundle.user_data.begin(), bundle.user_data.end());
 
     meshes_.clear();
 
@@ -506,6 +510,7 @@ void COzzKinematicsVisual::Copy(dxRender_Visual* pFrom)
         meshes_ = other->meshes_;
         motion_references_ = other->motion_references_;
         bone_metadata_ = other->bone_metadata_;
+        user_data_payload_ = other->user_data_payload_;
 
         R_ASSERT2(InitializeFromPayload(), "Failed to copy OzzKinematicsVisual state");
     }
@@ -541,6 +546,7 @@ void COzzKinematicsVisual::Release()
     skeleton_payload_.clear();
     mesh_payload_.clear();
     motion_references_.clear();
+    user_data_payload_.clear();
     DestroySurfaces();
     children.clear();
     bone_palette_.clear();

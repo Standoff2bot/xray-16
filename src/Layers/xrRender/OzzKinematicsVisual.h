@@ -73,6 +73,7 @@ private:
 private:
     xr_vector<std::uint8_t> skeleton_payload_;
     xr_vector<std::uint8_t> mesh_payload_;
+    std::vector<std::uint8_t> user_data_payload_;
     xr_vector<ozz::sample::Mesh> meshes_;
     xr_vector<COzzSkinnedSurface*> surfaces_;
     xr_vector<Fmatrix> bone_palette_;

@@ -445,6 +445,29 @@ bool OzzKinematics::InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonD
     return true;
 }
 
+bool OzzKinematics::LoadUserDataFromBuffer(const std::vector<std::uint8_t>& buffer)
+{
+    userDataOwner.reset();
+    userData = nullptr;
+
+    if (buffer.empty())
+        return true;
+
+    IReader reader(const_cast<std::uint8_t*>(buffer.data()), buffer.size());
+
+    pcstr config_path = "";
+    if (FS.path_exist("$game_config$"))
+    {
+        const FS_Path* path = FS.get_path("$game_config$");
+        if (path)
+            config_path = path->m_Path;
+    }
+
+    userDataOwner = xr_make_unique<CInifile>(&reader, config_path);
+    userData = userDataOwner.get();
+    return userData != nullptr;
+}
+
 void OzzKinematics::NotImplemented(pcstr function_name) const
 {
     Msg("[OzzKinematics] %s is not implemented yet", function_name);
@@ -463,6 +486,7 @@ void OzzKinematics::ResetRuntimeState()
     sampledLocals.clear();
     modelTransforms.clear();
     samplingContext.Resize(0);
+    userDataOwner.reset();
     userData = nullptr;
     rootBone = BI_NONE;
     visibleMask = 0;

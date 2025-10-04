@@ -227,9 +227,9 @@ void CGamePersistent::OnGameStart()
         Msg("[ozz] Refreshing model pool after startup conversion");
         FS_Path* mesh_path = FS.get_path("$game_meshes$"); // yohji TODO - this rescan doesn't work -> ModelPool.cpp l59
         FS.rescan_path(mesh_path->m_Path, TRUE);
+        if (g_player_hud)
+            g_player_hud->detach_kinematics();
         GEnv.Render->models_Rebuild();
-        if (!strstr(Core.Params, "-noprefetch"))
-            GEnv.Render->models_Prefetch();
     }
 
     if (show_loading_stage)
