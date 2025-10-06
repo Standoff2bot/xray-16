@@ -3,6 +3,7 @@
 #include "LegacyOgfConverter.h"
 
 #include "ExtendedBoneMetadata.h"
+#include "LegacyOmfConverter.h"
 #include "OzzConversion.h"
 
 #include "xrCore/xrCore.h"
@@ -428,6 +429,128 @@ struct BoneBoundsBuilder
     }
 };
 
+void SerializeString(ozz::io::OArchive& archive, const std::string& value)
+{
+    const uint32_t length = static_cast<uint32_t>(value.size());
+    archive << length;
+    if (length > 0)
+        archive << ozz::io::MakeArray(value.c_str(), length);
+}
+
+void SerializeMotionMarks(ozz::io::OArchive& archive, const LegacyMotionMetadata& metadata)
+{
+    const uint32_t mark_count = static_cast<uint32_t>(metadata.marks.size());
+    archive << mark_count;
+    for (const auto& mark : metadata.marks)
+    {
+        SerializeString(archive, std::string(mark.name.c_str()));
+        const uint32_t interval_count = static_cast<uint32_t>(mark.intervals.size());
+        archive << interval_count;
+        for (const auto& interval : mark.intervals)
+        {
+            archive << interval.first;
+            archive << interval.second;
+        }
+    }
+}
+
+void SerializeMotionMetadata(ozz::io::OArchive& archive, const LegacyMotionMetadata& metadata)
+{
+    SerializeString(archive, std::string(metadata.name.c_str()));
+    archive << metadata.flags;
+    archive << metadata.bone_or_part;
+    archive << metadata.motion_id;
+    archive << metadata.speed;
+    archive << metadata.power;
+    archive << metadata.accrue;
+    archive << metadata.falloff;
+    SerializeMotionMarks(archive, metadata);
+}
+
+std::vector<std::uint8_t> SerializeEmbeddedAnimations(const xr_vector<ConvertedOmfAnimation>& animations)
+{
+    const auto has_animation = [](const ConvertedOmfAnimation& entry)
+    {
+        return static_cast<bool>(entry.animation);
+    };
+
+    if (std::none_of(animations.begin(), animations.end(), has_animation))
+        return {};
+
+    ozz::io::MemoryStream animation_stream;
+    ozz::io::OArchive archive(&animation_stream);
+
+    const uint32_t animation_count = static_cast<uint32_t>(std::count_if(animations.begin(), animations.end(), has_animation));
+    archive << animation_count;
+
+    for (const auto& entry : animations)
+    {
+        if (!entry.animation)
+            continue;
+
+        archive << *entry.animation;
+        SerializeMotionMetadata(archive, entry.metadata);
+        SerializeBoneMotions(archive, entry);
+    }
+
+    std::vector<std::uint8_t> binary(animation_stream.Size());
+    animation_stream.Seek(0, ozz::io::Stream::kSet);
+    if (!binary.empty())
+        animation_stream.Read(binary.data(), binary.size());
+    return binary;
+}
+
+xr_vector<ConvertedOmfAnimation> BuildRestPoseAnimation(const ozz::animation::Skeleton& skeleton)
+{
+    const int joint_count = skeleton.num_joints();
+    if (joint_count <= 0)
+        return {};
+
+    ozz::animation::offline::RawAnimation raw_animation;
+    raw_animation.duration = SAMPLE_SPF;
+    raw_animation.name = "$editor";
+    raw_animation.tracks.resize(joint_count);
+
+    for (int joint = 0; joint < joint_count; ++joint)
+    {
+        auto& track = raw_animation.tracks[joint];
+
+        track.translations.resize(1);
+        track.translations[0].time = 0.f;
+        track.translations[0].value = ozz::math::Float3(0.f, 0.f, 0.f);
+
+        track.rotations.resize(1);
+        track.rotations[0].time = 0.f;
+        track.rotations[0].value = ozz::math::Quaternion::identity();
+
+        track.scales.resize(1);
+        track.scales[0].time = 0.f;
+        track.scales[0].value = ozz::math::Float3(1.f, 1.f, 1.f);
+    }
+
+    ozz::animation::offline::AnimationBuilder builder;
+    auto animation = builder(raw_animation);
+    if (!animation)
+        return {};
+
+    ConvertedOmfAnimation converted;
+    converted.name = raw_animation.name.c_str();
+    converted.animation = std::move(animation);
+    converted.frame_count = 1;
+    converted.metadata.name = raw_animation.name.c_str();
+    converted.metadata.flags = 0;
+    converted.metadata.bone_or_part = 0;
+    converted.metadata.motion_id = 0;
+    converted.metadata.speed = 1.f;
+    converted.metadata.power = 1.f;
+    converted.metadata.accrue = 0.f;
+    converted.metadata.falloff = 0.f;
+
+    xr_vector<ConvertedOmfAnimation> animations;
+    animations.emplace_back(std::move(converted));
+    return animations;
+}
+
 struct RoundedNormalKey
 {
     std::array<int32_t, 3> components{ 0, 0, 0 };
@@ -490,6 +613,8 @@ enum : uint32_t
     kChunkSwidata = OGF_SWIDATA,
     kChunkMotionRefs = OGF_S_MOTION_REFS,
     kChunkMotionRefs2 = OGF_S_MOTION_REFS2,
+    kChunkSmparams = OGF_S_SMPARAMS,
+    kChunkMotions = OGF_S_MOTIONS,
     kChunkUserData = OGF_S_USERDATA,
 };
 
@@ -2392,6 +2517,36 @@ void ConvertLegacyVisualToOzzBundleImpl(const LegacyVisualInput& input,
     else
     {
         out_result.user_data.clear();
+    }
+
+    out_result.embedded_animation_binary.clear();
+    if (out_result.motion_refs.empty())
+    {
+        const auto smparams_it = chunks.find(kChunkSmparams);
+        const auto motions_it = chunks.find(kChunkMotions);
+        if (smparams_it != chunks.end() && motions_it != chunks.end() && out_result.skeleton)
+        {
+            xr_vector<ConvertedOmfAnimation> embedded;
+            if (ConvertLegacyOmf(data, size, out_result.bone_names, *out_result.skeleton, embedded))
+            {
+                embedded.erase(std::remove_if(embedded.begin(), embedded.end(),
+                                [](const ConvertedOmfAnimation& entry)
+                                {
+                                    return !entry.animation;
+                                }),
+                    embedded.end());
+
+                Msg("create legacy animation for %s", input.source_path.value().generic_string().c_str());
+                out_result.embedded_animation_binary = SerializeEmbeddedAnimations(embedded);
+            }
+        }
+    }
+
+    if (out_result.embedded_animation_binary.empty() && out_result.skeleton)
+    {
+        Msg("create $editor animation for %s", input.source_path.value().generic_string().c_str());
+        const auto stub_animations = BuildRestPoseAnimation(*out_result.skeleton);
+        out_result.embedded_animation_binary = SerializeEmbeddedAnimations(stub_animations);
     }
 }
 

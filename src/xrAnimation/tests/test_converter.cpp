@@ -2280,7 +2280,7 @@ bool TestAssetBundleContainsSkeletonAndMesh()
         return false;
     }
 
-    if (bundle.motion_refs.empty())
+    if (bundle.motion_refs.empty() && bundle.embedded_animation_data.empty())
     {
         std::cerr << "bundle missing motion references" << std::endl;
         return false;

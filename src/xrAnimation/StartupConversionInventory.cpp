@@ -345,12 +345,13 @@ bool WriteBundleFile(const StartupConversionParams& params,
         return false;
 
     OzzxBundle bundle;
-        bundle.version = 2u;
+    bundle.version = 2u;
     bundle.skeleton = conversion.skeleton_binary;
     bundle.mesh = conversion.mesh_binary;
     bundle.motion_refs = conversion.motion_refs;
     bundle.bone_metadata = conversion.bone_metadata;
     bundle.user_data = conversion.user_data;
+    bundle.embedded_animation_data = conversion.embedded_animation_binary;
 
     const std::string path_string = output_path.string();
 

@@ -578,6 +578,7 @@ void OzzKinematics::ResetAnimationState()
     updateTracksCallback = nullptr;
     animationApplied = false;
     animationControllerReady = false;
+    embeddedAnimationData.clear();
 }
 
 void OzzKinematics::EnsureMotionLibraryLoaded()
@@ -586,6 +587,23 @@ void OzzKinematics::EnsureMotionLibraryLoaded()
         return;
 
     motionLibrary.Reset();
+
+    if (!embeddedAnimationData.empty())
+    {
+        ozz::io::MemoryStream embedded_stream;
+        if (embedded_stream.Write(embeddedAnimationData.data(), embeddedAnimationData.size()))
+        {
+            embedded_stream.Seek(0, ozz::io::Stream::kSet);
+            ozz::io::IArchive archive(&embedded_stream);
+            if (!LoadOzzAnimationsFromArchive(archive, xr_string("<embedded>")))
+            {
+#ifdef DEBUG
+                Msg("[OzzKinematics] failed to load embedded animations");
+#endif
+            }
+        }
+        embeddedAnimationData.clear();
+    }
 
 #ifdef DEBUG
     Msg("[OzzKinematics] building motion library (%zu refs)", static_cast<size_t>(motionReferences.size()));
@@ -737,6 +755,12 @@ void OzzKinematics::StopAnimation()
     ClearActiveBlends(true);
     ClearPose();
     CalculateBones_Invalidate();
+}
+
+void OzzKinematics::SetEmbeddedAnimationData(const std::vector<std::uint8_t>& data)
+{
+    embeddedAnimationData = data;
+    motionLibraryBuilt = false;
 }
 
 MotionID OzzKinematics::ResolveLegacyMotionId(const xr_string& motion_name)

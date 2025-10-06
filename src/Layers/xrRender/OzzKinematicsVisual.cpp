@@ -417,6 +417,8 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
     if (!ApplyExtendedBoneMetadata(bone_metadata_))
         Msg("[OzzKinematicsVisual] Bone metadata application failed; falling back to defaults");
 
+    SetEmbeddedAnimationData(embedded_animation_payload_);
+
     if (meshes_.empty() && !mesh_payload_.empty())
     {
         ozz::io::MemoryStream mesh_stream;
@@ -491,6 +493,7 @@ bool COzzKinematicsVisual::LoadFromBundle(const char* name, const std::filesyste
 #endif
     bone_metadata_ = bundle.bone_metadata;
     user_data_payload_.assign(bundle.user_data.begin(), bundle.user_data.end());
+    embedded_animation_payload_ = bundle.embedded_animation_data;
 
     meshes_.clear();
 
@@ -516,6 +519,7 @@ void COzzKinematicsVisual::Copy(dxRender_Visual* pFrom)
         motion_references_ = other->motion_references_;
         bone_metadata_ = other->bone_metadata_;
         user_data_payload_ = other->user_data_payload_;
+        embedded_animation_payload_ = other->embedded_animation_payload_;
 
         R_ASSERT2(InitializeFromPayload(), "Failed to copy OzzKinematicsVisual state");
     }
@@ -552,6 +556,7 @@ void COzzKinematicsVisual::Release()
     mesh_payload_.clear();
     motion_references_.clear();
     user_data_payload_.clear();
+    embedded_animation_payload_.clear();
     DestroySurfaces();
     children.clear();
     bone_palette_.clear();

@@ -563,6 +563,7 @@ void convert_bundle(const BundleConfig& config)
     bundle.motion_refs = conversion.motion_refs;
     bundle.bone_metadata = conversion.bone_metadata;
     bundle.user_data = conversion.user_data;
+    bundle.embedded_animation_data = conversion.embedded_animation_binary;
 
     if (!XRay::Animation::WriteOzzxBundle(config.output_ozzx, bundle))
         throw std::runtime_error("failed to write .ozzx bundle: " + config.output_ozzx.string());

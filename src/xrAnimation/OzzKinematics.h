@@ -68,6 +68,7 @@ public:
     void StopAnimation();
     bool AdvanceAnimation(float dt);
     bool HasActiveAnimation() const { return animationApplied; }
+    void SetEmbeddedAnimationData(const std::vector<std::uint8_t>& data);
 
     bool HasLoadedAnimation() const;
 
@@ -298,6 +299,7 @@ private:
 
     MotionLibrary motionLibrary;
     xr_vector<xr_string> motionReferences;
+    std::vector<std::uint8_t> embeddedAnimationData;
     bool motionLibraryBuilt = false;
     IBlendDestroyCallback* blendDestroyCallback = nullptr;
     IUpdateTracksCallback* updateTracksCallback = nullptr;

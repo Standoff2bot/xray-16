@@ -17,6 +17,7 @@ namespace
 constexpr char kOzzxMagic[8] = { 'O', 'Z', 'Z', 'X', 'P', 'A', 'C', 'K' };
 constexpr char kBoneMetadataMagic[4] = { 'B', 'M', 'D', 'T' };
 constexpr std::uint32_t kBoneMetadataVersion = 2u;
+constexpr char kEmbeddedAnimationsMagic[4] = { 'A', 'N', 'I', 'M' };
 constexpr char kUserDataMagic[4] = { 'U', 'D', 'T', 'A' };
 
 void LogReadFailure(const std::filesystem::path& path, const char* stage, std::streampos position,
@@ -420,6 +421,42 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
         return false;
     }
 
+    const std::streampos anim_block_offset = stream.tellg();
+    char anim_magic[sizeof(kEmbeddedAnimationsMagic)] = {};
+    if (!ReadFully(stream, anim_magic, sizeof(anim_magic)))
+    {
+        stream.clear();
+        stream.seekg(anim_block_offset, std::ios::beg);
+    }
+
+    if (std::memcmp(anim_magic, kEmbeddedAnimationsMagic, sizeof(kEmbeddedAnimationsMagic)) == 0)
+    {
+        std::uint32_t animation_data_size = 0;
+        const auto anim_size_offset = stream.tellg();
+        if (!ReadFully(stream, &animation_data_size, sizeof(animation_data_size)))
+        {
+            LogReadFailure(path, "read embedded animation size", anim_size_offset);
+            return false;
+        }
+
+        out_bundle.embedded_animation_data.clear();
+        out_bundle.embedded_animation_data.resize(animation_data_size);
+        if (animation_data_size > 0)
+        {
+            const auto anim_payload_offset = stream.tellg();
+            if (!ReadFully(stream, out_bundle.embedded_animation_data.data(), animation_data_size))
+            {
+                LogReadFailure(path, "read embedded animation payload", anim_payload_offset);
+                return false;
+            }
+        }
+    }
+    else
+    {
+        stream.seekg(anim_block_offset, std::ios::beg);
+        out_bundle.embedded_animation_data.clear();
+    }
+
     out_bundle.motion_refs.clear();
 
     std::uint32_t motion_ref_count = 0;
@@ -531,6 +568,36 @@ bool WriteOzzxBundle(const std::filesystem::path& path, const OzzxBundle& bundle
         if (!WriteUserDataBlock(stream, bundle.user_data))
         {
             std::cerr << "Failed to write user data block: " << path << std::endl;
+            return false;
+        }
+    }
+
+    if (!bundle.embedded_animation_data.empty())
+    {
+        if (!WriteFully(stream, kEmbeddedAnimationsMagic, sizeof(kEmbeddedAnimationsMagic)))
+        {
+            std::cerr << "Failed to write embedded animation magic: " << path << std::endl;
+            return false;
+        }
+
+        if (bundle.embedded_animation_data.size() > static_cast<size_t>(std::numeric_limits<std::uint32_t>::max()))
+        {
+            std::cerr << "Embedded animation payload too large for .ozzx bundle: "
+                      << bundle.embedded_animation_data.size() << std::endl;
+            return false;
+        }
+
+        const std::uint32_t animation_size = static_cast<std::uint32_t>(bundle.embedded_animation_data.size());
+        if (!WriteFully(stream, &animation_size, sizeof(animation_size)))
+        {
+            std::cerr << "Failed to write embedded animation size: " << path << std::endl;
+            return false;
+        }
+
+        if (animation_size > 0 &&
+            !WriteFully(stream, bundle.embedded_animation_data.data(), bundle.embedded_animation_data.size()))
+        {
+            std::cerr << "Failed to write embedded animation payload: " << path << std::endl;
             return false;
         }
     }

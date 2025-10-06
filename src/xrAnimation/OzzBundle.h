@@ -22,6 +22,7 @@ struct OzzxBundle
     xr_vector<xr_string> motion_refs;
     ExtendedBoneMetadataCollection bone_metadata;
     std::vector<std::uint8_t> user_data;
+    std::vector<std::uint8_t> embedded_animation_data;
 };
 
 bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle);
