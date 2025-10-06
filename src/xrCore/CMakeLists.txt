@@ -132,8 +132,6 @@ target_sources_grouped(
     TARGET xrCore
     NAME "Debug core"
     FILES
-    #Debug/MiniDump.cpp
-    #Debug/MiniDump.h
     xrDebug.cpp
     xrDebug.h
     xrDebug_macros.h
@@ -149,6 +147,14 @@ target_sources_grouped(
     Debug/DXGetErrorDescription.inl
     Debug/DXGetErrorString.inl
     Debug/DXTrace.inl
+)
+
+target_sources_grouped(
+    TARGET xrCore
+    NAME "Debug core\\StackTrace"
+    FILES
+    Debug/StackTrace.cpp
+    Debug/StackTrace.h
 )
 
 target_sources_grouped(
@@ -460,7 +466,6 @@ target_link_libraries(xrCore
     $<$<STREQUAL:${MEMORY_ALLOCATOR},mimalloc>:mimalloc>
     $<$<BOOL:${JPEG_FOUND}>:JPEG::JPEG>
     $<$<PLATFORM_ID:Windows>:BugTrap>
-    $<$<PLATFORM_ID:Windows>:DbgHelp>
     $<$<PLATFORM_ID:Windows>:FaultRep>
     $<$<PLATFORM_ID:Windows>:Winmm>
     $<$<PLATFORM_ID:Windows>:OpenSSL::Crypto>
