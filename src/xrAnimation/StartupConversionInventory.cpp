@@ -1030,6 +1030,8 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                     mt_it->second.output_alias = DetermineMotionOutputAlias(*motion, params);
                     mt_it->second.convert = force_rebuild ||
                         !FileExists(mt_it->second.output_alias, mt_it->second.output_relative);
+
+                    Msg("Failed to resolve file at %s %s, asset needs conversion", mt_it->second.output_alias.c_str(), mt_it->second.output_relative.c_str());
                 }
             }
         }

@@ -56,7 +56,7 @@ std::optional<std::filesystem::path> ResolveOzzBundlePath(const shared_str& iden
     }
 
     string_path resolved;
-    if (FS.exist(resolved, "$game_meshes$", candidate.c_str())) // yohji TODO: this doesn't work
+    if (FS.exist(resolved, "$game_meshes$", candidate.c_str()) || FS.exist(resolved, "$level$", candidate.c_str())) // yohji TODO: this doesn't work
         return std::filesystem::path(resolved);
 
     std::error_code ec;
@@ -155,13 +155,26 @@ dxRender_Visual* CModelPool::Instance_Load(const char* N, BOOL allow_register)
         if (FS.exist(fn, "$level$", bundle_name))
         {
             if (auto* bundle_visual = load_bundle_from_path(std::filesystem::path(fn)))
-                return bundle_visual;
+            {
+                Msg("Replacing direct .ogf load with .ozzx bundle: %s", fn);
+            }
+            else
+            {
+                Msg("Failed to replace direct .ogf load with .ozzx bundle: %s", fn);
+            }
         }
 
         if (FS.exist(fn, "$game_meshes$", bundle_name))
         {
             if (auto* bundle_visual = load_bundle_from_path(std::filesystem::path(fn)))
+            {
+                Msg("Replacing direct .ogf load with .ozzx bundle: %s", fn);
                 return bundle_visual;
+            }
+            else
+            {
+                Msg("Failed to replace direct .ogf load with .ozzx bundle: %s", fn);
+            }
         }
     }
 
@@ -188,32 +201,21 @@ dxRender_Visual* CModelPool::Instance_Load(const char* N, BOOL allow_register)
             if (0 == xr_stricmp(direct_ext, ".ogf"))
             {
                 std::filesystem::path direct_bundle(fn);
-                direct_bundle.replace_extension(".ozzx");
+                direct_bundle.replace_extension(kOzzBundleExtension);
                 std::error_code ec;
                 if (std::filesystem::exists(direct_bundle, ec) && !ec)
                 {
                     if (auto* bundle_visual = load_bundle_from_path(direct_bundle))
+                    {
+                        Msg("Replacing direct .ogf load with .ozzx bundle: %s", fn);
                         return bundle_visual;
+                    }
+                    else
+                    {
+                        Msg("Failed to replace ogf with ossx bundle: %s", fn);
+                    }
                 }
             }
-        }
-    }
-
-    if (const char* ext = strext(fn))
-    {
-        if (0 == xr_stricmp(ext, ".ozzx"))
-        {
-            auto* visual = static_cast<COzzKinematicsVisual*>(Instance_Create(MT_OZZ_BUNDLE));
-            if (!visual->LoadFromBundle(N, std::filesystem::path(fn)))
-            {
-                xr_delete(visual);
-                return nullptr;
-            }
-
-            if (allow_register)
-                Instance_Register(N, visual);
-
-            return visual;
         }
     }
 
@@ -235,6 +237,7 @@ dxRender_Visual* CModelPool::Instance_Load(const char* N, BOOL allow_register)
     {
     case MT_SKELETON_ANIM:
     case MT_SKELETON_RIGID:
+    case MT_OZZ_BUNDLE:
     {
         const u16 def_idx = GMLib.GetMaterialIdx("default_object");
         R_ASSERT2(GMLib.GetMaterialByIdx(def_idx)->Flags.is(SGameMtl::flDynamic), "'default_object' - must be dynamic");
