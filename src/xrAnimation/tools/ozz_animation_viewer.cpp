@@ -109,6 +109,10 @@ constexpr uint32_t MakeFourCC(char a, char b, char c, char d)
     return (static_cast<uint32_t>(a)) | (static_cast<uint32_t>(b) << 8) | (static_cast<uint32_t>(c) << 16) | (static_cast<uint32_t>(d) << 24);
 }
 
+constexpr float kIkHandleDrawRadius = 0.03f;
+constexpr float kIkAxisScale = 0.1f;
+constexpr float kIkHandleHitRadius = 0.045f;
+
 struct DdsPixelFormat
 {
     uint32_t size;
@@ -173,6 +177,110 @@ std::vector<float> CollectRecordSamples(const ozz::sample::Record* record)
 
     std::reverse(samples.begin(), samples.end());
     return samples;
+}
+
+struct IkOffsetUi
+{
+    float forward = 0.f;
+    float lateral = 0.f;
+    float vertical = 0.f;
+};
+
+inline IkOffsetUi ToUiOffset(const ozz::math::Float3& model_offset)
+{
+    return { model_offset.z, model_offset.x, model_offset.y };
+}
+
+inline ozz::math::Float3 FromUiOffset(const IkOffsetUi& ui_offset)
+{
+    return { ui_offset.lateral, ui_offset.vertical, ui_offset.forward };
+}
+
+inline ozz::math::Float3 ExtractTranslation(const ozz::math::Float4x4& matrix)
+{
+    return { ozz::math::GetX(matrix.cols[3]), ozz::math::GetY(matrix.cols[3]), ozz::math::GetZ(matrix.cols[3]) };
+}
+
+inline ozz::math::Float3 Add3(const ozz::math::Float3& a, const ozz::math::Float3& b)
+{
+    return { a.x + b.x, a.y + b.y, a.z + b.z };
+}
+
+inline ozz::math::Float3 Sub3(const ozz::math::Float3& a, const ozz::math::Float3& b)
+{
+    return { a.x - b.x, a.y - b.y, a.z - b.z };
+}
+
+inline ozz::math::Float3 Scale3(const ozz::math::Float3& v, float scale)
+{
+    return { v.x * scale, v.y * scale, v.z * scale };
+}
+
+inline float Dot3(const ozz::math::Float3& a, const ozz::math::Float3& b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+inline float LengthSq3(const ozz::math::Float3& v)
+{
+    return Dot3(v, v);
+}
+
+inline ozz::math::Float3 Normalize3(const ozz::math::Float3& v)
+{
+    const float len_sq = LengthSq3(v);
+    if (len_sq <= std::numeric_limits<float>::epsilon())
+    {
+        return { 0.f, 0.f, 0.f };
+    }
+    const float inv_len = 1.f / std::sqrt(len_sq);
+    return Scale3(v, inv_len);
+}
+
+inline bool IntersectRaySphere(const ozz::math::Float3& origin, const ozz::math::Float3& dir, const ozz::math::Float3& center, float radius, float& t_hit)
+{
+    const ozz::math::Float3 m = Sub3(origin, center);
+    const float b = Dot3(m, dir);
+    const float c = Dot3(m, m) - radius * radius;
+    if (c > 0.f && b > 0.f)
+    {
+        return false;
+    }
+
+    const float discriminant = b * b - c;
+    if (discriminant < 0.f)
+    {
+        return false;
+    }
+
+    float t = -b - std::sqrt(discriminant);
+    if (t < 0.f)
+    {
+        t = 0.f;
+    }
+
+    t_hit = t;
+    return true;
+}
+
+inline bool IntersectRayPlane(const ozz::math::Float3& origin, const ozz::math::Float3& dir, const ozz::math::Float3& plane_point, const ozz::math::Float3& plane_normal, ozz::math::Float3& hit)
+{
+    const float denom = Dot3(dir, plane_normal);
+    const float epsilon = 1e-6f;
+    if (std::fabs(denom) <= epsilon)
+    {
+        return false;
+    }
+
+    const ozz::math::Float3 diff = Sub3(plane_point, origin);
+    const float t = Dot3(diff, plane_normal) / denom;
+    if (t < 0.f)
+    {
+        return false;
+    }
+
+    hit = Add3(origin, Scale3(dir, t));
+    return true;
 }
 
 GLuint LoadDdsTexture(const fs::path& path)
@@ -392,6 +500,93 @@ std::string FormatFloat(float value, int precision = 6)
     oss.imbue(std::locale::classic());
     oss << std::fixed << std::setprecision(precision) << value;
     return oss.str();
+}
+
+struct ProgressiveMetadataAnalysis
+{
+    bool has_data = false;
+    bool header_valid = false;
+    uint32_t collapse_count = 0;
+    uint32_t window_count = 0;
+    std::size_t max_required_indices = 0;
+    bool has_zero_offset = false;
+    uint32_t first_offset = 0;
+    uint16_t first_tris = 0;
+    uint32_t last_offset = 0;
+    uint16_t last_tris = 0;
+};
+
+ProgressiveMetadataAnalysis AnalyzeProgressiveMetadata(const std::vector<std::uint8_t>& data)
+{
+    ProgressiveMetadataAnalysis result;
+    if (data.empty())
+        return result;
+
+    result.has_data = true;
+    if (data.size() < sizeof(uint32_t) * 5u)
+        return result;
+
+    const uint8_t* cursor = data.data();
+    const uint8_t* const end = cursor + data.size();
+
+    auto read_u32 = [&](uint32_t& value) -> bool
+    {
+        if (cursor + sizeof(uint32_t) > end)
+            return false;
+        std::memcpy(&value, cursor, sizeof(uint32_t));
+        cursor += sizeof(uint32_t);
+        return true;
+    };
+
+    uint32_t header_values[5] = {};
+    for (uint32_t i = 0; i < 5; ++i)
+    {
+        if (!read_u32(header_values[i]))
+            return result;
+    }
+
+    result.header_valid = true;
+    result.collapse_count = header_values[4];
+    result.window_count = header_values[4];
+
+    for (uint32_t window_index = 0; window_index < result.window_count; ++window_index)
+    {
+        if (cursor + sizeof(uint32_t) + sizeof(uint16_t) * 2 > end)
+        {
+            result.header_valid = false;
+            break;
+        }
+
+        uint32_t offset = 0;
+        std::memcpy(&offset, cursor, sizeof(uint32_t));
+        cursor += sizeof(uint32_t);
+
+        uint16_t num_tris = 0;
+        std::memcpy(&num_tris, cursor, sizeof(uint16_t));
+        cursor += sizeof(uint16_t);
+
+        uint16_t num_verts = 0;
+        std::memcpy(&num_verts, cursor, sizeof(uint16_t));
+        cursor += sizeof(uint16_t);
+        (void)num_verts;
+
+        if (window_index == 0)
+        {
+            result.first_offset = offset;
+            result.first_tris = num_tris;
+        }
+        result.last_offset = offset;
+        result.last_tris = num_tris;
+
+        if (offset == 0)
+            result.has_zero_offset = true;
+
+        const std::size_t required = static_cast<std::size_t>(offset) + static_cast<std::size_t>(num_tris) * 3u;
+        if (required > result.max_required_indices)
+            result.max_required_indices = required;
+    }
+
+    return result;
 }
 
 const char* DescribeTranslationFormat(uint8_t format)
@@ -1006,16 +1201,15 @@ protected:
         if (window)
         {
             const bool mouse_down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            ImGuiContext* context = ImGui::GetCurrentContext();
+            bool mouse_captured = false;
+            if (context)
+            {
+                const ImGuiIO& io = ImGui::GetIO();
+                mouse_captured = io.WantCaptureMouse;
+            }
             if (mouse_down && !mouse_left_was_down_)
             {
-                ImGuiContext* context = ImGui::GetCurrentContext();
-                bool mouse_captured = false;
-                if (context)
-                {
-                    const ImGuiIO& io = ImGui::GetIO();
-                    mouse_captured = io.WantCaptureMouse;
-                }
-
                 if (!mouse_captured)
                 {
                     double cursor_x = 0.0;
@@ -1023,6 +1217,22 @@ protected:
                     glfwGetCursorPos(window, &cursor_x, &cursor_y);
                     pending_pick_pos_ = ImVec2(static_cast<float>(cursor_x), static_cast<float>(cursor_y));
                     pending_pick_ = true;
+                }
+            }
+            else if (mouse_down && ik_handle_dragging_ && !mouse_captured)
+            {
+                double cursor_x = 0.0;
+                double cursor_y = 0.0;
+                glfwGetCursorPos(window, &cursor_x, &cursor_y);
+                pending_pick_pos_ = ImVec2(static_cast<float>(cursor_x), static_cast<float>(cursor_y));
+                pending_pick_ = true;
+            }
+            else if (!mouse_down && mouse_left_was_down_)
+            {
+                if (ik_handle_dragging_)
+                {
+                    ik_handle_dragging_ = false;
+                    active_ik_handle_ = IkHandleId::None;
                 }
             }
             mouse_left_was_down_ = mouse_down;
@@ -1103,12 +1313,18 @@ protected:
         ozz::sample::internal::RendererImpl* renderer_impl = dynamic_cast<ozz::sample::internal::RendererImpl*>(_renderer);
         const ozz::math::Float4x4* view_projection = nullptr;
         ozz::sample::internal::Camera* renderer_camera = nullptr;
+        ozz::math::Float4x4 inv_view;
+        bool inv_view_valid = false;
+        ozz::math::Float3 camera_position{ 0.f, 0.f, 0.f };
         if (renderer_impl)
         {
             renderer_camera = renderer_impl->camera();
             if (renderer_camera)
             {
                 view_projection = &renderer_camera->view_proj();
+                inv_view = ozz::math::Invert(renderer_camera->view());
+                inv_view_valid = true;
+                camera_position = { ozz::math::GetX(inv_view.cols[3]), ozz::math::GetY(inv_view.cols[3]), ozz::math::GetZ(inv_view.cols[3]) };
             }
         }
 
@@ -1119,6 +1335,35 @@ protected:
             success &= _renderer->DrawPosture(skeleton_, make_span(models_), transform);
         }
 
+        auto draw_ik_target = [&](IkHandleId handle, const ozz::sample::Color& base_color)
+        {
+            const LimbIkChain* chain = GetChainForHandle(handle);
+            if (!chain || !chain->debug_target_valid)
+            {
+                return;
+            }
+
+            const bool active = ik_handle_dragging_ && active_ik_handle_ == handle;
+            const ozz::sample::Color& color = active ? ozz::sample::kMagenta : base_color;
+
+            const ozz::math::Float4x4 marker = ozz::math::Float4x4::Translation(chain->debug_target);
+            const ozz::math::Float4x4 axes = marker * ozz::math::Float4x4::Scaling(ozz::math::simd_float4::Load1(kIkAxisScale));
+            success &= _renderer->DrawSphereIm(kIkHandleDrawRadius, marker, color);
+            success &= _renderer->DrawAxes(axes);
+
+            if (chain->Valid() && static_cast<size_t>(chain->end) < models_.size())
+            {
+                const ozz::math::Float3 end_position = ExtractTranslation(models_[chain->end]);
+                const ozz::math::Float3 line[] = { end_position, chain->debug_target };
+                success &= _renderer->DrawLines(line, color, ozz::math::Float4x4::identity());
+            }
+        };
+
+        draw_ik_target(IkHandleId::LeftLeg, ozz::sample::kCyan);
+        draw_ik_target(IkHandleId::RightLeg, ozz::sample::kCyan);
+        draw_ik_target(IkHandleId::LeftArm, ozz::sample::kYellow);
+        draw_ik_target(IkHandleId::RightArm, ozz::sample::kYellow);
+
         bool request_pick = false;
         float pick_x = 0.f;
         float pick_y = 0.f;
@@ -1126,6 +1371,9 @@ protected:
         float viewport_height = 0.f;
         SelectedTriangle best_triangle_candidate{};
         bool triangle_pick_found = false;
+        float pick_ndc_x = 0.f;
+        float pick_ndc_y = 0.f;
+        bool pick_has_ndc = false;
         if (pending_pick_ && !meshes_.empty())
         {
             GLFWwindow* window = nullptr;
@@ -1151,81 +1399,109 @@ protected:
         {
             if (renderer_camera && viewport_width > 0.f && viewport_height > 0.f)
             {
-                const float ndc_x = (pick_x / viewport_width) * 2.f - 1.f;
-                const float ndc_y = (pick_y / viewport_height) * 2.f - 1.f;
+                pick_ndc_x = (pick_x / viewport_width) * 2.f - 1.f;
+                pick_ndc_y = (pick_y / viewport_height) * 2.f - 1.f;
+                pick_has_ndc = true;
 
-                const ozz::math::Float4x4 inv_proj = ozz::math::Invert(renderer_camera->projection());
-                const ozz::math::Float4x4 inv_view = ozz::math::Invert(renderer_camera->view());
-
-                const ozz::math::SimdFloat4 near_ndc = ozz::math::simd_float4::Load(ndc_x, ndc_y, -1.f, 1.f);
-                const ozz::math::SimdFloat4 far_ndc = ozz::math::simd_float4::Load(ndc_x, ndc_y, 1.f, 1.f);
-
-                ozz::math::SimdFloat4 view_near = ozz::math::TransformPoint(inv_proj, near_ndc);
-                ozz::math::SimdFloat4 view_far = ozz::math::TransformPoint(inv_proj, far_ndc);
-
-                float view_near_components[4];
-                float view_far_components[4];
-                ozz::math::StorePtrU(view_near, view_near_components);
-                ozz::math::StorePtrU(view_far, view_far_components);
-
-                const float near_w = view_near_components[3];
-                const float far_w = view_far_components[3];
-                const float epsilon = std::numeric_limits<float>::epsilon();
-
-                if (std::fabs(near_w) <= epsilon || std::fabs(far_w) <= epsilon)
+                if (!inv_view_valid)
                 {
                     pick_ray_valid_ = false;
                 }
                 else
                 {
-                    ozz::math::Float3 view_origin = {
-                        view_near_components[0] / near_w,
-                        view_near_components[1] / near_w,
-                        view_near_components[2] / near_w,
-                    };
+                    const ozz::math::Float4x4 inv_proj = ozz::math::Invert(renderer_camera->projection());
 
-                    ozz::math::Float3 view_point = {
-                        view_far_components[0] / far_w,
-                        view_far_components[1] / far_w,
-                        view_far_components[2] / far_w,
-                    };
+                    const ozz::math::SimdFloat4 near_ndc = ozz::math::simd_float4::Load(pick_ndc_x, pick_ndc_y, -1.f, 1.f);
+                    const ozz::math::SimdFloat4 far_ndc = ozz::math::simd_float4::Load(pick_ndc_x, pick_ndc_y, 1.f, 1.f);
 
-                    ozz::math::Float3 view_dir = {
-                        view_point.x - view_origin.x,
-                        view_point.y - view_origin.y,
-                        view_point.z - view_origin.z,
-                    };
+                    ozz::math::SimdFloat4 view_near = ozz::math::TransformPoint(inv_proj, near_ndc);
+                    ozz::math::SimdFloat4 view_far = ozz::math::TransformPoint(inv_proj, far_ndc);
 
-                    const float dir_length_sq = view_dir.x * view_dir.x + view_dir.y * view_dir.y + view_dir.z * view_dir.z;
-                    if (dir_length_sq <= epsilon)
+                    float view_near_components[4];
+                    float view_far_components[4];
+                    ozz::math::StorePtrU(view_near, view_near_components);
+                    ozz::math::StorePtrU(view_far, view_far_components);
+
+                    const float near_w = view_near_components[3];
+                    const float far_w = view_far_components[3];
+                    const float epsilon = std::numeric_limits<float>::epsilon();
+
+                    if (std::fabs(near_w) <= epsilon || std::fabs(far_w) <= epsilon)
                     {
                         pick_ray_valid_ = false;
                     }
                     else
                     {
-                        const float inv_dir_length = 1.f / std::sqrt(dir_length_sq);
-                        view_dir.x *= inv_dir_length;
-                        view_dir.y *= inv_dir_length;
-                        view_dir.z *= inv_dir_length;
+                        ozz::math::Float3 view_origin = {
+                            view_near_components[0] / near_w,
+                            view_near_components[1] / near_w,
+                            view_near_components[2] / near_w,
+                        };
 
-                        const ozz::math::SimdFloat4 view_origin_simd = ozz::math::simd_float4::Load(view_origin.x, view_origin.y, view_origin.z, 1.f);
-                        const ozz::math::SimdFloat4 view_dir_simd = ozz::math::simd_float4::Load(view_dir.x, view_dir.y, view_dir.z, 0.f);
+                        ozz::math::Float3 view_point = {
+                            view_far_components[0] / far_w,
+                            view_far_components[1] / far_w,
+                            view_far_components[2] / far_w,
+                        };
 
-                        const ozz::math::SimdFloat4 world_origin_simd = ozz::math::TransformPoint(inv_view, view_origin_simd);
-                        ozz::math::SimdFloat4 world_dir_simd = ozz::math::TransformVector(inv_view, view_dir_simd);
-                        world_dir_simd = ozz::math::Normalize3(world_dir_simd);
+                        ozz::math::Float3 view_dir = {
+                            view_point.x - view_origin.x,
+                            view_point.y - view_origin.y,
+                            view_point.z - view_origin.z,
+                        };
 
-                        ozz::math::Store3PtrU(world_origin_simd, &pick_ray_origin_.x);
-                        ozz::math::Store3PtrU(world_dir_simd, &pick_ray_direction_.x);
-                        pick_ray_length_ = 200.f;
-                        pick_ray_valid_ = true;
+                        const float dir_length_sq = view_dir.x * view_dir.x + view_dir.y * view_dir.y + view_dir.z * view_dir.z;
+                        if (dir_length_sq <= epsilon)
+                        {
+                            pick_ray_valid_ = false;
+                        }
+                        else
+                        {
+                            const float inv_dir_length = 1.f / std::sqrt(dir_length_sq);
+                            view_dir.x *= inv_dir_length;
+                            view_dir.y *= inv_dir_length;
+                            view_dir.z *= inv_dir_length;
+
+                            const ozz::math::SimdFloat4 view_origin_simd = ozz::math::simd_float4::Load(view_origin.x, view_origin.y, view_origin.z, 1.f);
+                            const ozz::math::SimdFloat4 view_dir_simd = ozz::math::simd_float4::Load(view_dir.x, view_dir.y, view_dir.z, 0.f);
+
+                            const ozz::math::SimdFloat4 world_origin_simd = ozz::math::TransformPoint(inv_view, view_origin_simd);
+                            ozz::math::SimdFloat4 world_dir_simd = ozz::math::TransformVector(inv_view, view_dir_simd);
+                            world_dir_simd = ozz::math::Normalize3(world_dir_simd);
+
+                            ozz::math::Store3PtrU(world_origin_simd, &pick_ray_origin_.x);
+                            ozz::math::Store3PtrU(world_dir_simd, &pick_ray_direction_.x);
+                            pick_ray_length_ = 200.f;
+                            pick_ray_valid_ = true;
+                        }
                     }
                 }
             }
+        }
+
+        bool ik_pick_consumed = false;
+        if (request_pick && pick_ray_valid_)
+        {
+            if (ik_handle_dragging_)
+            {
+                UpdateActiveIkHandle(pick_ray_origin_, pick_ray_direction_);
+                ik_pick_consumed = true;
+            }
             else
             {
-                pick_ray_valid_ = false;
+                const ozz::math::Float3 camera_pos = inv_view_valid ? camera_position : pick_ray_origin_;
+                const ozz::math::Float4x4* selection_vp = (pick_has_ndc && view_projection) ? view_projection : nullptr;
+                if (TrySelectIkHandle(pick_ray_origin_, pick_ray_direction_, camera_pos,
+                        pick_has_ndc ? pick_ndc_x : 0.f, pick_has_ndc ? pick_ndc_y : 0.f, selection_vp))
+                {
+                    ik_pick_consumed = true;
+                }
             }
+        }
+
+        if (ik_pick_consumed)
+        {
+            pick_ray_valid_ = false;
         }
 
         const ozz::math::Float3* pick_ray_origin_ptr = (request_pick && pick_ray_valid_) ? &pick_ray_origin_ : nullptr;
@@ -1654,15 +1930,18 @@ protected:
             XRay::Animation::OzzxBundle bundle;
             if (!XRay::Animation::ReadOzzxBundle(fs::absolute(fs::path(bundle_option)), bundle))
             {
+                ozz::log::Err() << "Failed to read OZZX bundle: " << bundle_option << std::endl;
                 return false;
             }
             if (!LoadSkeletonFromBytes(bundle.skeleton, &skeleton_))
             {
+                ozz::log::Err() << "Failed to load skeleton from bundle: " << bundle_option << std::endl;
                 return false;
             }
             skeleton_label_ = GetFileStem(bundle_option);
             if (!LoadMeshesFromBytes(bundle.mesh, &meshes_))
             {
+                ozz::log::Err() << "Failed to load meshes from bundle: " << bundle_option << std::endl;
                 return false;
             }
             mesh_loaded = !meshes_.empty();
@@ -1674,6 +1953,7 @@ protected:
         {
             if (!ozz::sample::LoadSkeleton(OPTIONS_skeleton, &skeleton_))
             {
+                ozz::log::Err() << "Failed to load skeleton: " << OPTIONS_skeleton << std::endl;
                 return false;
             }
             skeleton_label_ = GetFileStem(OPTIONS_skeleton);
@@ -1684,6 +1964,7 @@ protected:
             {
                 if (!ozz::sample::LoadMeshes(OPTIONS_mesh, &meshes_))
                 {
+                    ozz::log::Err() << "Failed to load meshes: " << OPTIONS_mesh << std::endl;
                     return false;
                 }
                 mesh_loaded = true;
@@ -1694,11 +1975,55 @@ protected:
         // Try reading animation(s), but allow failure for bind pose testing
         bool has_animation = LoadMultipleAnimations(OPTIONS_animation);
 
+        if (mesh_loaded)
+        {
+            std::cout << "\n=== DEBUG MESH INFO ===" << std::endl;
+            for (size_t mesh_index = 0; mesh_index < meshes_.size(); ++mesh_index)
+            {
+                const ozz::sample::Mesh& mesh = meshes_[mesh_index];
+                const ozz::sample::XRayMeshMetadata& metadata = mesh.xray_metadata;
+                const std::size_t index_count = mesh.triangle_indices.size();
+
+                std::cout << "Mesh[" << mesh_index << "]: triangle_indices=" << index_count
+                          << ", original_faces=" << metadata.original_face_count
+                          << ", original_vertices=" << metadata.original_vertex_count
+                          << ", ogf_type=" << static_cast<int>(metadata.ogf_type) << std::endl;
+
+                const ProgressiveMetadataAnalysis analysis = AnalyzeProgressiveMetadata(metadata.progressive_data);
+                if (analysis.has_data)
+                {
+                    if (!analysis.header_valid)
+                    {
+                        std::cout << "  Progressive metadata invalid (size=" << metadata.progressive_data.size() << " bytes)" << std::endl;
+                    }
+                    else
+                    {
+                        std::cout << "  Progressive collapse_count=" << analysis.collapse_count
+                                  << ", window_count=" << analysis.window_count
+                                  << ", first_window(offset=" << analysis.first_offset
+                                  << ", tris=" << analysis.first_tris
+                                  << "), last_window(offset=" << analysis.last_offset
+                                  << ", tris=" << analysis.last_tris
+                                  << "), requires_indices=" << analysis.max_required_indices
+                                  << ", has_zero_offset=" << (analysis.has_zero_offset ? "yes" : "no") << std::endl;
+
+                        if (analysis.max_required_indices > index_count)
+                        {
+                            std::cout << "  WARNING: progressive windows reference " << analysis.max_required_indices
+                                      << " indices but mesh stores only " << index_count << std::endl;
+                        }
+                    }
+                }
+            }
+        }
+
         if (has_animation && !animations_.empty())
         {
             // Skeleton and animation needs to match.
             if (skeleton_.num_joints() != animations_[0].num_tracks())
             {
+                ozz::log::Err() << "Animation track count " << animations_[0].num_tracks()
+                                << " does not match skeleton joints " << skeleton_.num_joints() << std::endl;
                 return false;
             }
         }
@@ -1758,6 +2083,8 @@ protected:
                 {
                     ozz::log::Err() << "The provided mesh doesn't match skeleton"
                                     << " (joint count mismatch)." << std::endl;
+                    ozz::log::Err() << "  Skeleton joints: " << num_joints
+                                    << ", mesh requires: " << mesh.highest_joint_index() << std::endl;
                     return false;
                 }
             }
@@ -1887,6 +2214,8 @@ private:
         std::string start_name;
         std::string mid_name;
         std::string end_name;
+        ozz::math::Float3 debug_target = { 0.f, 0.f, 0.f };
+        bool debug_target_valid = false;
 
         bool Valid() const
         {
@@ -1967,6 +2296,20 @@ private:
     SelectedTriangle selected_triangle_{};
     bool pending_pick_ = false;
     ImVec2 pending_pick_pos_{ 0.f, 0.f };
+
+    enum class IkHandleId
+    {
+        None,
+        LeftLeg,
+        RightLeg,
+        LeftArm,
+        RightArm,
+    };
+
+    IkHandleId active_ik_handle_ = IkHandleId::None;
+    bool ik_handle_dragging_ = false;
+    ozz::math::Float3 ik_drag_plane_point_{ 0.f, 0.f, 0.f };
+    ozz::math::Float3 ik_drag_plane_normal_{ 0.f, 1.f, 0.f };
 
     bool pick_ray_valid_ = false;
     ozz::math::Float3 pick_ray_origin_{ 0.f, 0.f, 0.f };
@@ -2066,6 +2409,28 @@ private:
 
     void BuildTriangleDebugMeshes();
     void UpdateTriangleDebugMesh(const std::vector<ozz::math::Float3>& world_positions, TriangleDebugMesh& debug_mesh);
+
+    LimbIkChain* GetChainForHandle(IkHandleId handle)
+    {
+        switch (handle)
+        {
+        case IkHandleId::LeftLeg:
+            return &left_leg_chain_;
+        case IkHandleId::RightLeg:
+            return &right_leg_chain_;
+        case IkHandleId::LeftArm:
+            return &left_arm_chain_;
+        case IkHandleId::RightArm:
+            return &right_arm_chain_;
+        default:
+            return nullptr;
+        }
+    }
+
+    const LimbIkChain* GetChainForHandle(IkHandleId handle) const
+    {
+        return const_cast<PlaybackSampleApplication*>(this)->GetChainForHandle(handle);
+    }
 
     void ReleaseMeshTextures()
     {
@@ -2744,31 +3109,67 @@ private:
         ImGui::Text("End: %s", chain.end_name.c_str());
         ImGui::Text("Status: %s", chain.reached ? "target reached" : "solving");
 
+        IkOffsetUi offset_ui = ToUiOffset(chain.target_offset);
+
         if (chain.role == LimbIkChain::Role::Leg)
         {
-            ImGui::SliderFloat("Vertical offset", &chain.target_offset.z, -0.5f, 0.5f);
-            ImGui::SliderFloat("Forward offset", &chain.target_offset.x, -0.5f, 0.5f);
-            ImGui::SliderFloat("Lateral offset", &chain.target_offset.y, -0.5f, 0.5f);
+            bool offset_changed = false;
+
+            float vertical = offset_ui.vertical;
+            if (ImGui::SliderFloat("Vertical offset", &vertical, -0.5f, 0.5f))
+            {
+                offset_ui.vertical = vertical;
+                offset_changed = true;
+            }
+
+            float forward = offset_ui.forward;
+            if (ImGui::SliderFloat("Forward offset", &forward, -0.5f, 0.5f))
+            {
+                offset_ui.forward = forward;
+                offset_changed = true;
+            }
+
+            float lateral = offset_ui.lateral;
+            if (ImGui::SliderFloat("Lateral offset", &lateral, -0.5f, 0.5f))
+            {
+                offset_ui.lateral = lateral;
+                offset_changed = true;
+            }
+
+            if (offset_changed)
+            {
+                chain.target_offset = FromUiOffset(offset_ui);
+            }
         }
         else
         {
             if (arm_handle_index >= 0 && arm_handle_index < 2)
             {
                 ViewerUiState::ArmHandle& handle = ui_state_.arm_handles[arm_handle_index];
-                handle.forward_offset = chain.target_offset.x;
-                handle.lateral_offset = chain.target_offset.y;
-                handle.vertical_offset = chain.target_offset.z;
+                handle.forward_offset = offset_ui.forward;
+                handle.lateral_offset = offset_ui.lateral;
+                handle.vertical_offset = offset_ui.vertical;
+
+                bool offset_changed = false;
                 if (ImGui::DragFloat("Forward offset", &handle.forward_offset, 0.01f, -1.0f, 1.0f))
                 {
-                    chain.target_offset.x = handle.forward_offset;
+                    offset_ui.forward = handle.forward_offset;
+                    offset_changed = true;
                 }
                 if (ImGui::DragFloat("Lateral offset", &handle.lateral_offset, 0.01f, -1.0f, 1.0f))
                 {
-                    chain.target_offset.y = handle.lateral_offset;
+                    offset_ui.lateral = handle.lateral_offset;
+                    offset_changed = true;
                 }
                 if (ImGui::DragFloat("Vertical offset", &handle.vertical_offset, 0.01f, -1.0f, 1.0f))
                 {
-                    chain.target_offset.z = handle.vertical_offset;
+                    offset_ui.vertical = handle.vertical_offset;
+                    offset_changed = true;
+                }
+
+                if (offset_changed)
+                {
+                    chain.target_offset = FromUiOffset(offset_ui);
                 }
             }
             else
@@ -2776,6 +3177,8 @@ private:
                 ImGui::TextUnformatted("Arm control unavailable.");
             }
         }
+
+        chain.target_offset = FromUiOffset(offset_ui);
 
         ImGui::PopID();
     }
@@ -3257,22 +3660,13 @@ private:
         const bool previously_initialized = limb_ik_initialized_;
         const bool previous_left_leg_enabled = left_leg_chain_.enabled;
         const bool previous_right_leg_enabled = right_leg_chain_.enabled;
-        const bool previous_left_arm_enabled = left_arm_chain_.enabled;
-        const bool previous_right_arm_enabled = right_arm_chain_.enabled;
+        bool previous_left_arm_enabled = left_arm_chain_.enabled;
+        bool previous_right_arm_enabled = right_arm_chain_.enabled;
 
         left_leg_chain_ = LimbIkChain{};
         right_leg_chain_ = LimbIkChain{};
         left_arm_chain_ = LimbIkChain{};
         right_arm_chain_ = LimbIkChain{};
-
-        left_leg_chain_.label = "Left leg";
-        left_leg_chain_.role = LimbIkChain::Role::Leg;
-        right_leg_chain_.label = "Right leg";
-        right_leg_chain_.role = LimbIkChain::Role::Leg;
-        left_arm_chain_.label = "Left arm";
-        left_arm_chain_.role = LimbIkChain::Role::Arm;
-        right_arm_chain_.label = "Right arm";
-        right_arm_chain_.role = LimbIkChain::Role::Arm;
 
         joint_names_lower_.clear();
         const int joint_count = skeleton_.num_joints();
@@ -3334,8 +3728,29 @@ private:
             { "bip01_r_forearm", "r_forearm", "right_forearm", "bip01_r_elbow" },
             { "bip01_r_hand", "r_hand", "right_hand", "bip01_r_wrist" });
 
+        if (left_arm_chain_.Valid() && right_arm_chain_.Valid() && !bind_pose_models_.empty())
+        {
+            const float left_x = ozz::math::GetX(bind_pose_models_[left_arm_chain_.end].cols[3]);
+            const float right_x = ozz::math::GetX(bind_pose_models_[right_arm_chain_.end].cols[3]);
+            if (left_x > right_x)
+            {
+                std::swap(left_arm_chain_, right_arm_chain_);
+                std::swap(previous_left_arm_enabled, previous_right_arm_enabled);
+                std::swap(ui_state_.arm_handles[0], ui_state_.arm_handles[1]);
+            }
+        }
+
         leg_ik_available_ = left_leg_chain_.Valid() || right_leg_chain_.Valid();
         arm_ik_available_ = left_arm_chain_.Valid() || right_arm_chain_.Valid();
+
+        left_leg_chain_.label = "Left leg";
+        left_leg_chain_.role = LimbIkChain::Role::Leg;
+        right_leg_chain_.label = "Right leg";
+        right_leg_chain_.role = LimbIkChain::Role::Leg;
+        left_arm_chain_.label = "Left arm";
+        left_arm_chain_.role = LimbIkChain::Role::Arm;
+        right_arm_chain_.label = "Right arm";
+        right_arm_chain_.role = LimbIkChain::Role::Arm;
 
         if (!previously_initialized)
         {
@@ -3376,12 +3791,22 @@ private:
 
         if (left_arm_chain_.Valid())
         {
-            left_arm_chain_.target_offset = { ui_state_.arm_handles[0].forward_offset, ui_state_.arm_handles[0].lateral_offset, ui_state_.arm_handles[0].vertical_offset };
+            IkOffsetUi offset{ ui_state_.arm_handles[0].forward_offset, ui_state_.arm_handles[0].lateral_offset, ui_state_.arm_handles[0].vertical_offset };
+            left_arm_chain_.target_offset = FromUiOffset(offset);
         }
         if (right_arm_chain_.Valid())
         {
-            right_arm_chain_.target_offset = { ui_state_.arm_handles[1].forward_offset, ui_state_.arm_handles[1].lateral_offset, ui_state_.arm_handles[1].vertical_offset };
+            IkOffsetUi offset{ ui_state_.arm_handles[1].forward_offset, ui_state_.arm_handles[1].lateral_offset, ui_state_.arm_handles[1].vertical_offset };
+            right_arm_chain_.target_offset = FromUiOffset(offset);
         }
+
+        left_leg_chain_.debug_target_valid = false;
+        right_leg_chain_.debug_target_valid = false;
+        left_arm_chain_.debug_target_valid = false;
+        right_arm_chain_.debug_target_valid = false;
+
+        ik_handle_dragging_ = false;
+        active_ik_handle_ = IkHandleId::None;
 
         limb_ik_initialized_ = true;
     }
@@ -3395,11 +3820,15 @@ private:
         {
             left_leg_chain_.reached = false;
             right_leg_chain_.reached = false;
+            left_leg_chain_.debug_target_valid = false;
+            right_leg_chain_.debug_target_valid = false;
         }
         if (!arm_active)
         {
             left_arm_chain_.reached = false;
             right_arm_chain_.reached = false;
+            left_arm_chain_.debug_target_valid = false;
+            right_arm_chain_.debug_target_valid = false;
         }
 
         if (!leg_active && !arm_active)
@@ -3408,33 +3837,37 @@ private:
         }
 
         bool applied = false;
+        int min_dirty_joint = skeleton_.num_joints();
 
         if (leg_active)
         {
             const float weight = std::clamp(ui_state_.foot_ik_weight, 0.f, 1.f);
             const float soften = std::clamp(ui_state_.foot_ik_soften, 0.f, 0.999f);
             const float twist = ui_state_.foot_ik_twist_angle_deg * ozz::math::kDegreeToRadian;
-            const float ground_height = ui_state_.foot_ik_ground_height;
 
             auto solve_leg = [&](LimbIkChain& chain)
             {
                 if (!chain.enabled || !chain.Valid())
                 {
                     chain.reached = false;
+                    chain.debug_target_valid = false;
                     return;
                 }
 
                 if (static_cast<size_t>(chain.end) >= models_.size())
                 {
                     chain.reached = false;
+                    chain.debug_target_valid = false;
                     return;
                 }
 
-                const ozz::math::Float4x4& end_matrix = models_[chain.end];
-                const ozz::math::Float3 target{ ozz::math::GetX(end_matrix.cols[3]) + chain.target_offset.x,
-                    ozz::math::GetY(end_matrix.cols[3]) + chain.target_offset.y,
-                    ground_height + chain.target_offset.z };
-                applied |= SolveLimbIk(chain, target, weight, soften, twist);
+                const ozz::math::Float3 target = ComputeChainTarget(chain);
+                chain.debug_target = target;
+                chain.debug_target_valid = true;
+                if (SolveLimbIk(chain, target, weight, soften, twist, &min_dirty_joint))
+                {
+                    applied = true;
+                }
             };
 
             solve_leg(left_leg_chain_);
@@ -3446,34 +3879,36 @@ private:
             const float weight = std::clamp(ui_state_.arm_ik_weight, 0.f, 1.f);
             const float soften = std::clamp(ui_state_.arm_ik_soften, 0.f, 0.999f);
             const float twist = ui_state_.arm_ik_twist_angle_deg * ozz::math::kDegreeToRadian;
-            const float crouch_drop = (ui_state_.crouch_enabled && ui_state_.crouch_affects_arms) ? active_crouch_offset_ : 0.f;
 
             auto solve_arm = [&](LimbIkChain& chain, size_t handle_index)
             {
                 if (!chain.enabled || !chain.Valid())
                 {
                     chain.reached = false;
+                    chain.debug_target_valid = false;
                     return;
                 }
                 if (static_cast<size_t>(chain.end) >= models_.size())
                 {
                     chain.reached = false;
+                    chain.debug_target_valid = false;
                     return;
                 }
 
                 if (handle_index < 2)
                 {
                     const ViewerUiState::ArmHandle& handle = ui_state_.arm_handles[handle_index];
-                    chain.target_offset.x = handle.forward_offset;
-                    chain.target_offset.y = handle.lateral_offset;
-                    chain.target_offset.z = handle.vertical_offset;
+                    IkOffsetUi offset{ handle.forward_offset, handle.lateral_offset, handle.vertical_offset };
+                    chain.target_offset = FromUiOffset(offset);
                 }
 
-                const ozz::math::Float4x4& end_matrix = models_[chain.end];
-                const ozz::math::Float3 target{ ozz::math::GetX(end_matrix.cols[3]) + chain.target_offset.x,
-                    ozz::math::GetY(end_matrix.cols[3]) + chain.target_offset.y,
-                    ozz::math::GetZ(end_matrix.cols[3]) + chain.target_offset.z - crouch_drop };
-                applied |= SolveLimbIk(chain, target, weight, soften, twist);
+                ozz::math::Float3 target = ComputeChainTarget(chain);
+                chain.debug_target = target;
+                chain.debug_target_valid = true;
+                if (SolveLimbIk(chain, target, weight, soften, twist, &min_dirty_joint))
+                {
+                    applied = true;
+                }
             };
 
             solve_arm(left_arm_chain_, 0);
@@ -3486,6 +3921,10 @@ private:
             ltm_job.skeleton = &skeleton_;
             ltm_job.input = make_span(locals_);
             ltm_job.output = make_span(models_);
+            if (min_dirty_joint > 0 && min_dirty_joint < skeleton_.num_joints())
+            {
+                ltm_job.from = min_dirty_joint;
+            }
             if (!ltm_job.Run())
             {
                 return false;
@@ -3495,11 +3934,12 @@ private:
         return true;
     }
 
-    bool SolveLimbIk(LimbIkChain& chain, const ozz::math::Float3& target_world, float weight, float soften, float twist_angle)
+    bool SolveLimbIk(LimbIkChain& chain, const ozz::math::Float3& target_model, float weight, float soften, float twist_angle, int* min_dirty_joint)
     {
         chain.reached = false;
         if (!chain.Valid() || !chain.enabled)
         {
+            chain.debug_target_valid = false;
             return false;
         }
 
@@ -3509,10 +3949,11 @@ private:
             static_cast<size_t>(chain.mid) >= model_count ||
             static_cast<size_t>(chain.end) >= model_count)
         {
+            chain.debug_target_valid = false;
             return false;
         }
 
-        const ozz::math::SimdFloat4 target_ms = ozz::math::simd_float4::Load3PtrU(&target_world.x);
+        const ozz::math::SimdFloat4 target_ms = ozz::math::simd_float4::Load3PtrU(&target_model.x);
 
         ozz::math::SimdFloat4 pole_vector_ms = models_[chain.mid].cols[1];
         const ozz::math::SimdFloat4 pole_len_sq = ozz::math::Length3Sqr(pole_vector_ms);
@@ -3547,7 +3988,199 @@ private:
         ozz::sample::MultiplySoATransformQuaternion(chain.start, start_correction, make_span(locals_));
         ozz::sample::MultiplySoATransformQuaternion(chain.mid, mid_correction, make_span(locals_));
 
+        if (min_dirty_joint)
+        {
+            *min_dirty_joint = std::min(*min_dirty_joint, chain.start);
+        }
+
         return true;
+    }
+
+    ozz::math::Float3 ComputeChainTarget(const LimbIkChain& chain) const
+    {
+        if (!chain.Valid() || static_cast<size_t>(chain.end) >= models_.size())
+        {
+            return { 0.f, 0.f, 0.f };
+        }
+
+        ozz::math::Float3 target = ExtractTranslation(models_[chain.end]);
+        if (chain.role == LimbIkChain::Role::Leg)
+        {
+            target.x += chain.target_offset.x;
+            target.z += chain.target_offset.z;
+            target.y = ui_state_.foot_ik_ground_height + chain.target_offset.y;
+        }
+        else
+        {
+            target.x += chain.target_offset.x;
+            target.y += chain.target_offset.y;
+            target.z += chain.target_offset.z;
+            if (ui_state_.crouch_enabled && ui_state_.crouch_affects_arms)
+            {
+                target.y -= active_crouch_offset_;
+            }
+        }
+        return target;
+    }
+
+    void ApplyDraggedTarget(IkHandleId handle, const ozz::math::Float3& target_world)
+    {
+        LimbIkChain* chain = GetChainForHandle(handle);
+        if (!chain || !chain->Valid() || static_cast<size_t>(chain->end) >= models_.size())
+        {
+            return;
+        }
+
+        const ozz::math::Float3 end_position = ExtractTranslation(models_[chain->end]);
+
+        if (chain->role == LimbIkChain::Role::Leg)
+        {
+            chain->target_offset.x = target_world.x - end_position.x;
+            chain->target_offset.z = target_world.z - end_position.z;
+            chain->target_offset.y = target_world.y - ui_state_.foot_ik_ground_height;
+        }
+        else
+        {
+            const float crouch_drop = (ui_state_.crouch_enabled && ui_state_.crouch_affects_arms) ? active_crouch_offset_ : 0.f;
+            chain->target_offset.x = target_world.x - end_position.x;
+            chain->target_offset.y = target_world.y + crouch_drop - end_position.y;
+            chain->target_offset.z = target_world.z - end_position.z;
+
+            const int handle_index = (handle == IkHandleId::LeftArm) ? 0 : (handle == IkHandleId::RightArm ? 1 : -1);
+            if (handle_index >= 0)
+            {
+                IkOffsetUi offset = ToUiOffset(chain->target_offset);
+                ui_state_.arm_handles[handle_index].forward_offset = offset.forward;
+                ui_state_.arm_handles[handle_index].lateral_offset = offset.lateral;
+                ui_state_.arm_handles[handle_index].vertical_offset = offset.vertical;
+            }
+        }
+
+        chain->debug_target = target_world;
+        chain->debug_target_valid = true;
+    }
+
+    bool TrySelectIkHandle(const ozz::math::Float3& ray_origin, const ozz::math::Float3& ray_dir, const ozz::math::Float3& camera_pos,
+        float pick_ndc_x, float pick_ndc_y, const ozz::math::Float4x4* view_projection)
+    {
+        const bool legs_active = ui_state_.foot_ik_enabled && leg_ik_available_;
+        const bool arms_active = ui_state_.arm_ik_enabled && arm_ik_available_;
+        const bool use_screen_metric = (view_projection != nullptr);
+
+        struct Candidate
+        {
+            IkHandleId id;
+            bool active;
+        };
+
+        const Candidate candidates[] = {
+            { IkHandleId::LeftLeg, legs_active },
+            { IkHandleId::RightLeg, legs_active },
+            { IkHandleId::LeftArm, arms_active },
+            { IkHandleId::RightArm, arms_active },
+        };
+
+        float best_t = std::numeric_limits<float>::infinity();
+        IkHandleId best_id = IkHandleId::None;
+        ozz::math::Float3 best_target{ 0.f, 0.f, 0.f };
+        float best_screen_dist_sq = std::numeric_limits<float>::infinity();
+
+        for (const Candidate& candidate : candidates)
+        {
+            if (!candidate.active)
+            {
+                continue;
+            }
+
+            LimbIkChain* chain = GetChainForHandle(candidate.id);
+            if (!chain || !chain->enabled || !chain->Valid())
+            {
+                continue;
+            }
+
+            const ozz::math::Float3 target = ComputeChainTarget(*chain);
+            chain->debug_target = target;
+            chain->debug_target_valid = true;
+
+            float t = 0.f;
+            if (!IntersectRaySphere(ray_origin, ray_dir, target, kIkHandleHitRadius, t))
+            {
+                continue;
+            }
+
+            float screen_dist_sq = use_screen_metric ? 0.f : std::numeric_limits<float>::infinity();
+            if (use_screen_metric)
+            {
+                const ozz::math::SimdFloat4 target_simd = ozz::math::simd_float4::Load(target.x, target.y, target.z, 1.f);
+                const ozz::math::SimdFloat4 clip_simd = ozz::math::TransformPoint(*view_projection, target_simd);
+                float clip_values[4];
+                ozz::math::StorePtrU(clip_simd, clip_values);
+                const float clip_w = clip_values[3];
+                const float epsilon = 1e-6f;
+                if (std::fabs(clip_w) > epsilon)
+                {
+                    const float ndc_x = clip_values[0] / clip_w;
+                    const float ndc_y = clip_values[1] / clip_w;
+                    const float dx = ndc_x - pick_ndc_x;
+                    const float dy = ndc_y - pick_ndc_y;
+                    screen_dist_sq = dx * dx + dy * dy;
+                }
+            }
+
+            const float kEpsilon = 1e-6f;
+            const bool better_screen = use_screen_metric ? (screen_dist_sq + kEpsilon < best_screen_dist_sq) : false;
+            const bool screen_tie = use_screen_metric ? (std::fabs(screen_dist_sq - best_screen_dist_sq) <= kEpsilon) : true;
+            const bool better_t = t < best_t;
+
+            if (better_screen || (screen_tie && better_t))
+            {
+                best_screen_dist_sq = screen_dist_sq;
+                best_t = t;
+                best_id = candidate.id;
+                best_target = target;
+            }
+        }
+
+        if (best_id == IkHandleId::None)
+        {
+            return false;
+        }
+
+        LimbIkChain* selected_chain = GetChainForHandle(best_id);
+        if (!selected_chain)
+        {
+            return false;
+        }
+
+        active_ik_handle_ = best_id;
+        ik_handle_dragging_ = true;
+        ik_drag_plane_point_ = best_target;
+
+        ozz::math::Float3 normal = Normalize3(Sub3(best_target, camera_pos));
+        if (LengthSq3(normal) <= 1e-6f)
+        {
+            normal = { 0.f, 1.f, 0.f };
+        }
+        ik_drag_plane_normal_ = normal;
+
+        return true;
+    }
+
+    void UpdateActiveIkHandle(const ozz::math::Float3& ray_origin, const ozz::math::Float3& ray_dir)
+    {
+        if (!ik_handle_dragging_ || active_ik_handle_ == IkHandleId::None)
+        {
+            return;
+        }
+
+        ozz::math::Float3 hit;
+        if (!IntersectRayPlane(ray_origin, ray_dir, ik_drag_plane_point_, ik_drag_plane_normal_, hit))
+        {
+            return;
+        }
+
+        ik_drag_plane_point_ = hit;
+        ApplyDraggedTarget(active_ik_handle_, hit);
     }
 
     ozz::math::Float3 GetJointTranslation(const ozz::vector<ozz::math::SoaTransform>& transforms, int joint) const
@@ -3699,7 +4332,7 @@ private:
         active_crouch_offset_ = offset;
 
         ozz::math::Float3 root_translation = GetLocalTranslation(0);
-        root_translation.z -= offset;
+        root_translation.y -= offset;
         SetLocalTranslation(0, root_translation);
 
         const float pitch_deg = ui_state_.crouch_spine_pitch_deg * crouch_amount;

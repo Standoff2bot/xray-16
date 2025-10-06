@@ -7,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <system_error>
 
 namespace XRay
 {
@@ -359,7 +360,8 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
     {
-        LogReadFailure(path, "open bundle", std::streampos(-1));
+        const std::error_code ec(errno, std::generic_category());
+        std::cerr << "[OzzBundle] open bundle failed (errno " << ec.value() << ": " << ec.message() << ") — " << path << std::endl;
         return false;
     }
 
@@ -391,6 +393,10 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
         return false;
     }
 
+    std::cout << "[OzzBundle] header version=" << version
+              << ", skeleton_size=" << skeleton_size
+              << ", mesh_size=" << mesh_size << std::endl;
+
     out_bundle.version = version;
     out_bundle.skeleton.resize(skeleton_size);
     out_bundle.mesh.resize(mesh_size);
@@ -401,6 +407,7 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
         LogReadFailure(path, "read skeleton payload", skeleton_offset);
         return false;
     }
+    std::cout << "[OzzBundle] read skeleton payload (" << out_bundle.skeleton.size() << " bytes)" << std::endl;
 
     const auto mesh_offset = stream.tellg();
     if (!ReadFully(stream, out_bundle.mesh.data(), out_bundle.mesh.size()))
@@ -408,18 +415,21 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
         LogReadFailure(path, "read mesh payload", mesh_offset);
         return false;
     }
+    std::cout << "[OzzBundle] read mesh payload (" << out_bundle.mesh.size() << " bytes)" << std::endl;
 
     if (!ReadBoneMetadataBlock(stream, path, out_bundle.bone_metadata))
     {
         LogReadFailure(path, "read bone metadata block", stream.tellg());
         return false;
     }
+    std::cout << "[OzzBundle] bone metadata entries=" << out_bundle.bone_metadata.size() << std::endl;
 
     if (!ReadUserDataBlock(stream, path, out_bundle.user_data))
     {
         LogReadFailure(path, "read user data block", stream.tellg());
         return false;
     }
+    std::cout << "[OzzBundle] user data bytes=" << out_bundle.user_data.size() << std::endl;
 
     const std::streampos anim_block_offset = stream.tellg();
     char anim_magic[sizeof(kEmbeddedAnimationsMagic)] = {};
@@ -456,6 +466,7 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
         stream.seekg(anim_block_offset, std::ios::beg);
         out_bundle.embedded_animation_data.clear();
     }
+    std::cout << "[OzzBundle] embedded animation bytes=" << out_bundle.embedded_animation_data.size() << std::endl;
 
     out_bundle.motion_refs.clear();
 
@@ -466,6 +477,8 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
         LogReadFailure(path, "read motion reference count", motion_count_offset);
         return false;
     }
+
+    std::cout << "[OzzBundle] motion_refs count=" << motion_ref_count << std::endl;
 
     if (motion_ref_count > 0)
     {
@@ -496,6 +509,13 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
             out_bundle.motion_refs.emplace_back(std::move(entry));
         }
     }
+
+    const std::streampos end_pos = stream.tellg();
+    stream.seekg(0, std::ios::end);
+    const std::streampos file_size = stream.tellg();
+    stream.seekg(end_pos, std::ios::beg);
+    std::cout << "[OzzBundle] consumed " << static_cast<std::streamoff>(end_pos)
+              << " / " << static_cast<std::streamoff>(file_size) << " bytes" << std::endl;
 
     return true;
 }

@@ -191,7 +191,7 @@ void CGamePersistent::OnGameStart()
     const xr_string computed_digest = ComputeLegacyAssetInventoryDigest(inventory);
 
     StartupConversionParams conversion_params;
-    const bool digest_matches = stored_digest == computed_digest;
+    const bool digest_matches = xr_strcmp(stored_digest.c_str(), computed_digest.c_str()) == 0;
     const bool outputs_valid = digest_matches && VerifyConvertedOutputs(inventory, conversion_params);
 
     if (digest_matches && outputs_valid)
@@ -200,7 +200,7 @@ void CGamePersistent::OnGameStart()
         return;
     }
 
-    const bool force_rebuild = false; // todo: fix once digest hashing is working correctly.
+    const bool force_rebuild = digest_matches && outputs_valid;
     StartupConversionStats conversion_stats;
     const bool show_loading_stage = psActorFlags.test(AF_LOADING_STAGES);
 

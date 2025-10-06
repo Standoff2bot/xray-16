@@ -5,6 +5,7 @@
 #include "Include/xrRender/Kinematics.h"
 #include "Include/xrRender/KinematicsAnimated.h"
 #include "Include/xrRender/animation_motion.h"
+#include "Layers/xrRender/Animation.h"
 #include "xrCore/_fbox.h"
 #include "xrCommon/xr_smart_pointers.h"
 #include "xrCommon/xr_unordered_map.h"
@@ -209,6 +210,7 @@ private:
     bool BuildBoneMetadata();
     void ResetRuntimeState();
     void ResetAnimationState();
+    void InitializeChannelState();
     bool EnsureAnimationController();
     bool LoadLegacyMotion(const xr_string& motion_name);
     MotionID ResolveLegacyMotionId(const xr_string& motion_name);
@@ -309,6 +311,8 @@ private:
     xr_vector<ActiveBlendEntry> activeBlends;
     MotionID controllerMotion{};
     bool animationControllerReady = false;
+    xray::render::RENDER_NAMESPACE::animation::channal_rule channelRules[MAX_CHANNELS]{};
+    float channelFactors[MAX_CHANNELS]{};
 };
 } // namespace Animation
 } // namespace XRay

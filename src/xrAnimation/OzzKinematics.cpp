@@ -3,6 +3,7 @@
 #include "OzzKinematics.h"
 
 #include "OzzConversion.h"
+#include "Layers/xrRender/AnimationKeyCalculate.h"
 
 #include "xrEngine/device.h"
 #include "xrCore/FS.h"
@@ -26,6 +27,7 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+namespace Render = xray::render::RENDER_NAMESPACE;
 
 namespace XRay
 {
@@ -136,6 +138,13 @@ Fobb BuildFallbackObbFromShape(const SBoneShape& shape)
     result.m_halfsize.z = std::max(result.m_halfsize.z, kMinHalfExtent);
     return result;
 }
+
+constexpr Render::animation::channal_rule kDefaultChannelRules[MAX_CHANNELS] = {
+    { Render::animation::lerp, Render::animation::lerp },
+    { Render::animation::lerp, Render::animation::lerp },
+    { Render::animation::lerp, Render::animation::add },
+    { Render::animation::lerp, Render::animation::add },
+};
 
 bool EndsWithIgnoreCase(const xr_string& value, pcstr suffix)
 {
@@ -458,6 +467,7 @@ OzzKinematics::OzzKinematics()
       visibilityCounter(0), animationController(xr_make_unique<OzzAnimationController>()), animationControllerReady(false)
 {
     cachedBox.invalidate();
+    InitializeChannelState();
 }
 
 OzzKinematics::~OzzKinematics() = default;
@@ -571,6 +581,7 @@ void OzzKinematics::ResetRuntimeState()
 
 void OzzKinematics::ResetAnimationState()
 {
+    InitializeChannelState();
     motionReferences.clear();
     motionLibrary.Reset();
     motionLibraryBuilt = false;
@@ -579,6 +590,15 @@ void OzzKinematics::ResetAnimationState()
     animationApplied = false;
     animationControllerReady = false;
     embeddedAnimationData.clear();
+}
+
+void OzzKinematics::InitializeChannelState()
+{
+    for (u32 channel = 0; channel < MAX_CHANNELS; ++channel)
+    {
+        channelRules[channel] = kDefaultChannelRules[channel];
+        channelFactors[channel] = 1.f;
+    }
 }
 
 void OzzKinematics::EnsureMotionLibraryLoaded()
@@ -812,7 +832,20 @@ bool OzzKinematics::HasLoadedAnimation() const
 bool OzzKinematics::LoadOzzAnimationsFromFile(const xr_string& relative_path)
 {
     string_path resolved;
-    FileStatus status = FS.exist(resolved, "$game_meshes$", relative_path.c_str());
+    FileStatus status(false, false);
+    xr_string source_alias;
+
+    constexpr pcstr kSearchAliases[] = { "$game_meshes$", "$levels$" };
+    for (pcstr alias : kSearchAliases)
+    {
+        status = FS.exist(resolved, alias, relative_path.c_str());
+        if (status)
+        {
+            source_alias = alias;
+            break;
+        }
+    }
+
     if (!status)
         return false;
 
@@ -841,7 +874,8 @@ bool OzzKinematics::LoadOzzAnimationsFromFile(const xr_string& relative_path)
     }
     else
     {
-        IReader* reader = FS.r_open("$game_meshes$", relative_path.c_str());
+        pcstr alias_cstr = source_alias.c_str();
+        IReader* reader = FS.r_open(alias_cstr, relative_path.c_str());
         if (!reader)
             return false;
 
@@ -1860,9 +1894,74 @@ CMotion* OzzKinematics::LL_GetMotion(MotionID id, u16 bone_id)
     return motion.get();
 }
 
-void OzzKinematics::LL_BuldBoneMatrixDequatize(const CBoneData* /*bd*/, u8 /*channel_mask*/, SKeyTable& /*keys*/)
+void OzzKinematics::LL_BuldBoneMatrixDequatize(const CBoneData* bd, u8 channel_mask, SKeyTable& keys)
 {
-    NotImplemented(__FUNCTION__);
+    if (!initialized || !bd)
+        return;
+
+    const u16 self_id = bd->GetSelfID();
+    if (self_id == BI_NONE)
+        return;
+
+    CKey base_keys[MAX_CHANNELS][MAX_BLENDED];
+
+    if (activeBlends.empty())
+        return;
+
+    for (const ActiveBlendEntry& entry : activeBlends)
+    {
+        CBlend* blend = entry.blend.get();
+        if (!blend)
+            continue;
+
+        const u8 channel = blend->channel;
+        if (channel >= MAX_CHANNELS)
+            continue;
+
+        if ((channel_mask & (1 << channel)) == 0)
+            continue;
+
+        int& blend_count = keys.chanel_blend_conts[channel];
+        if (blend_count >= static_cast<int>(MAX_BLENDED))
+            continue;
+
+        CMotion* motion = LL_GetMotion(blend->motionID, self_id);
+        if (!motion)
+            continue;
+
+        CKey& destination = keys.keys[channel][blend_count];
+        Render::key_identity(destination);
+        Render::Dequantize(destination, *blend, *motion);
+
+        CKey& base = base_keys[channel][blend_count];
+        Render::key_identity(base);
+
+        if (motion->_keysR.size())
+            Render::QR2Quat(motion->_keysR[0], base.Q);
+
+        if (motion->test_flag(flTKeyPresent))
+        {
+            if (motion->test_flag(flTKey16IsBit) && motion->_keysT16.size())
+                Render::QT16_2T(motion->_keysT16[0], *motion, base.T);
+            else if (motion->_keysT8.size())
+                Render::QT8_2T(motion->_keysT8[0], *motion, base.T);
+            else
+                base.T.set(motion->_initT);
+        }
+        else
+        {
+            base.T.set(motion->_initT);
+        }
+
+        keys.blends[channel][blend_count] = blend;
+        ++blend_count;
+    }
+
+    for (u16 channel = 0; channel < MAX_CHANNELS; ++channel)
+    {
+        if (channelRules[channel].extern_ == Render::animation::add)
+            Render::keys_substruct(keys.keys[channel], base_keys[channel], keys.chanel_blend_conts[channel]);
+    }
 }
 
 void OzzKinematics::LL_BoneMatrixBuild(CBoneInstance& /*bi*/, const Fmatrix* /*parent*/, const SKeyTable& /*keys*/)
@@ -2043,8 +2142,10 @@ void OzzKinematics::LL_CloseCycle(u16 partition, u8 mask_channel)
     }
 }
 
-void OzzKinematics::LL_SetChannelFactor(u16 /*channel*/, float /*factor*/)
+void OzzKinematics::LL_SetChannelFactor(u16 channel, float factor)
 {
+    if (channel < MAX_CHANNELS)
+        channelFactors[channel] = factor;
 }
 
 void OzzKinematics::UpdateTracks()

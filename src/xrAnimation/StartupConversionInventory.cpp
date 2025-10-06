@@ -270,25 +270,41 @@ xr_string BuildMotionOutputRelativePath(const LegacyMotionAsset& motion)
     return relative;
 }
 
+xr_string DetermineBundleOutputAlias(const LegacyVisualAsset& visual, const StartupConversionParams& params)
+{
+    const LegacyVisualSource* primary = visual.PrimarySource();
+    if (primary && !primary->location.root_alias.empty())
+        return primary->location.root_alias;
+    return params.ozz_output_alias;
+}
+
+xr_string DetermineMotionOutputAlias(const LegacyMotionAsset& motion, const StartupConversionParams& params)
+{
+    if (!motion.root_alias.empty())
+        return motion.root_alias;
+    return params.ozz_output_alias;
+}
+
 bool FileExists(const xr_string& alias, const xr_string& relative_path)
 {
     fs::path absolute;
     if (!ResolveAbsolutePath(alias, relative_path, absolute))
         return false;
-    std::error_code ec;
-    return fs::exists(absolute, ec) && !ec;
+    return FS.exist(absolute.generic_string().c_str(), FSType::Any);
 }
 
 bool BundleExists(const LegacyVisualAsset& visual, const StartupConversionParams& params)
 {
     const xr_string relative = BuildBundleRelativePath(visual);
-    return FileExists(params.ozz_output_alias, relative);
+    const xr_string alias = DetermineBundleOutputAlias(visual, params);
+    return FileExists(alias, relative);
 }
 
 bool MotionExists(const LegacyMotionAsset& motion, const StartupConversionParams& params)
 {
     const xr_string relative = BuildMotionOutputRelativePath(motion);
-    return FileExists(params.ozz_output_alias, relative);
+    const xr_string alias = DetermineMotionOutputAlias(motion, params);
+    return FileExists(alias, relative);
 }
 
 void SerializeString(ozz::io::OArchive& archive, const std::string& value)
@@ -329,13 +345,13 @@ void SerializeMotionMetadata(ozz::io::OArchive& archive, const LegacyMotionMetad
     SerializeMotionMarks(archive, metadata);
 }
 
-bool WriteBundleFile(const StartupConversionParams& params,
+bool WriteBundleFile(const xr_string& output_alias,
                      const LegacyVisualAsset& visual,
                      const LegacyVisualConversionResult& conversion)
 {
     const xr_string relative = BuildBundleRelativePath(visual);
     fs::path output_path;
-    if (!ResolveAbsolutePath(params.ozz_output_alias, relative, output_path))
+    if (!ResolveAbsolutePath(output_alias, relative, output_path))
     {
         Msg("! [ozz] Failed to resolve bundle output path for '%s'", visual.normalized_identifier.c_str());
         return false;
@@ -366,12 +382,12 @@ bool WriteBundleFile(const StartupConversionParams& params,
     return true;
 }
 
-bool WriteOzzAnimations(const StartupConversionParams& params,
+bool WriteOzzAnimations(const xr_string& output_alias,
                         const xr_string& output_relative,
                         const xr_vector<ConvertedOmfAnimation>& animations)
 {
     fs::path output_path;
-    if (!ResolveAbsolutePath(params.ozz_output_alias, output_relative, output_path))
+    if (!ResolveAbsolutePath(output_alias, output_relative, output_path))
     {
         Msg("! [ozz] Failed to resolve animation output path '%s'", output_relative.c_str());
         return false;
@@ -945,6 +961,7 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
         const LegacyVisualAsset* visual = nullptr;
         const LegacyVisualSource* primary = nullptr;
         bool convert_bundle = false;
+        xr_string output_alias;
         xr_vector<xr_string> motion_names;
         LegacyVisualConversionResult conversion;
         bool success = false;
@@ -956,6 +973,7 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
     {
         const LegacyMotionAsset* asset = nullptr;
         xr_string output_relative;
+        xr_string output_alias;
         bool convert = false;
         const LegacyVisualConversionResult* source_conversion = nullptr;
     };
@@ -979,7 +997,9 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
         VisualConversionWork work;
         work.visual = &visual;
         work.primary = primary;
-        work.convert_bundle = force_rebuild || !BundleExists(visual, params);
+        work.output_alias = DetermineBundleOutputAlias(visual, params);
+        const xr_string bundle_relative = BuildBundleRelativePath(visual);
+        work.convert_bundle = force_rebuild || !FileExists(work.output_alias, bundle_relative);
 
         for (const auto& reference : primary->motion_references)
         {
@@ -1007,8 +1027,9 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                 {
                     mt_it->second.asset = motion;
                     mt_it->second.output_relative = BuildMotionOutputRelativePath(*motion);
+                    mt_it->second.output_alias = DetermineMotionOutputAlias(*motion, params);
                     mt_it->second.convert = force_rebuild ||
-                        !FileExists(params.ozz_output_alias, mt_it->second.output_relative);
+                        !FileExists(mt_it->second.output_alias, mt_it->second.output_relative);
                 }
             }
         }
@@ -1090,7 +1111,7 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
 
         if (work.convert_bundle)
         {
-            if (WriteBundleFile(params, visual, work.conversion))
+            if (WriteBundleFile(work.output_alias, visual, work.conversion))
                 ++out_stats.bundles_written;
             else
                 ++out_stats.failures;
@@ -1162,7 +1183,7 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
             continue;
         }
 
-        if (WriteOzzAnimations(params, task.output_relative, converted_animations))
+        if (WriteOzzAnimations(task.output_alias, task.output_relative, converted_animations))
             ++out_stats.motions_written;
         else
             ++out_stats.failures;
