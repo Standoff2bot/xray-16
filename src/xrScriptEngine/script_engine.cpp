@@ -572,18 +572,28 @@ void CScriptEngine::print_error(lua_State* L, int iErrorCode)
     {
     case LUA_ERRRUN:
         scriptEngine->script_log(LuaMessageType::Error, "SCRIPT RUNTIME ERROR");
+        scriptEngine->print_stack(L);
+        LogMemoryUsage(L, "runtime error");
         break;
     case LUA_ERRMEM:
         scriptEngine->script_log(LuaMessageType::Error, "SCRIPT ERROR (memory allocation)");
+        scriptEngine->print_stack(L);
+        LogMemoryUsage(L, "memory error");
         break;
     case LUA_ERRERR:
         scriptEngine->script_log(LuaMessageType::Error, "SCRIPT ERROR (while running the error handler function)");
+        scriptEngine->print_stack(L);
+        LogMemoryUsage(L, "error handler failure");
         break;
     case LUA_ERRFILE:
         scriptEngine->script_log(LuaMessageType::Error, "SCRIPT ERROR (while running file)");
+        scriptEngine->print_stack(L);
+        LogMemoryUsage(L, "file error");
         break;
     case LUA_ERRSYNTAX:
         scriptEngine->script_log(LuaMessageType::Error, "SCRIPT SYNTAX ERROR");
+        scriptEngine->print_stack(L);
+        LogMemoryUsage(L, "syntax error");
         break;
     case LUA_YIELD:
         scriptEngine->script_log(LuaMessageType::Info, "Thread is yielded");
@@ -598,6 +608,24 @@ void CScriptEngine::flush_log()
     strconcat(sizeof(log_file_name), log_file_name, Core.ApplicationName, "_", Core.UserName, "_lua.log");
     FS.update_path(log_file_name, "$logs$", log_file_name);
     m_output.save_to(log_file_name);
+}
+
+void CScriptEngine::LogMemoryUsage(lua_State* state, pcstr reason)
+{
+    if (!state)
+        return;
+
+    CScriptEngine* engine = GetInstance(state);
+    if (!engine)
+        return;
+
+    const int kb = lua_gc(state, LUA_GCCOUNT, 0);
+    const int bytes = lua_gc(state, LUA_GCCOUNTB, 0);
+    const int total_bytes = kb * 1024 + bytes;
+
+    const pcstr tag = reason ? reason : "unknown";
+    Msg("[LUA][memory] %s : %d KB + %d B (total %d bytes)", tag, kb, bytes, total_bytes);
+    engine->script_log(LuaMessageType::Info, "[memory] %s : %d KB + %d B (total %d bytes)", tag, kb, bytes, total_bytes);
 }
 
 CScriptEngine::CScriptEngine(bool is_editor, bool is_with_profiler)

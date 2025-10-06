@@ -194,6 +194,7 @@ public:
 
 private:
     static void print_error(lua_State* L, int iErrorCode);
+    static void LogMemoryUsage(lua_State* state, pcstr reason);
 
 public:
     static void on_error(lua_State* state);

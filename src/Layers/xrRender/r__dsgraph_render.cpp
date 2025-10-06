@@ -32,11 +32,9 @@ bool cmp_ssa(const T &lhs, const T &rhs)
 template <typename T>
 bool cmp_pass(const T& left, const T& right)
 {
-    Msg("try cmp pass %s %s", left->first->ps->cName.c_str(), right->first->ps->cName.c_str());
     if (left->first->equal(*right->first))
         return false;
 
-    Msg("cmp pass ok %s %s %f %f", left->first->ps->cName.c_str(), right->first->ps->cName.c_str(), left->second.ssa, right->second.ssa);
     return left->second.ssa >= right->second.ssa;
 }
 

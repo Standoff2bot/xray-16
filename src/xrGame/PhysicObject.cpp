@@ -382,6 +382,30 @@ void CPhysicObject::AddElement(CPhysicsElement* root_e, int id)
     E->mXFORM.set(K->LL_GetTransform(u16(id)));
     Fobb bb = K->LL_GetBox(u16(id));
 
+    if (dbg_draw_doors)
+    {
+        const u16 bone_id = static_cast<u16>(id);
+        CBoneData& bone_data = K->LL_GetData(bone_id);
+        const SBoneShape& shape = bone_data.shape;
+        const SJointIKData& joint = bone_data.IK_data;
+        const char* bone_name = K->LL_BoneName_dbg(bone_id);
+        Msg("[door_physics] AddElement bone='%s' id=%u parent=%p element=%p shape=%u flags=0x%X halfsize=(%.3f, %.3f, %.3f)"
+            " joint_type=%u limits_y=(%.3f, %.3f) no_physics=%s",
+            bone_name ? bone_name : "<unnamed>",
+            bone_id,
+            root_e,
+            E,
+            shape.type,
+            shape.flags.get(),
+            shape.box.m_halfsize.x,
+            shape.box.m_halfsize.y,
+            shape.box.m_halfsize.z,
+            joint.type,
+            joint.limits[1].limit.x,
+            joint.limits[1].limit.y,
+            shape.flags.is(SBoneShape::sfNoPhysics) ? "true" : "false");
+    }
+
     if (bb.m_halfsize.magnitude() < 0.05f)
     {
         bb.m_halfsize.add(0.05f);
@@ -414,6 +438,12 @@ void CPhysicObject::CreateBody(CSE_ALifeObjectPhysic* po)
 {
     if (m_pPhysicsShell)
         return;
+    if (dbg_draw_doors)
+    {
+        const char* visual_name = cNameVisual().c_str();
+        Msg("[door_physics] CreateBody start obj='%s' visual='%s' type=%d mass=%.3f", cName().c_str(),
+            visual_name ? visual_name : "<none>", int(m_type), m_mass);
+    }
     IKinematics* pKinematics = smart_cast<IKinematics*>(Visual());
     switch (m_type)
     {
@@ -429,6 +459,11 @@ void CPhysicObject::CreateBody(CSE_ALifeObjectPhysic* po)
         m_pPhysicsShell->set_Kinematics(pKinematics);
         AddElement(0, pKinematics->LL_GetBoneRoot());
         m_pPhysicsShell->setMass1(m_mass);
+        if (dbg_draw_doors)
+        {
+            Msg("[door_physics] CreateBody built chain shell: bone_root=%u bone_count=%u", pKinematics->LL_GetBoneRoot(),
+                pKinematics->LL_BoneCount());
+        }
     }
     break;
 
@@ -438,6 +473,11 @@ void CPhysicObject::CreateBody(CSE_ALifeObjectPhysic* po)
         CreateSkeleton(po);
     }
     break;
+    }
+
+    if (dbg_draw_doors)
+    {
+        Msg("[door_physics] CreateBody post-switch shell=%p", m_pPhysicsShell);
     }
 
     m_pPhysicsShell->mXFORM.set(XFORM());
