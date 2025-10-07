@@ -2535,34 +2535,25 @@ void ConvertLegacyVisualToOzzBundleImpl(const LegacyVisualInput& input,
     }
 
     out_result.embedded_animation_binary.clear();
-    if (out_result.motion_refs.empty())
+    const auto smparams_it = chunks.find(kChunkSmparams);
+    const auto motions_it = chunks.find(kChunkMotions);
+    if (smparams_it != chunks.end() && motions_it != chunks.end() && out_result.skeleton)
     {
-        const auto smparams_it = chunks.find(kChunkSmparams);
-        const auto motions_it = chunks.find(kChunkMotions);
-        if (smparams_it != chunks.end() && motions_it != chunks.end() && out_result.skeleton)
+        xr_vector<ConvertedOmfAnimation> embedded;
+        if (ConvertLegacyOmf(data, size, out_result.bone_names, *out_result.skeleton, embedded))
         {
-            xr_vector<ConvertedOmfAnimation> embedded;
-            if (ConvertLegacyOmf(data, size, out_result.bone_names, *out_result.skeleton, embedded))
-            {
-                embedded.erase(std::remove_if(embedded.begin(), embedded.end(),
-                                [](const ConvertedOmfAnimation& entry)
-                                {
-                                    return !entry.animation;
-                                }),
-                    embedded.end());
+            embedded.erase(std::remove_if(embedded.begin(), embedded.end(),
+                            [](const ConvertedOmfAnimation& entry)
+                            {
+                                return !entry.animation;
+                            }),
+                embedded.end());
 
-                Msg("create legacy animation for %s", input.source_path.value().generic_string().c_str());
-                out_result.embedded_animation_binary = SerializeEmbeddedAnimations(embedded);
-            }
+            Msg("create legacy animation for %s", input.source_path.value().generic_string().c_str());
+            out_result.embedded_animation_binary = SerializeEmbeddedAnimations(embedded);
         }
     }
 
-    if (out_result.embedded_animation_binary.empty() && out_result.skeleton)
-    {
-        Msg("create $editor animation for %s", input.source_path.value().generic_string().c_str());
-        const auto stub_animations = BuildRestPoseAnimation(*out_result.skeleton);
-        out_result.embedded_animation_binary = SerializeEmbeddedAnimations(stub_animations);
-    }
 }
 
 bool ConvertLegacyVisualToOzzBundle(const LegacyVisualInput& input,
