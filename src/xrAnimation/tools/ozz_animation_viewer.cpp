@@ -1028,44 +1028,52 @@ protected:
         return metadata;
     }
 
-    // Load multiple animations from a single file
-    bool LoadMultipleAnimations(const char* filename)
+    bool LoadAnimationsFromStream(ozz::io::Stream* stream, const char* label)
     {
-        ozz::io::File file(filename, "rb");
-        if (!file.opened())
+        if (!stream)
+            return false;
+
+        const char* source_label = (label && label[0] != '\0') ? label : "<memory>";
+
+        if (stream->Seek(0, ozz::io::Stream::kSet) < 0)
         {
-            ozz::log::Err() << "Failed to open animation file: " << filename << std::endl;
+            ozz::log::Err() << "Failed to seek animation stream: " << source_label << std::endl;
             return false;
         }
 
-        ozz::io::IArchive archive(&file);
+        ozz::io::IArchive archive(stream);
 
         animation_metadata_.clear();
+        animations_.clear();
 
-        // First try to read a single animation (standard format)
         if (archive.TestTag<ozz::animation::Animation>())
         {
-            // Single animation file
             animations_.resize(1);
             archive >> animations_[0];
+
             MotionMetadataData metadata;
             const char* name = animations_[0].name();
             metadata.name = name ? name : "";
             animation_metadata_.push_back(std::move(metadata));
+
+            ozz::log::LogV() << "Loaded 1 animation from " << source_label << std::endl;
             return true;
         }
 
-        // Reset file position
-        file.Seek(0, ozz::io::File::kSet);
-        archive = ozz::io::IArchive(&file);
+        if (stream->Seek(0, ozz::io::Stream::kSet) < 0)
+        {
+            ozz::log::Err() << "Failed to rewind animation stream: " << source_label << std::endl;
+            return false;
+        }
 
-        // Try to read multi-animation format (count + animations)
+        archive = ozz::io::IArchive(stream);
+
         uint32_t anim_count = 0;
         archive >> anim_count;
 
         if (anim_count == 0)
         {
-            ozz::log::Err() << "Invalid animation count: " << anim_count << std::endl;
+            ozz::log::Err() << "Invalid animation count in " << source_label << std::endl;
             return false;
         }
 
@@ -1079,14 +1087,40 @@ protected:
             {
                 const char* animation_name = animations_[i].name();
                 if (animation_name)
-                {
                     animation_metadata_[i].name = animation_name;
-                }
             }
         }
 
-        ozz::log::LogV() << "Loaded " << anim_count << " animations from " << filename << std::endl;
+        ozz::log::LogV() << "Loaded " << anim_count << " animations from " << source_label << std::endl;
         return true;
+    }
+
+    bool LoadMultipleAnimations(const char* filename)
+    {
+        if (!filename || filename[0] == '\0')
+            return false;
+
+        ozz::io::File file(filename, "rb");
+        if (!file.opened())
+        {
+            ozz::log::Err() << "Failed to open animation file: " << filename << std::endl;
+            animations_.clear();
+            animation_metadata_.clear();
+            return false;
+        }
+
+        return LoadAnimationsFromStream(&file, filename);
+    }
+
+    bool LoadEmbeddedAnimations(const std::vector<std::uint8_t>& bytes, const char* label)
+    {
+        if (bytes.empty())
+            return false;
+
+        ozz::io::MemoryStream stream;
+        if (!stream.Write(bytes.data(), bytes.size()))
+            return false;
+        return LoadAnimationsFromStream(&stream, label);
     }
 
     void PrintPoseTable()
@@ -1924,6 +1958,9 @@ protected:
         const bool bundle_requested = bundle_option && bundle_option[0] != '\0';
         std::string mesh_reference_path;
         bool mesh_loaded = false;
+        embedded_animation_loaded_ = false;
+        bool has_animation = false;
+        bool attempted_animation_load = false;
 
         if (bundle_requested)
         {
@@ -1948,6 +1985,41 @@ protected:
             mesh_reference_path = bundle_option;
             using_bundle_ = true;
             bundle_source_path_ = bundle_option;
+
+            bool external_animation_requested = OPTIONS_animation && OPTIONS_animation[0] != '\0';
+            if (external_animation_requested && std::strcmp(OPTIONS_animation, "media/animation.ozz") == 0)
+            {
+                external_animation_requested = false;
+            }
+            if (external_animation_requested && !fs::exists(fs::path(OPTIONS_animation)))
+            {
+                external_animation_requested = false;
+            }
+            bool external_loaded = false;
+            if (external_animation_requested)
+            {
+                external_loaded = LoadMultipleAnimations(OPTIONS_animation);
+                has_animation = external_loaded;
+                attempted_animation_load = true;
+            }
+
+            if (!has_animation && !bundle.embedded_animation_data.empty())
+            {
+                if (LoadEmbeddedAnimations(bundle.embedded_animation_data, bundle_option))
+                {
+                    has_animation = true;
+                    embedded_animation_loaded_ = true;
+                    std::cout << "Loaded embedded animations from bundle: " << bundle_option << std::endl;
+                }
+                else
+                {
+                    ozz::log::Err() << "Failed to load embedded animations from bundle: " << bundle_option << std::endl;
+                }
+            }
+            else if (external_loaded)
+            {
+                embedded_animation_loaded_ = false;
+            }
         }
         else
         {
@@ -1970,10 +2042,28 @@ protected:
                 mesh_loaded = true;
                 mesh_reference_path = OPTIONS_mesh;
             }
+
+            has_animation = LoadMultipleAnimations(OPTIONS_animation);
+            attempted_animation_load = true;
         }
 
         // Try reading animation(s), but allow failure for bind pose testing
-        bool has_animation = LoadMultipleAnimations(OPTIONS_animation);
+        if (!has_animation && !embedded_animation_loaded_ && !attempted_animation_load)
+        {
+            bool should_attempt = false;
+            if (OPTIONS_animation && OPTIONS_animation[0] != '\0')
+            {
+                if (std::strcmp(OPTIONS_animation, "media/animation.ozz") != 0)
+                {
+                    should_attempt = fs::exists(fs::path(OPTIONS_animation));
+                }
+            }
+            if (should_attempt)
+            {
+                has_animation = LoadMultipleAnimations(OPTIONS_animation);
+                attempted_animation_load = true;
+            }
+        }
 
         if (mesh_loaded)
         {
@@ -2242,6 +2332,7 @@ private:
     // Optional meshes used for skinning validation / rendering.
     ozz::vector<ozz::sample::Mesh> meshes_;
     bool using_bundle_ = false;
+    bool embedded_animation_loaded_ = false;
     std::string bundle_source_path_;
     ozz::vector<ozz::math::Float4x4> skinning_matrices_;
 
@@ -2708,6 +2799,27 @@ private:
             ImGui::End();
             return;
         }
+
+        if (using_bundle_)
+        {
+            ImGui::TextUnformatted("Bundle:");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(bundle_source_path_.c_str());
+            const char* source_label = nullptr;
+            if (embedded_animation_loaded_)
+                source_label = "Embedded payload";
+            else if (!animations_.empty())
+                source_label = OPTIONS_animation;
+            else
+                source_label = "None";
+            ImGui::Text("Animation source: %s", source_label);
+        }
+        else
+        {
+            ImGui::Text("Animation file: %s", animations_.empty() ? "None" : OPTIONS_animation);
+        }
+
+        ImGui::Spacing();
 
         const int animation_count = static_cast<int>(animations_.size());
         const bool has_animations = animation_count > 0;
