@@ -331,6 +331,9 @@ struct VertexDedupKey
 {
     std::array<int32_t, 3> position{ 0, 0, 0 };
     std::array<int32_t, 2> uv{ 0, 0 };
+    std::array<int32_t, 3> normal{ 0, 0, 0 };
+    std::array<int32_t, 3> tangent{ 0, 0, 0 };
+    std::array<int32_t, 3> binormal{ 0, 0, 0 };
     std::array<uint16_t, 4> bones{ 0, 0, 0, 0 };
     std::array<int32_t, 4> weights{ 0, 0, 0, 0 };
     uint8_t influence_count = 0;
@@ -342,6 +345,9 @@ struct VertexDedupKey
             back_side == other.back_side &&
             position == other.position &&
             uv == other.uv &&
+            normal == other.normal &&
+            tangent == other.tangent &&
+            binormal == other.binormal &&
             bones == other.bones &&
             weights == other.weights;
     }
@@ -363,6 +369,12 @@ struct VertexDedupKeyHasher
         for (int32_t component : key.position)
             combine(std::hash<int32_t>{}(component));
         for (int32_t component : key.uv)
+            combine(std::hash<int32_t>{}(component));
+        for (int32_t component : key.normal)
+            combine(std::hash<int32_t>{}(component));
+        for (int32_t component : key.tangent)
+            combine(std::hash<int32_t>{}(component));
+        for (int32_t component : key.binormal)
             combine(std::hash<int32_t>{}(component));
         for (uint16_t bone : key.bones)
             combine(std::hash<uint16_t>{}(bone));
@@ -1819,6 +1831,15 @@ PositionQuantizedKey quantize_position(const Fvector& position)
     return key;
 }
 
+RoundedNormalKey round_normal(const Fvector& normal)
+{
+    RoundedNormalKey key;
+    key.components[0] = static_cast<int32_t>(std::llround(normal.x * kNormalQuantizeScale));
+    key.components[1] = static_cast<int32_t>(std::llround(normal.y * kNormalQuantizeScale));
+    key.components[2] = static_cast<int32_t>(std::llround(normal.z * kNormalQuantizeScale));
+    return key;
+}
+
 VertexDedupKey make_dedup_key(const MeshVertex& vertex, uint8_t back_side_flag)
 {
     VertexDedupKey key;
@@ -1827,6 +1848,9 @@ VertexDedupKey make_dedup_key(const MeshVertex& vertex, uint8_t back_side_flag)
     key.back_side = back_side_flag;
     key.uv[0] = static_cast<int32_t>(std::llround(vertex.uv.x * kUVQuantizeScale));
     key.uv[1] = static_cast<int32_t>(std::llround(vertex.uv.y * kUVQuantizeScale));
+    key.normal = round_normal(vertex.normal).components;
+    key.tangent = round_normal(vertex.tangent).components;
+    key.binormal = round_normal(vertex.binormal).components;
 
     for (size_t idx = 0; idx < key.bones.size(); ++idx)
     {
@@ -1842,15 +1866,6 @@ VertexDedupKey make_dedup_key(const MeshVertex& vertex, uint8_t back_side_flag)
         }
     }
 
-    return key;
-}
-
-RoundedNormalKey round_normal(const Fvector& normal)
-{
-    RoundedNormalKey key;
-    key.components[0] = static_cast<int32_t>(std::llround(normal.x * kNormalQuantizeScale));
-    key.components[1] = static_cast<int32_t>(std::llround(normal.y * kNormalQuantizeScale));
-    key.components[2] = static_cast<int32_t>(std::llround(normal.z * kNormalQuantizeScale));
     return key;
 }
 
