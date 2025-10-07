@@ -86,7 +86,8 @@ dxRender_Visual* CModelPool::Instance_Create(u32 type)
     case MT_SKELETON_RIGID: V = xr_new<CKinematics>(); break;
     case MT_SKELETON_GEOMDEF_PM: V = xr_new<CSkeletonX_PM>(); break;
     case MT_SKELETON_GEOMDEF_ST: V = xr_new<CSkeletonX_ST>(); break;
-    case MT_OZZ_BUNDLE: V = xr_new<COzzKinematicsVisual>(); break;
+    case MT_OZZ_STATIC:
+    case MT_OZZ_ANIMATED: V = xr_new<COzzKinematicsVisual>(); break;
     case MT_PARTICLE_EFFECT: V = xr_new<PS::CParticleEffect>(); break;
     case MT_PARTICLE_GROUP: V = xr_new<PS::CParticleGroup>(); break;
 #ifndef _EDITOR
@@ -124,7 +125,8 @@ dxRender_Visual* CModelPool::Instance_Load(const char* N, BOOL allow_register)
 
     auto load_bundle_from_path = [&](const std::filesystem::path& bundle_path) -> dxRender_Visual*
     {
-        auto* visual = static_cast<COzzKinematicsVisual*>(Instance_Create(MT_OZZ_BUNDLE));
+        // Create with animated type - will be updated from bundle
+        auto* visual = static_cast<COzzKinematicsVisual*>(Instance_Create(MT_OZZ_ANIMATED));
         if (!visual->LoadFromBundle(N, bundle_path))
         {
             xr_delete(visual);
@@ -237,7 +239,8 @@ dxRender_Visual* CModelPool::Instance_Load(const char* N, BOOL allow_register)
     {
     case MT_SKELETON_ANIM:
     case MT_SKELETON_RIGID:
-    case MT_OZZ_BUNDLE:
+    case MT_OZZ_STATIC:
+    case MT_OZZ_ANIMATED:
     {
         const u16 def_idx = GMLib.GetMaterialIdx("default_object");
         R_ASSERT2(GMLib.GetMaterialByIdx(def_idx)->Flags.is(SGameMtl::flDynamic), "'default_object' - must be dynamic");
@@ -438,7 +441,8 @@ dxRender_Visual* CModelPool::Create(const char* name, IReader* data)
                 const shared_str bundle_identifier(normalized.c_str());
                 if (auto bundle_path = ResolveOzzBundlePath(bundle_identifier))
                 {
-                    auto* bundle_visual = static_cast<COzzKinematicsVisual*>(Instance_Create(MT_OZZ_BUNDLE));
+                    // Create with animated type - will be updated from bundle
+                    auto* bundle_visual = static_cast<COzzKinematicsVisual*>(Instance_Create(MT_OZZ_ANIMATED));
                     if (!bundle_visual->LoadFromBundle(bundle_identifier.c_str(), *bundle_path))
                     {
                         xr_delete(bundle_visual);

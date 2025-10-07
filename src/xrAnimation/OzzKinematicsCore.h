@@ -93,6 +93,9 @@ public:
     UpdateCallback GetUpdateCallback() const { return updateCallback; }
     void* GetUpdateCallbackParam() const { return updateCallbackParam; }
 
+    // Set the owner IKinematics object for callbacks
+    void SetOwner(IKinematics* owner) { ownerKinematics = owner; }
+
     // Additional transforms
     void AddBoneTransform(const KinematicsABT::additional_bone_transform& transform);
     void ClearBoneTransform(u16 bone_id);
@@ -155,6 +158,7 @@ protected:
     // Callbacks
     UpdateCallback updateCallback;
     void* updateCallbackParam;
+    IKinematics* ownerKinematics;
 };
 
 } // namespace XRay::Animation

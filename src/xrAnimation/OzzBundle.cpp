@@ -381,23 +381,41 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
     }
 
     std::uint32_t version = 0;
+    std::uint8_t model_type = 0;
     std::uint32_t skeleton_size = 0;
     std::uint32_t mesh_size = 0;
 
     const auto header_offset = stream.tellg();
-    if (!ReadFully(stream, &version, sizeof(version)) ||
-        !ReadFully(stream, &skeleton_size, sizeof(skeleton_size)) ||
+    if (!ReadFully(stream, &version, sizeof(version)))
+    {
+        LogReadFailure(path, "read bundle version", header_offset);
+        return false;
+    }
+
+    // Read model_type for version 3+
+    if (version >= 3u)
+    {
+        if (!ReadFully(stream, &model_type, sizeof(model_type)))
+        {
+            LogReadFailure(path, "read model_type", stream.tellg());
+            return false;
+        }
+    }
+
+    if (!ReadFully(stream, &skeleton_size, sizeof(skeleton_size)) ||
         !ReadFully(stream, &mesh_size, sizeof(mesh_size)))
     {
-        LogReadFailure(path, "read bundle header", header_offset);
+        LogReadFailure(path, "read bundle sizes", stream.tellg());
         return false;
     }
 
     std::cout << "[OzzBundle] header version=" << version
+              << ", model_type=" << static_cast<int>(model_type)
               << ", skeleton_size=" << skeleton_size
               << ", mesh_size=" << mesh_size << std::endl;
 
     out_bundle.version = version;
+    out_bundle.model_type = model_type;
     out_bundle.skeleton.resize(skeleton_size);
     out_bundle.mesh.resize(mesh_size);
 
@@ -552,16 +570,32 @@ bool WriteOzzxBundle(const std::filesystem::path& path, const OzzxBundle& bundle
     }
 
     const std::uint32_t version = bundle.version;
+    const std::uint8_t model_type = bundle.model_type;
 
     const std::uint32_t skeleton_size = static_cast<std::uint32_t>(bundle.skeleton.size());
     const std::uint32_t mesh_size = static_cast<std::uint32_t>(bundle.mesh.size());
     const std::uint32_t motion_ref_count = static_cast<std::uint32_t>(bundle.motion_refs.size());
 
-    if (!WriteFully(stream, &version, sizeof(version)) ||
-        !WriteFully(stream, &skeleton_size, sizeof(skeleton_size)) ||
+    if (!WriteFully(stream, &version, sizeof(version)))
+    {
+        std::cerr << "Failed to write bundle version: " << path << std::endl;
+        return false;
+    }
+
+    // Write model_type for version 3+
+    if (version >= 3u)
+    {
+        if (!WriteFully(stream, &model_type, sizeof(model_type)))
+        {
+            std::cerr << "Failed to write model_type: " << path << std::endl;
+            return false;
+        }
+    }
+
+    if (!WriteFully(stream, &skeleton_size, sizeof(skeleton_size)) ||
         !WriteFully(stream, &mesh_size, sizeof(mesh_size)))
     {
-        std::cerr << "Failed to write bundle header: " << path << std::endl;
+        std::cerr << "Failed to write bundle sizes: " << path << std::endl;
         return false;
     }
 

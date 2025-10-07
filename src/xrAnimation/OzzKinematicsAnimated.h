@@ -71,6 +71,7 @@ public:
 
     // IKinematicsAnimated implementation
     void OnCalculateBones() override;
+    void CalculateBones(BOOL bForceExact = FALSE) override;
 #ifdef DEBUG
     std::pair<LPCSTR, LPCSTR> LL_MotionDefName_dbg(MotionID ID) override;
     void LL_DumpBlends_dbg() override;

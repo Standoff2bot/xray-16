@@ -648,7 +648,11 @@ void CRender::RequestOzzPaletteDebugDump()
 
 bool CRender::LoadOzzAnimation(IRenderVisual* visual, const std::filesystem::path& path)
 {
-    if (!visual || visual->getType() != MT_OZZ_BUNDLE)
+    if (!visual)
+        return false;
+
+    const u8 type = visual->getType();
+    if (type != MT_OZZ_STATIC && type != MT_OZZ_ANIMATED)
         return false;
 
     auto* ozz_visual = static_cast<COzzKinematicsVisual*>(visual);
@@ -657,7 +661,11 @@ bool CRender::LoadOzzAnimation(IRenderVisual* visual, const std::filesystem::pat
 
 void CRender::StopOzzAnimation(IRenderVisual* visual)
 {
-    if (!visual || visual->getType() != MT_OZZ_BUNDLE)
+    if (!visual)
+        return;
+
+    const u8 type = visual->getType();
+    if (type != MT_OZZ_STATIC && type != MT_OZZ_ANIMATED)
         return;
 
     auto* ozz_visual = static_cast<COzzKinematicsVisual*>(visual);
@@ -666,7 +674,11 @@ void CRender::StopOzzAnimation(IRenderVisual* visual)
 
 bool CRender::PlayOzzLegacyMotion(IRenderVisual* visual, const xr_string& motion_name)
 {
-    if (!visual || visual->getType() != MT_OZZ_BUNDLE)
+    if (!visual)
+        return false;
+
+    const u8 type = visual->getType();
+    if (type != MT_OZZ_STATIC && type != MT_OZZ_ANIMATED)
         return false;
 
     auto* ozz_visual = static_cast<COzzKinematicsVisual*>(visual);
@@ -676,7 +688,11 @@ bool CRender::PlayOzzLegacyMotion(IRenderVisual* visual, const xr_string& motion
 bool CRender::EnumerateOzzLegacyMotions(IRenderVisual* visual, xr_vector<xr_string>& out_names)
 {
     out_names.clear();
-    if (!visual || visual->getType() != MT_OZZ_BUNDLE)
+    if (!visual)
+        return false;
+
+    const u8 type = visual->getType();
+    if (type != MT_OZZ_STATIC && type != MT_OZZ_ANIMATED)
         return false;
 
     auto* ozz_visual = static_cast<COzzKinematicsVisual*>(visual);

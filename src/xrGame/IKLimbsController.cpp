@@ -33,7 +33,15 @@ void CIKLimbsController::Create(CGameObject* O)
     m_object = O;
 
     IRenderVisual* visual = m_object->Visual();
-    m_supports_ozz = visual && visual->getType() == MT_OZZ_BUNDLE;
+    if (visual)
+    {
+        const u8 type = visual->getType();
+        m_supports_ozz = (type == MT_OZZ_STATIC || type == MT_OZZ_ANIMATED);
+    }
+    else
+    {
+        m_supports_ozz = false;
+    }
     m_pending_legacy_teardown = false;
 
     if (!K)

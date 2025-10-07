@@ -891,7 +891,12 @@ bool OzzKinematicsAnimated::EnsureAnimationController()
 
 void OzzKinematicsAnimated::OnCalculateBones()
 {
-    CalculateBones(TRUE);
+    UpdateTracks();
+}
+
+void OzzKinematicsAnimated::CalculateBones(BOOL bForceExact)
+{
+    core.CalculateTransforms(bForceExact);
 }
 
 #ifdef DEBUG

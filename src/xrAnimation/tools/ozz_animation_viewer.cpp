@@ -3803,6 +3803,12 @@ private:
                 if (ozz::math::AreAllTrue1(ozz::math::CmpGt(axis_len_sq, min_len)))
                 {
                     chain.mid_axis = ozz::math::Normalize3(axis_candidate);
+                    // Legs bend backwards (knees bend opposite to elbows)
+                    // Negate the axis for leg chains
+                    if (chain.role == LimbIkChain::Role::Leg)
+                    {
+                        chain.mid_axis = -chain.mid_axis;
+                    }
                 }
             }
         };

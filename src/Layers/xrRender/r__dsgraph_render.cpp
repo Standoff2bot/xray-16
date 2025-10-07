@@ -389,7 +389,8 @@ void R_dsgraph_structure::render_R1_box(IRender_Sector::sector_id_t sector_id, F
             }
         }
         break;
-        case MT_OZZ_BUNDLE:
+        case MT_OZZ_STATIC:
+        case MT_OZZ_ANIMATED:
         {
             auto* pV = static_cast<COzzKinematicsVisual*>(V);
             pV->Kinematics()->CalculateBones(TRUE);

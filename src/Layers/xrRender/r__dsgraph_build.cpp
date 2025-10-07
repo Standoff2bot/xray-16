@@ -328,7 +328,8 @@ void R_dsgraph_structure::add_leafs_dynamic(IRenderable* root, dxRender_Visual* 
         }
     }
         return;
-    case MT_OZZ_BUNDLE:
+    case MT_OZZ_STATIC:
+    case MT_OZZ_ANIMATED:
     {
         auto* visual = static_cast<COzzKinematicsVisual*>(pVisual);
         visual->Kinematics()->CalculateBones(TRUE);
@@ -406,7 +407,8 @@ void R_dsgraph_structure::add_leafs_static(dxRender_Visual* pVisual)
         }
     }
         return;
-    case MT_OZZ_BUNDLE:
+    case MT_OZZ_STATIC:
+    case MT_OZZ_ANIMATED:
     {
         auto* visual = static_cast<COzzKinematicsVisual*>(pVisual);
         visual->Kinematics()->CalculateBones(TRUE);

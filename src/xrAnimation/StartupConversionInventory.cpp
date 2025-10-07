@@ -361,7 +361,8 @@ bool WriteBundleFile(const xr_string& output_alias,
         return false;
 
     OzzxBundle bundle;
-    bundle.version = 2u;
+    bundle.version = 3u;
+    bundle.model_type = conversion.model_type;
     bundle.skeleton = conversion.skeleton_binary;
     bundle.mesh = conversion.mesh_binary;
     bundle.motion_refs = conversion.motion_refs;

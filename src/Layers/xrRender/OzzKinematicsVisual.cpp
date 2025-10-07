@@ -129,7 +129,7 @@ static inline Fvector4 ReadVector4(const ozz::vector<float>& data, int index, in
 COzzSkinnedSurface::COzzSkinnedSurface(COzzKinematicsVisual& owner, const ozz::sample::Mesh& mesh)
     : owner_(owner)
 {
-    Type = MT_OZZ_SKINNED;
+    Type = mesh.xray_metadata.ogf_type;
     InitializeGeometry(mesh);
     dbg_name = mesh.xray_metadata.texture_path.c_str();
     Msg("Yohji debug - init COzzSkinnedSurface %s", dbg_name.c_str());
@@ -351,7 +351,7 @@ void COzzSkinnedSurface::Release()
 
 COzzKinematicsVisual::COzzKinematicsVisual()
 {
-    Type = MT_OZZ_BUNDLE;
+    Type = MT_OZZ_ANIMATED;  // Default, will be overwritten from bundle
     initialized_ = false;
 }
 
@@ -512,6 +512,9 @@ bool COzzKinematicsVisual::LoadFromBundle(const char* name, const std::filesyste
     R_ASSERT2(XRay::Animation::ReadOzzxBundle(path, bundle), error_msg.c_str());
 
     R_ASSERT2(!bundle.skeleton.empty(), "Ozz bundle missing skeleton payload");
+
+    // Set visual type from bundle
+    Type = bundle.model_type;
 
     skeleton_payload_.assign(bundle.skeleton.begin(), bundle.skeleton.end());
     mesh_payload_.assign(bundle.mesh.begin(), bundle.mesh.end());
@@ -704,7 +707,8 @@ bool COzzKinematicsVisual::IsKinematicsReady() const
 
 bool COzzKinematicsVisual::RequiresAnimation() const
 {
-    return !motion_references_.empty() || !embedded_animation_payload_.empty();
+    // Use MT type from bundle to determine if we need animation system
+    return Type == MT_OZZ_ANIMATED;
 }
 
 bool COzzKinematicsVisual::LoadAnimationFromFile(const std::filesystem::path& path)

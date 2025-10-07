@@ -54,6 +54,7 @@ struct LegacyVisualConversionResult
     ExtendedBoneMetadataCollection bone_metadata;
     std::vector<std::uint8_t> user_data;
     std::vector<std::uint8_t> embedded_animation_binary;
+    std::uint8_t model_type = 0;  // MT enum value - set by converter based on motion refs
 };
 
 bool ConvertLegacyVisualToOzzBundle(const LegacyVisualInput& input,

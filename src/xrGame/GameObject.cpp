@@ -161,8 +161,12 @@ void CGameObject::cNameVisual_set(shared_str N)
         if (resolved_ozz_bundle)
             Msg("[ozz] '%s' resolved to bundle '%s'", requested_visual, load_visual);
 #endif
-        if (renderable.visual && renderable.visual->getType() == MT_OZZ_BUNDLE && GEnv.Render)
-            GEnv.Render->RequestOzzPaletteDebugDump();
+        if (renderable.visual && GEnv.Render)
+        {
+            const u8 type = renderable.visual->getType();
+            if (type == MT_OZZ_STATIC || type == MT_OZZ_ANIMATED)
+                GEnv.Render->RequestOzzPaletteDebugDump();
+        }
         IKinematics* old_k = old_v ? old_v->dcast_PKinematics() : NULL;
         IKinematics* new_k = renderable.visual->dcast_PKinematics();
         /*

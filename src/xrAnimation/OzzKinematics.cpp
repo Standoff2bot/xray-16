@@ -11,6 +11,7 @@ OzzKinematics::OzzKinematics()
     : stubBoneData(u16(-1))  // Initialize with invalid bone ID
 {
     stubBoneInstance.construct();
+    core.SetOwner(this);  // Set this as the owner for callbacks
 }
 
 // Destructor

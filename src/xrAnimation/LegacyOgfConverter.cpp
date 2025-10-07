@@ -2554,6 +2554,35 @@ void ConvertLegacyVisualToOzzBundleImpl(const LegacyVisualInput& input,
         }
     }
 
+    // Determine model type based on original OGF header type
+    std::uint8_t original_ogf_type = 0;
+    if (const auto header_it = chunks.find(kChunkHeader); header_it != chunks.end())
+    {
+        const Chunk& header_chunk = header_it->second;
+        if (header_chunk.size >= sizeof(ogf_header))
+        {
+            ogf_header header{};
+            std::memcpy(&header, header_chunk.data, sizeof(header));
+            original_ogf_type = header.type;
+        }
+    }
+
+    // Map legacy MT types to ozz MT types
+    if (original_ogf_type == MT_SKELETON_ANIM)
+    {
+        out_result.model_type = MT_OZZ_ANIMATED;
+    }
+    else if (original_ogf_type == MT_SKELETON_RIGID)
+    {
+        out_result.model_type = MT_OZZ_STATIC;
+    }
+    else
+    {
+        // Fallback: check if we have animations
+        const bool has_animations = !out_result.motion_refs.empty() || !out_result.embedded_animation_binary.empty();
+        out_result.model_type = has_animations ? MT_OZZ_ANIMATED : MT_OZZ_STATIC;
+    }
+
 }
 
 bool ConvertLegacyVisualToOzzBundle(const LegacyVisualInput& input,

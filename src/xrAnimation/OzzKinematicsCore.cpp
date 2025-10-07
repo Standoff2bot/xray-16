@@ -94,7 +94,7 @@ Fobb BuildFallbackObbFromShape(const SBoneShape& shape)
 } // namespace
 
 OzzKinematicsCore::OzzKinematicsCore()
-    : userData(nullptr), rootBone(BI_NONE), visibleMask(0), updateCallback(nullptr), updateCallbackParam(nullptr),
+    : userData(nullptr), rootBone(BI_NONE), visibleMask(0), updateCallback(nullptr), updateCallbackParam(nullptr), ownerKinematics(nullptr),
       lastUpdateTime(0), visibilityCounter(0), initialized(false)
 {
     cachedBox.invalidate();
@@ -698,8 +698,8 @@ void OzzKinematicsCore::CalculateTransforms(bool force_exact)
     cachedBox = box;
     lastUpdateTime = current_time;
 
-    if (updateCallback)
-        updateCallback(reinterpret_cast<IKinematics*>(this));
+    if (updateCallback && ownerKinematics)
+        updateCallback(ownerKinematics);
 
     OnCalculateBones();
 }
