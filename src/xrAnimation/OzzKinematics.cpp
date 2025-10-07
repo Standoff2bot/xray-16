@@ -870,7 +870,15 @@ bool OzzKinematics::LoadOzzAnimationsFromFile(const xr_string& relative_path)
 
         payload.resize(static_cast<size_t>(length));
         if (!payload.empty())
-            file.Read(payload.data(), payload.size());
+        {
+            const size_t bytes_read = file.Read(payload.data(), payload.size());
+            if (bytes_read != payload.size())
+            {
+                Msg("[ozz] failed to read %zu bytes from '%s' (got %zu)", payload.size(), absolute.string().c_str(),
+                    bytes_read);
+                return false;
+            }
+        }
     }
     else
     {
@@ -882,7 +890,15 @@ bool OzzKinematics::LoadOzzAnimationsFromFile(const xr_string& relative_path)
         const size_t length = static_cast<size_t>(reader->length());
         payload.resize(length);
         if (length > 0)
+        {
+            if (!reader->pointer())
+            {
+                Msg("[ozz] reader for '%s' returned null pointer", relative_path.c_str());
+                FS.r_close(reader);
+                return false;
+            }
             std::memcpy(payload.data(), reader->pointer(), length);
+        }
         FS.r_close(reader);
     }
 
@@ -1964,9 +1980,64 @@ void OzzKinematics::LL_BuldBoneMatrixDequatize(const CBoneData* bd, u8 channel_m
     }
 }
 
-void OzzKinematics::LL_BoneMatrixBuild(CBoneInstance& /*bi*/, const Fmatrix* /*parent*/, const SKeyTable& /*keys*/)
+void OzzKinematics::LL_BoneMatrixBuild(CBoneInstance& bi, const Fmatrix* parent, const SKeyTable& keys)
 {
-    NotImplemented(__FUNCTION__);
+    CKey channel_keys[MAX_CHANNELS];
+    Render::animation::channel_def channel_defs[MAX_CHANNELS];
+    u16 channel_count = 0;
+
+    for (u16 channel = 0; channel < MAX_CHANNELS; ++channel)
+    {
+        if (channel != 0 && keys.chanel_blend_conts[channel] == 0)
+            continue;
+
+        Render::animation::channel_def def{};
+        def.rule = channelRules[channel];
+        def.factor = channelFactors[channel];
+
+        channel_defs[channel_count] = def;
+        xray::render::RENDER_NAMESPACE::process_single_channel(channel_keys[channel_count], def, keys.keys[channel], keys.blends[channel],
+            keys.chanel_blend_conts[channel]);
+        ++channel_count;
+    }
+
+    if (channel_count == 0)
+    {
+        if (parent)
+            bi.mTransform = *parent;
+        else
+            bi.mTransform.identity();
+        return;
+    }
+
+    CKey mixed_key;
+    xray::render::RENDER_NAMESPACE::MixChannels(mixed_key, channel_keys, channel_defs, channel_count);
+
+    Fmatrix local_matrix;
+    local_matrix.mk_xform(mixed_key.Q, mixed_key.T);
+
+    if (parent)
+        bi.mTransform.mul_43(*parent, local_matrix);
+    else
+        bi.mTransform = local_matrix;
+
+#ifdef DEBUG
+#ifndef _EDITOR
+    if (!xray::render::RENDER_NAMESPACE::check_scale(local_matrix))
+    {
+        VERIFY(xray::render::RENDER_NAMESPACE::check_scale(bi.mTransform));
+    }
+    VERIFY(_valid(bi.mTransform));
+
+    Fbox dbg_box;
+    constexpr float kBoxExtent = 100000.f;
+    dbg_box.set(-kBoxExtent, -kBoxExtent, -kBoxExtent, kBoxExtent, kBoxExtent, kBoxExtent);
+    VERIFY2(dbg_box.contains(bi.mTransform.c),
+        make_string("[OzzKinematics] bone transform out of bounds: (%.3f, %.3f, %.3f)", bi.mTransform.c.x,
+            bi.mTransform.c.y, bi.mTransform.c.z)
+            .c_str());
+#endif
+#endif
 }
 
 IBlendDestroyCallback* OzzKinematics::GetBlendDestroyCallback()
