@@ -36,9 +36,6 @@
     <ClInclude Include="OzzBundle.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="OzzKinematics.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="OzzConversion.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -50,6 +47,18 @@
     </ClInclude>
     <ClInclude Include="LegacyOmfConverter.h">
       <Filter>Converters</Filter>
+    </ClInclude>
+    <ClInclude Include="StartupConversionInventory.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OzzKinematics.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
+    <ClInclude Include="OzzKinematicsCore.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
+    <ClInclude Include="OzzKinematicsAnimated.h">
+      <Filter>Animation System</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -74,9 +83,6 @@
     <ClCompile Include="tests\test_converter.cpp">
       <Filter>tests</Filter>
     </ClCompile>
-    <ClCompile Include="OzzKinematics.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="OzzBundle.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -88,6 +94,21 @@
     </ClCompile>
     <ClCompile Include="LegacyOgfConverter.cpp">
       <Filter>Converters</Filter>
+    </ClCompile>
+    <ClCompile Include="StartupConversionInventory.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Externals\ozz-animation\samples\framework\mesh.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OzzKinematics.cpp">
+      <Filter>Animation System</Filter>
+    </ClCompile>
+    <ClCompile Include="OzzKinematicsAnimated.cpp">
+      <Filter>Animation System</Filter>
+    </ClCompile>
+    <ClCompile Include="OzzKinematicsCore.cpp">
+      <Filter>Animation System</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

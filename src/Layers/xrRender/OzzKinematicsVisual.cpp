@@ -244,7 +244,7 @@ void COzzSkinnedSurface::UpdateGeometry()
     }
 
     const xr_vector<Fmatrix>& palette = owner_.SkinningPalette();
-    OzzKinematics& kinematics = owner_.Kinematics();
+    OzzKinematics* kinematics = owner_.Kinematics();
 
     if (source_vertices_.empty() || palette.empty())
         return;
@@ -365,14 +365,17 @@ void COzzKinematicsVisual::DebugDumpPalette(const xr_vector<Fmatrix>& palette) c
     if (!AcquirePaletteDumpTicket())
         return;
 
-    const u16 bone_count = LL_BoneCount();
+    if (!kinematics_)
+        return;
+
+    const u16 bone_count = kinematics_->LL_BoneCount();
     if (bone_count == 0)
         return;
 
     xr_vector<Fmatrix> world_palette;
     world_palette.resize(bone_count);
     for (u16 idx = 0; idx < bone_count; ++idx)
-        world_palette[idx] = LL_GetTransform(idx);
+        world_palette[idx] = kinematics_->LL_GetTransform(idx);
 
 #ifdef DEBUG
     const char* label = dbg_name.size() ? dbg_name.c_str() : "<ozz_visual>";
@@ -408,9 +411,9 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
     // Create appropriate kinematics type
     if (is_animated_)
     {
-        auto animated = xr_make_unique<OzzKinematicsAnimated>();
-        animated_kinematics_ = animated.get();
-        kinematics_ = std::move(animated);
+        OzzKinematicsAnimated* animated = xr_new<OzzKinematicsAnimated>();
+        animated_kinematics_ = animated;
+        kinematics_.reset(animated);  // Takes ownership
     }
     else
     {

@@ -14,9 +14,22 @@
 - Physics features (ragdolls, bone shapes) still operate on `CBoneData` metadata stored with the visual, so any façade must preserve access to that structure even if Ozz owns the live pose buffers.
 
 ## Integration Strategy Overview
-- Introduce an `OzzKinematics` façade inside `xray-16/src/xrAnimation/` that implements `IKinematics` (and, in a follow-up, `IKinematicsAnimated`) while delegating pose evaluation to ozz-animation jobs.
+- Three-tier architecture inside `xray-16/src/xrAnimation/`:
+  - **OzzKinematicsCore**: Core skeleton and bone state management without implementing any interfaces
+  - **OzzKinematics**: Implements `IKinematics` for static (non-animated) models
+  - **OzzKinematicsAnimated**: Extends `OzzKinematics` and implements `IKinematicsAnimated` for animated models
 - Keep `CBoneInstance` arrays alive so legacy systems continue reading/writing transforms and callbacks. The façade will synchronize these instances with Ozz joint output after each evaluation pass.
 - Treat the converted `.ozz` skeleton as the source of truth for hierarchy/poses, but retain the legacy `CBoneData` graph for metadata (names, physics shapes, wallmarks). Store a stable mapping (`bone_id → joint index`) compiled during asset import.
+
+### Architecture Rationale (2025-10-07 Refactoring)
+The original monolithic `OzzKinematics_legacy` was refactored to match the legacy engine pattern where `CKinematics` (static) and `CKinematicsAnimated` (animated) are separate classes. Key benefits:
+
+1. **Eliminates "$editor" spam**: Static props/models return `nullptr` from `dcast_PKinematicsAnimated()`, so the engine doesn't try to update non-existent animation state
+2. **Memory efficiency**: Static models don't allocate animation buffers, blend pools, or motion libraries
+3. **Code clarity**: Clean separation between skeleton management (Core), static pose (Kinematics), and animation playback (KinematicsAnimated)
+4. **Composition over inheritance**: `COzzKinematicsVisual` uses composition and conditionally creates either static or animated kinematics based on whether motion references exist
+
+The refactoring maintains full API compatibility while improving performance and reducing console spam.
 
 ### Data Ownership & Layout
 - Runtime members: `ozz::vector<SimdFloat4>` local transforms, `ozz::vector<Float4x4>` model-space matrices, and a scratch buffer for sampling/blending jobs mirroring Ozz samples (`SamplingJob::Context`, `LocalToModelJob::Context`).
@@ -45,8 +58,13 @@
 2. **Data Bootstrap** *(done)*: `.ozz` skeleton + legacy `CBoneData` mapping is in place, including name/ID lookup helpers.
 3. **Pose Evaluation Core** *(done)*: `CalculateBones` drives Ozz sampling/local-to-model jobs, honours callbacks/visibility, and refreshes bounding volumes.
 4. **Compatibility Layer** *(done)*: helpers such as `Bone_GetAnimPos`, wallmarks, and bundle hydration keep downstream systems unchanged; `.ozzx` bundles feed `COzzKinematicsVisual`.
-5. **Animated Extension** *(next)*: expand `OzzKinematics` into a full `IKinematicsAnimated` bridge and surface richer motion metadata.
-6. **Validation** *(ongoing)*: maintain parity comparisons for representative actors (`stalker_hero`, weapon rigs) via regression scripts and CI entry points.
+5. **Architecture Refactoring** *(done - 2025-10-07)*: Split monolithic `OzzKinematics_legacy` into three-tier architecture:
+   - **OzzKinematicsCore**: Shared skeleton/bone state management without interface obligations
+   - **OzzKinematics**: Static kinematics implementing `IKinematics` only (returns `nullptr` from `dcast_PKinematicsAnimated()`)
+   - **OzzKinematicsAnimated**: Extends `OzzKinematics` and adds `IKinematicsAnimated` implementation
+   - **Benefit**: Static models no longer carry animation baggage, eliminating "$editor" spam and matching legacy architecture pattern (CKinematics vs CKinematicsAnimated)
+6. **Animated Extension** *(done)*: `OzzKinematicsAnimated` provides full `IKinematicsAnimated` bridge with motion library, blend management, and animation playback.
+7. **Validation** *(ongoing)*: maintain parity comparisons for representative actors (`stalker_hero`, weapon rigs) via regression scripts and CI entry points.
 
 ### Future Enhancement
 - Provide an optional startup flag that scans legacy `.ogf/.omf` assets (whether loose or inside packed `.db` archives), converts them to `.ozz/.ozzx` on first launch, and writes the results back to the matching paths under `gamedata`. This removes the need to ship huge preconverted bundles while keeping runtime loading identical.

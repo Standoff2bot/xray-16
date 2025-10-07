@@ -48,7 +48,6 @@ public:
     bool LoadFromBundle(const char* name, const std::filesystem::path& path);
 
     // Interface casts
-    IRenderVisual* dcast_RenderVisual() override { return this; }
     IKinematics* dcast_PKinematics() override;
     IKinematicsAnimated* dcast_PKinematicsAnimated() override;
     COzzKinematicsVisual* dcast_OzzKinematics() override { return this; }

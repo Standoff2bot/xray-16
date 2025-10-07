@@ -1,7 +1,6 @@
 #include "stdafx.h"
 #include "OzzKinematics.h"
 #include "OzzConversion.h"
-#include "Layers/xrRender/AnimationKeyCalculate.h"
 #include "xrEngine/device.h"
 
 namespace XRay::Animation
@@ -9,6 +8,7 @@ namespace XRay::Animation
 
 // Constructor
 OzzKinematics::OzzKinematics()
+    : stubBoneData(u16(-1))  // Initialize with invalid bone ID
 {
     stubBoneInstance.construct();
 }
@@ -280,11 +280,6 @@ void* OzzKinematics::GetUpdateCallbackParam()
 IRenderVisual* OzzKinematics::dcast_RenderVisual()
 {
     return nullptr;
-}
-
-IKinematics* OzzKinematics::dcast_PKinematics()
-{
-    return this;
 }
 
 IKinematicsAnimated* OzzKinematics::dcast_PKinematicsAnimated()

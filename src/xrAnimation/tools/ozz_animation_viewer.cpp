@@ -1991,7 +1991,7 @@ protected:
             {
                 external_animation_requested = false;
             }
-            if (external_animation_requested && !fs::exists(fs::path(OPTIONS_animation)))
+            if (external_animation_requested && !fs::exists(fs::path(OPTIONS_animation.value())))
             {
                 external_animation_requested = false;
             }
@@ -2055,7 +2055,7 @@ protected:
             {
                 if (std::strcmp(OPTIONS_animation, "media/animation.ozz") != 0)
                 {
-                    should_attempt = fs::exists(fs::path(OPTIONS_animation));
+                    should_attempt = fs::exists(fs::path(OPTIONS_animation.value()));
                 }
             }
             if (should_attempt)

@@ -61,8 +61,7 @@ public:
     // User data
     CInifile* GetUserData() { return userData; }
 
-protected:
-    // Bone access for derived classes
+    // Bone access
     struct BoneInfo
     {
         shared_str name;
@@ -101,6 +100,8 @@ protected:
     // Bone lookup accelerators
     IKinematics::accel* GetBoneMapByName() { return &boneMapByName; }
     IKinematics::accel* GetBoneMapByPtr() { return &boneMapByPtr; }
+
+protected:
 
 protected:
     // Virtual hooks for derived classes

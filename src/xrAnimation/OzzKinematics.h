@@ -13,7 +13,7 @@ class OzzKinematics : public IKinematics
 {
 public:
     OzzKinematics();
-    ~OzzKinematics() override;
+    ~OzzKinematics();
 
     // Initialization - forward to core
     bool InitializeFromOzz(pcstr skeletonPath);
@@ -81,7 +81,6 @@ public:
     void* GetUpdateCallbackParam() override;
 
     IRenderVisual* dcast_RenderVisual() override;
-    IKinematics* dcast_PKinematics() override;
     IKinematicsAnimated* dcast_PKinematicsAnimated() override;
 
 #ifdef DEBUG

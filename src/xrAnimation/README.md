@@ -6,15 +6,23 @@ This module hosts the ongoing effort to move the OpenXRay animation toolchain an
 
 - **Asset conversion**: The `xray_to_ozz_converter` CLI and helper scripts convert `.ogf/.omf` pairs into `.ozz` skeletons/animations plus `.ozzx` bundles. Outputs are regression-tested against Blender exports.
 - **Visualization**: `ozz_animation_viewer` loads converted bundles, dumps bind-pose/animation data, and provides profiling overlays to compare with upstream ozz samples.
-- **Runtime façade**: `OzzKinematics` evaluates bind pose and sampled animation, handles visibility masks, `CBoneInstance` callbacks, additional bone transforms, and hydrates the `.ozzx` visual while conforming to `IKinematics` expectations.
+- **Runtime façade**: Three-tier architecture (2025-10-07 refactoring):
+  - `OzzKinematicsCore`: Shared skeleton/bone state management
+  - `OzzKinematics`: Static models implementing `IKinematics` only
+  - `OzzKinematicsAnimated`: Animated models extending `OzzKinematics` with `IKinematicsAnimated`
+  - **Key benefit**: Static models return `nullptr` from `dcast_PKinematicsAnimated()`, eliminating "$editor" spam
+- **Visual integration**: `COzzKinematicsVisual` uses composition to conditionally create static or animated kinematics based on motion references, hydrating from `.ozzx` bundles.
 - **Parity tests**: GoogleTest fixtures under `src/xrAnimation/tests` diff world-space transforms between legacy `CKinematics` and `OzzKinematics` for bind pose and sampled clips to ensure behaviour remains aligned.
-- **Operational focus**: With the MVP in place, current work centres on test automation, telemetry, and planning for threaded/GPU paths.
+- **Operational focus**: Architecture refactoring complete; next priorities are stability testing and performance validation.
 
 ## Key Components
 
 - `OzzConversion.*`: Matrix/transform helpers shared by the converter, tests, and runtime façade.
 - `OzzBundle.*`: Minimal reader/writer for `.ozzx` bundles (skeleton + mesh payload).
-- `OzzKinematics.*`: `IKinematics` implementation backed by ozz runtime jobs (`LocalToModelJob`, sampling contexts, visibility masks).
+- `OzzKinematicsCore.*`: Shared skeleton and bone state management (no interface implementation).
+- `OzzKinematics.*`: `IKinematics` implementation for static models - returns `nullptr` from `dcast_PKinematicsAnimated()`.
+- `OzzKinematicsAnimated.*`: Extends `OzzKinematics` with `IKinematicsAnimated` for animated models - includes motion library, blend management, and animation playback.
+- `OzzKinematics_legacy.*`: Original monolithic implementation (kept for reference, not used in builds).
 - `tests/`: Converter smoke tests, `ozz_kinematics_tests`, and parity fixtures that compare against legacy assets.
 - `tools/`: Viewer integration, converter CLI, and support scripts for running conversions on sample data.
 

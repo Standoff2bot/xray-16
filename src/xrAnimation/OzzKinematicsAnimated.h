@@ -85,6 +85,11 @@ public:
     CMotion* LL_GetMotion(MotionID id, u16 bone_id) override;
     void LL_BuldBoneMatrixDequatize(const CBoneData* bd, u8 channel_mask, SKeyTable& keys) override;
     void LL_BoneMatrixBuild(CBoneInstance& bi, const Fmatrix* parent, const SKeyTable& keys) override;
+
+    // Additional bone transforms (also in IKinematics, redeclared in IKinematicsAnimated)
+    void LL_AddTransformToBone(KinematicsABT::additional_bone_transform& offset) override;
+    void LL_ClearAdditionalTransform(u16 bone_id) override;
+
     IBlendDestroyCallback* GetBlendDestroyCallback() override;
     void SetBlendDestroyCallback(IBlendDestroyCallback* cb) override;
     void SetUpdateTracksCalback(IUpdateTracksCallback* callback) override;
@@ -123,7 +128,9 @@ public:
     const CPartition& partitions() const override;
     float get_animation_length(MotionID motion_ID) override;
 
-    // Override to return this for animated interface
+    // dcast methods (redeclared in IKinematicsAnimated)
+    IRenderVisual* dcast_RenderVisual() override { return nullptr; }
+    IKinematics* dcast_PKinematics() override { return this; }
     IKinematicsAnimated* dcast_PKinematicsAnimated() override { return this; }
 
 private:

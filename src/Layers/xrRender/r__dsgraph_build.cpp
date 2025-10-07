@@ -331,7 +331,7 @@ void R_dsgraph_structure::add_leafs_dynamic(IRenderable* root, dxRender_Visual* 
     case MT_OZZ_BUNDLE:
     {
         auto* visual = static_cast<COzzKinematicsVisual*>(pVisual);
-        visual->Kinematics().CalculateBones(TRUE);
+        visual->Kinematics()->CalculateBones(TRUE);
         visual->EnsureSkinningPalette();
         for (auto& child : visual->children)
             add_leafs_dynamic(root, child, xform);
@@ -409,7 +409,7 @@ void R_dsgraph_structure::add_leafs_static(dxRender_Visual* pVisual)
     case MT_OZZ_BUNDLE:
     {
         auto* visual = static_cast<COzzKinematicsVisual*>(pVisual);
-        visual->Kinematics().CalculateBones(TRUE);
+        visual->Kinematics()->CalculateBones(TRUE);
         visual->EnsureSkinningPalette();
         for (auto& child : visual->children)
             insert_static(child);

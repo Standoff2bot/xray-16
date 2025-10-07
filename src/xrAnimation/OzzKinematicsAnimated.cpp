@@ -369,8 +369,8 @@ bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vecto
         return false;
     }
 
-    // Call base class initialization first
-    if (!OzzKinematics::InitializeFromOzz(skeletonPath, motionRefs))
+    // Initialize skeleton using core
+    if (!core.InitializeFromOzz(skeletonPath))
         return false;
 
     // Store motion references and initialize channels
@@ -383,8 +383,8 @@ bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vecto
 
 bool OzzKinematicsAnimated::InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData, const xr_vector<xr_string>& motionRefs)
 {
-    // Call base class initialization first
-    if (!OzzKinematics::InitializeFromOzzBuffer(skeletonData, motionRefs))
+    // Initialize skeleton using core
+    if (!core.InitializeFromOzzBuffer(skeletonData))
         return false;
 
     // Store motion references and initialize channels
@@ -876,10 +876,10 @@ bool OzzKinematicsAnimated::EnsureAnimationController()
     if (!animationController)
         animationController = xr_make_unique<OzzAnimationController>();
 
-    if (!initialized)
+    if (!core.IsInitialized())
         return false;
 
-    animationControllerReady = animationController && animationController->Initialize(skeleton);
+    animationControllerReady = animationController && animationController->Initialize(core.Skeleton());
     if (!animationControllerReady)
     {
         Msg("[OzzKinematicsAnimated] Failed to initialize animation controller for skeleton");
@@ -949,7 +949,8 @@ CMotion* OzzKinematicsAnimated::LL_GetRootMotion(MotionID id)
     if (!id.valid())
         return nullptr;
 
-    const u16 resolved_root = (rootBone != BI_NONE) ? rootBone : u16(0);
+    const u16 root_bone = core.GetRootBone();
+    const u16 resolved_root = (root_bone != BI_NONE) ? root_bone : u16(0);
     return LL_GetMotion(id, resolved_root);
 }
 
@@ -1485,6 +1486,18 @@ void OzzKinematicsAnimated::MotionLibrary::Add(MotionRecord&& record)
     const u16 index = static_cast<u16>(records.size());
     lookup[record.name] = index;
     records.push_back(std::move(record));
+}
+
+// Implementations for methods redeclared in IKinematicsAnimated
+// These are already implemented in OzzKinematics, just need to be exposed here
+void OzzKinematicsAnimated::LL_AddTransformToBone(KinematicsABT::additional_bone_transform& offset)
+{
+    OzzKinematics::LL_AddTransformToBone(offset);
+}
+
+void OzzKinematicsAnimated::LL_ClearAdditionalTransform(u16 bone_id)
+{
+    OzzKinematics::LL_ClearAdditionalTransform(bone_id);
 }
 
 } // namespace Animation

@@ -392,7 +392,7 @@ void R_dsgraph_structure::render_R1_box(IRender_Sector::sector_id_t sector_id, F
         case MT_OZZ_BUNDLE:
         {
             auto* pV = static_cast<COzzKinematicsVisual*>(V);
-            pV->Kinematics().CalculateBones(TRUE);
+            pV->Kinematics()->CalculateBones(TRUE);
             pV->EnsureSkinningPalette();
             for (auto& child : pV->children)
             {
