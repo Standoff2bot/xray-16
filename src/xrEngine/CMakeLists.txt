@@ -476,7 +476,7 @@ endif()
 target_compile_definitions(xrEngine
     PRIVATE
     ENGINE_BUILD
-    PURE_DYNAMIC_CAST
+    # PURE_DYNAMIC_CAST removed to use smart_cast with dcast methods
 )
 
 set_target_properties(xrEngine PROPERTIES

@@ -11,11 +11,13 @@
 #ifndef SMART_CAST_H
 #define SMART_CAST_H
 
-#ifdef DEBUG
-#ifndef PURE_DYNAMIC_CAST
-#define PURE_DYNAMIC_CAST
-#endif // PURE_DYNAMIC_CAST
-#endif // DEBUG
+// Disabled PURE_DYNAMIC_CAST in DEBUG mode to ensure dcast methods are used
+// This is necessary for COzzKinematicsVisual to work correctly with smart_cast
+// #ifdef DEBUG
+// #ifndef PURE_DYNAMIC_CAST
+// #define PURE_DYNAMIC_CAST
+// #endif // PURE_DYNAMIC_CAST
+// #endif // DEBUG
 
 #ifdef PURE_DYNAMIC_CAST
 #define smart_cast dynamic_cast
@@ -23,7 +25,9 @@
 #define TL_FAST_COMPILATION
 #include <loki/Typelist.h>
 
-#define PURE_DYNAMIC_CAST_COMPATIBILITY_CHECK
+// Disabled compatibility check - causes false positives with compositional design
+// (COzzKinematicsVisual uses composition instead of inheritance)
+// #define PURE_DYNAMIC_CAST_COMPATIBILITY_CHECK
 
 #ifdef DEBUG
 //#		define SMART_CAST_STATS_ALL
