@@ -32,8 +32,12 @@ set(SOURCES
     LegacyOgfConverter.h
     LegacyOmfConverter.cpp
     LegacyOmfConverter.h
+    OzzKinematicsCore.cpp
+    OzzKinematicsCore.h
     OzzKinematics.cpp
     OzzKinematics.h
+    OzzKinematicsAnimated.cpp
+    OzzKinematicsAnimated.h
     StartupConversionInventory.cpp
     StartupConversionInventory.h
     ../../Externals/ozz-animation/samples/framework/mesh.cc

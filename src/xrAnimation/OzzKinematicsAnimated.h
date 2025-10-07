@@ -1,0 +1,189 @@
+#pragma once
+
+#include "OzzKinematics.h"
+#include "Include/xrRender/KinematicsAnimated.h"
+#include "Include/xrRender/animation_motion.h"
+#include "Layers/xrRender/Animation.h"
+#include "OzzAnimationController.h"
+#include "xrCommon/xr_unordered_map.h"
+
+#include <filesystem>
+#include <memory>
+
+class CMotion;
+class CMotionDef;
+
+namespace XRay::Animation
+{
+/**
+ * Animated kinematics implementation using Ozz runtime.
+ * This class extends OzzKinematics with IKinematicsAnimated functionality.
+ */
+class OzzKinematicsAnimated : public OzzKinematics, public IKinematicsAnimated
+{
+public:
+    OzzKinematicsAnimated();
+    ~OzzKinematicsAnimated() override;
+
+    // Initialization with motion references
+    bool InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
+    bool InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData,
+                                 const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
+
+    // Animation-specific initialization
+    void SetEmbeddedAnimationData(const std::vector<std::uint8_t>& data);
+
+    // Animation management
+    bool PlayLegacyMotion(const xr_string& motion_name);
+    xr_vector<xr_string> LegacyMotionNames();
+    bool LoadAnimationFromFile(const std::filesystem::path& path);
+    void StopAnimation();
+    bool AdvanceAnimation(float dt);
+    bool HasActiveAnimation() const { return animationApplied; }
+    bool HasLoadedAnimation() const;
+
+    // Motion record for legacy compatibility
+    struct MotionRecord
+    {
+        xr_string name;
+        std::shared_ptr<ozz::animation::Animation> animation;
+        CMotionDef definition;
+        MotionID id;
+        u32 frameCount = 0;
+        xr_vector<xr_unique_ptr<CMotion>> boneMotions;
+    };
+
+    // Active blend tracking
+    struct ActiveBlendEntry
+    {
+        ActiveBlendEntry() = default;
+        ActiveBlendEntry(ActiveBlendEntry&&) = default;
+        ActiveBlendEntry& operator=(ActiveBlendEntry&&) = default;
+        ActiveBlendEntry(const ActiveBlendEntry&) = delete;
+        ActiveBlendEntry& operator=(const ActiveBlendEntry&) = delete;
+
+        xr_unique_ptr<CBlend> blend;
+        MotionID motionId{};
+        u16 partition = BI_NONE;
+        u8 channel = 0;
+        u16 recordIndex = u16(-1);
+    };
+
+    // IKinematicsAnimated implementation
+    void OnCalculateBones() override;
+#ifdef DEBUG
+    std::pair<LPCSTR, LPCSTR> LL_MotionDefName_dbg(MotionID ID) override;
+    void LL_DumpBlends_dbg() override;
+#endif
+    u32 LL_PartBlendsCount(u32 bone_part_id) override;
+    CBlend* LL_PartBlend(u32 bone_part_id, u32 n) override;
+    void LL_IterateBlends(IterateBlendsCallback& callback) override;
+    u16 LL_MotionsSlotCount() override;
+    const shared_motions& LL_MotionsSlot(u16 idx) override;
+    CMotionDef* LL_GetMotionDef(MotionID id) override;
+    CMotion* LL_GetRootMotion(MotionID id) override;
+    CMotion* LL_GetMotion(MotionID id, u16 bone_id) override;
+    void LL_BuldBoneMatrixDequatize(const CBoneData* bd, u8 channel_mask, SKeyTable& keys) override;
+    void LL_BoneMatrixBuild(CBoneInstance& bi, const Fmatrix* parent, const SKeyTable& keys) override;
+    IBlendDestroyCallback* GetBlendDestroyCallback() override;
+    void SetBlendDestroyCallback(IBlendDestroyCallback* cb) override;
+    void SetUpdateTracksCalback(IUpdateTracksCallback* callback) override;
+    IUpdateTracksCallback* GetUpdateTracksCalback() override;
+
+    MotionID LL_MotionID(LPCSTR B) override;
+    u16 LL_PartID(LPCSTR B) override;
+
+    CBlend* LL_PlayCycle(u16 partition, MotionID motion, BOOL bMixing, float blendAccrue,
+                         float blendFalloff, float Speed, BOOL noloop,
+                         PlayCallback Callback, LPVOID CallbackParam, u8 channel = 0) override;
+    CBlend* LL_PlayCycle(u16 partition, MotionID motion, BOOL bMixIn,
+                        PlayCallback Callback, LPVOID CallbackParam, u8 channel = 0) override;
+    void LL_CloseCycle(u16 partition, u8 mask_channel = (1 << 0)) override;
+    void LL_SetChannelFactor(u16 channel, float factor) override;
+    void UpdateTracks() override;
+    void LL_UpdateTracks(float dt, bool b_force, bool leave_blends) override;
+
+    MotionID ID_Cycle(LPCSTR N) override;
+    MotionID ID_Cycle_Safe(LPCSTR N) override;
+    MotionID ID_Cycle(shared_str N) override;
+    MotionID ID_Cycle_Safe(shared_str N) override;
+    CBlend* PlayCycle(LPCSTR N, BOOL bMixIn = TRUE, PlayCallback Callback = nullptr,
+                     LPVOID CallbackParam = nullptr, u8 channel = 0) override;
+    CBlend* PlayCycle(MotionID M, BOOL bMixIn = TRUE, PlayCallback Callback = nullptr,
+                     LPVOID CallbackParam = nullptr, u8 channel = 0) override;
+    CBlend* PlayCycle(u16 partition, MotionID M, BOOL bMixIn = TRUE,
+                     PlayCallback Callback = nullptr, LPVOID CallbackParam = nullptr, u8 channel = 0) override;
+
+    MotionID ID_FX(LPCSTR N) override;
+    MotionID ID_FX_Safe(LPCSTR N) override;
+    CBlend* PlayFX(LPCSTR N, float power_scale) override;
+    CBlend* PlayFX(MotionID M, float power_scale) override;
+    CBlend* PlayFX_Safe(cpcstr N, float power_scale) override;
+
+    const CPartition& partitions() const override;
+    float get_animation_length(MotionID motion_ID) override;
+
+    // Override to return this for animated interface
+    IKinematicsAnimated* dcast_PKinematicsAnimated() override { return this; }
+
+private:
+    // Motion library management
+    struct MotionLibrary
+    {
+        xr_vector<MotionRecord> records;
+        xr_unordered_map<xr_string, u16> lookup;
+
+        void Reset();
+        bool Contains(const xr_string& name) const;
+        MotionRecord* Find(u16 index);
+        const MotionRecord* Find(u16 index) const;
+        MotionRecord* Find(const xr_string& name);
+        const MotionRecord* Find(const xr_string& name) const;
+        u16 NextIndex() const;
+        void Add(MotionRecord&& record);
+    };
+
+    void ResetAnimationState();
+    void InitializeChannelState();
+    void EnsureMotionLibraryLoaded();
+    bool LoadMotionReference(const xr_string& reference);
+    bool LoadLegacyMotion(const xr_string& motion_name);
+    MotionID ResolveLegacyMotionId(const xr_string& motion_name);
+    bool LoadOzzAnimationsFromFile(const xr_string& relative_path);
+    bool LoadOzzAnimationsFromArchive(ozz::io::IArchive& archive, const xr_string& source_label);
+
+    int FindActiveBlendIndex(u16 partition, u8 channel) const;
+    void RemoveActiveBlend(size_t index, bool notifyDestroy);
+    void ClearActiveBlends(bool notifyDestroy);
+    void ResetAnimationControllerState();
+    bool EnsureAnimationController();
+
+private:
+    // Animation controller
+    xr_unique_ptr<OzzAnimationController> animationController;
+    bool animationControllerReady = false;
+
+    // Motion library
+    MotionLibrary motionLibrary;
+    xr_vector<xr_string> motionReferences;
+    std::vector<std::uint8_t> embeddedAnimationData;
+    bool motionLibraryBuilt = false;
+
+    // Active blends
+    xr_vector<ActiveBlendEntry> activeBlends;
+    MotionID controllerMotion{};
+    bool animationApplied = false;
+
+    // Callbacks
+    IBlendDestroyCallback* blendDestroyCallback = nullptr;
+    IUpdateTracksCallback* updateTracksCallback = nullptr;
+
+    // Channel state
+    xray::render::RENDER_NAMESPACE::animation::channal_rule channelRules[MAX_CHANNELS]{};
+    float channelFactors[MAX_CHANNELS]{};
+
+    // Partition (for compatibility)
+    CPartition defaultPartition{};
+};
+
+} // namespace XRay::Animation

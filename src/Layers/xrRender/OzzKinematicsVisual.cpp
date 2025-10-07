@@ -403,21 +403,48 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
         return false;
 
     initialized_ = false;
+    is_animated_ = RequiresAnimation();
 
-    ozz::span<const std::byte> skeleton_span(reinterpret_cast<const std::byte*>(skeleton_payload_.data()), skeleton_payload_.size());
-    if (!InitializeFromOzzBuffer(skeleton_span, motion_references_))
+    // Create appropriate kinematics type
+    if (is_animated_)
     {
-        Msg("[OzzKinematicsVisual] Failed to initialize kinematics from cached payload");
-        return false;
+        auto animated = xr_make_unique<OzzKinematicsAnimated>();
+        animated_kinematics_ = animated.get();
+        kinematics_ = std::move(animated);
+    }
+    else
+    {
+        kinematics_ = xr_make_unique<OzzKinematics>();
+        animated_kinematics_ = nullptr;
     }
 
-    if (!LoadUserDataFromBuffer(user_data_payload_) && !user_data_payload_.empty())
+    ozz::span<const std::byte> skeleton_span(reinterpret_cast<const std::byte*>(skeleton_payload_.data()), skeleton_payload_.size());
+
+    // Initialize with or without motion refs
+    if (is_animated_)
+    {
+        auto* animated = static_cast<OzzKinematicsAnimated*>(kinematics_.get());
+        if (!animated->InitializeFromOzzBuffer(skeleton_span, motion_references_))
+        {
+            Msg("[OzzKinematicsVisual] Failed to initialize animated kinematics from cached payload");
+            return false;
+        }
+        animated->SetEmbeddedAnimationData(embedded_animation_payload_);
+    }
+    else
+    {
+        if (!kinematics_->InitializeFromOzzBuffer(skeleton_span))
+        {
+            Msg("[OzzKinematicsVisual] Failed to initialize kinematics from cached payload");
+            return false;
+        }
+    }
+
+    if (!kinematics_->LoadUserDataFromBuffer(user_data_payload_) && !user_data_payload_.empty())
         Msg("[OzzKinematicsVisual] Failed to initialize user data from bundle payload");
 
-    if (!ApplyExtendedBoneMetadata(bone_metadata_))
+    if (!kinematics_->ApplyExtendedBoneMetadata(bone_metadata_))
         Msg("[OzzKinematicsVisual] Bone metadata application failed; falling back to defaults");
-
-    SetEmbeddedAnimationData(embedded_animation_payload_);
 
     if (meshes_.empty() && !mesh_payload_.empty())
     {
@@ -451,14 +478,14 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
     }
     bDontDelete = TRUE;
 
-    SetUpdateCallback(&COzzKinematicsVisual::HandleKinematicsUpdated);
-    SetUpdateCallbackParam(this);
+    kinematics_->SetUpdateCallback(&COzzKinematicsVisual::HandleKinematicsUpdated);
+    kinematics_->SetUpdateCallbackParam(this);
 
     last_animation_update_frame_ = u32(-1);
 
     initialized_ = true;
 
-    CalculateBones(TRUE);
+    kinematics_->CalculateBones(TRUE);
     OnPoseUpdated();
     EnsureSkinningPalette();
 
@@ -539,8 +566,11 @@ void COzzKinematicsVisual::Spawn()
 void COzzKinematicsVisual::Depart()
 {
     initialized_ = false;
-    SetUpdateCallback(nullptr);
-    SetUpdateCallbackParam(nullptr);
+    if (kinematics_)
+    {
+        kinematics_->SetUpdateCallback(nullptr);
+        kinematics_->SetUpdateCallbackParam(nullptr);
+    }
 
     DestroySurfaces();
     children.clear();
@@ -550,8 +580,13 @@ void COzzKinematicsVisual::Depart()
 
 void COzzKinematicsVisual::Release()
 {
-    SetUpdateCallback(nullptr);
-    SetUpdateCallbackParam(nullptr);
+    if (kinematics_)
+    {
+        kinematics_->SetUpdateCallback(nullptr);
+        kinematics_->SetUpdateCallbackParam(nullptr);
+    }
+    kinematics_.reset();
+    animated_kinematics_ = nullptr;
     skeleton_payload_.clear();
     mesh_payload_.clear();
     motion_references_.clear();
@@ -562,12 +597,16 @@ void COzzKinematicsVisual::Release()
     bone_palette_.clear();
     last_animation_update_frame_ = u32(-1);
     initialized_ = false;
+    is_animated_ = false;
     inherited::Release();
 }
 
 void COzzKinematicsVisual::UpdateBounds()
 {
-    const Fbox& box = GetBox();
+    if (!kinematics_)
+        return;
+
+    const Fbox& box = kinematics_->GetBox();
     vis.box = box;
 
     if (box.is_valid())
@@ -591,7 +630,7 @@ void COzzKinematicsVisual::UpdateSkinningPalette()
 
 void COzzKinematicsVisual::EnsureSkinningPalette()
 {
-    if (!initialized_ || !IsInitialized())
+    if (!initialized_ || !kinematics_ || !kinematics_->IsInitialized())
     {
         bone_palette_.clear();
         return;
@@ -603,14 +642,14 @@ void COzzKinematicsVisual::EnsureSkinningPalette()
         last_animation_update_frame_ = frame_id;
     }
 
-    if (!HasBones())
+    if (!kinematics_->HasBones())
     {
         bone_palette_.clear();
         return;
     }
 
-    CalculateBones(TRUE);
-    BuildSkinningPalette(bone_palette_, true);
+    kinematics_->CalculateBones(TRUE);
+    kinematics_->BuildSkinningPalette(bone_palette_, true);
 
     DebugDumpPalette(bone_palette_);
 }
@@ -635,9 +674,42 @@ void COzzKinematicsVisual::HandleKinematicsUpdated(IKinematics* kin)
     visual->OnPoseUpdated();
 }
 
+IKinematics* COzzKinematicsVisual::dcast_PKinematics()
+{
+    return kinematics_.get();
+}
+
+IKinematicsAnimated* COzzKinematicsVisual::dcast_PKinematicsAnimated()
+{
+    return animated_kinematics_;
+}
+
+OzzKinematicsAnimated* COzzKinematicsVisual::AnimatedKinematics()
+{
+    return animated_kinematics_;
+}
+
+const OzzKinematicsAnimated* COzzKinematicsVisual::AnimatedKinematics() const
+{
+    return animated_kinematics_;
+}
+
+bool COzzKinematicsVisual::IsKinematicsReady() const
+{
+    return initialized_ && kinematics_ && kinematics_->IsInitialized();
+}
+
+bool COzzKinematicsVisual::RequiresAnimation() const
+{
+    return !motion_references_.empty() || !embedded_animation_payload_.empty();
+}
+
 bool COzzKinematicsVisual::LoadAnimationFromFile(const std::filesystem::path& path)
 {
-    if (!OzzKinematics::LoadAnimationFromFile(path))
+    if (!animated_kinematics_)
+        return false;
+
+    if (!animated_kinematics_->LoadAnimationFromFile(path))
         return false;
 
     last_animation_update_frame_ = u32(-1);
@@ -646,18 +718,26 @@ bool COzzKinematicsVisual::LoadAnimationFromFile(const std::filesystem::path& pa
 
 void COzzKinematicsVisual::StopAnimation()
 {
-    OzzKinematics::StopAnimation();
-    last_animation_update_frame_ = u32(-1);
+    if (animated_kinematics_)
+    {
+        animated_kinematics_->StopAnimation();
+        last_animation_update_frame_ = u32(-1);
+    }
 }
 
 bool COzzKinematicsVisual::UpdateAnimation(float dt)
 {
-    return AdvanceAnimation(dt);
+    if (!animated_kinematics_)
+        return false;
+    return animated_kinematics_->AdvanceAnimation(dt);
 }
 
 bool COzzKinematicsVisual::PlayLegacyMotion(const xr_string& motion_name)
 {
-    if (!OzzKinematics::PlayLegacyMotion(motion_name))
+    if (!animated_kinematics_)
+        return false;
+
+    if (!animated_kinematics_->PlayLegacyMotion(motion_name))
         return false;
 
     last_animation_update_frame_ = u32(-1);
@@ -666,6 +746,8 @@ bool COzzKinematicsVisual::PlayLegacyMotion(const xr_string& motion_name)
 
 xr_vector<xr_string> COzzKinematicsVisual::LegacyMotionNames()
 {
-    return OzzKinematics::LegacyMotionNames();
+    if (!animated_kinematics_)
+        return xr_vector<xr_string>();
+    return animated_kinematics_->LegacyMotionNames();
 }
 } // namespace xray::render::RENDER_NAMESPACE
