@@ -239,7 +239,6 @@
   <ItemGroup>
     <ClInclude Include="LegacyOgfConverter.h" />
     <ClInclude Include="LegacyOmfConverter.h" />
-    <ClInclude Include="OzzAnimationController.h" />
     <ClInclude Include="OzzBundle.h" />
     <ClInclude Include="OzzConversion.h" />
     <ClInclude Include="OzzKinematics.h" />
@@ -252,7 +251,6 @@
   <ItemGroup>
     <ClCompile Include="LegacyOgfConverter.cpp" />
     <ClCompile Include="LegacyOmfConverter.cpp" />
-    <ClCompile Include="OzzAnimationController.cpp" />
     <ClCompile Include="OzzBundle.cpp" />
     <ClCompile Include="OzzKinematics.cpp" />
     <ClCompile Include="OzzKinematicsAnimated.cpp" />

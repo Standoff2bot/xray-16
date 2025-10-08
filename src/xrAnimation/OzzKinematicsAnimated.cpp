@@ -61,6 +61,44 @@ std::string ReadOzzString(ozz::io::IArchive& archive)
     return result;
 }
 
+void SkipOzzAnimationMetadata(ozz::io::IArchive& archive)
+{
+    ReadOzzString(archive);
+
+    uint32_t flags = 0;
+    uint16_t bone_or_part = 0;
+    uint16_t motion_id = 0;
+    float speed = 0.f;
+    float power = 0.f;
+    float accrue = 0.f;
+    float falloff = 0.f;
+
+    archive >> flags;
+    archive >> bone_or_part;
+    archive >> motion_id;
+    archive >> speed;
+    archive >> power;
+    archive >> accrue;
+    archive >> falloff;
+
+    uint32_t mark_count = 0;
+    archive >> mark_count;
+    for (uint32_t mark_index = 0; mark_index < mark_count; ++mark_index)
+    {
+        ReadOzzString(archive);
+
+        uint32_t interval_count = 0;
+        archive >> interval_count;
+        for (uint32_t interval_index = 0; interval_index < interval_count; ++interval_index)
+        {
+            float first = 0.f;
+            float second = 0.f;
+            archive >> first;
+            archive >> second;
+        }
+    }
+}
+
 struct MotionBoneData
 {
     u16 bone_id = BI_NONE;
@@ -357,6 +395,7 @@ bool PopulateMotionRecordFromMetadata(
 OzzKinematicsAnimated::OzzKinematicsAnimated()
 {
     InitializeChannelState();
+    ResetPlaybackState();
 }
 
 OzzKinematicsAnimated::~OzzKinematicsAnimated() = default;
@@ -373,6 +412,9 @@ bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vecto
     if (!core.InitializeFromOzz(skeletonPath))
         return false;
 
+    InitializeSamplingState();
+    ResetPlaybackState();
+
     // Store motion references and initialize channels
     motionReferences = motionRefs;
     motionLibraryBuilt = false;
@@ -386,6 +428,9 @@ bool OzzKinematicsAnimated::InitializeFromOzzBuffer(ozz::span<const std::byte> s
     // Initialize skeleton using core
     if (!core.InitializeFromOzzBuffer(skeletonData))
         return false;
+
+    InitializeSamplingState();
+    ResetPlaybackState();
 
     // Store motion references and initialize channels
     motionReferences = motionRefs;
@@ -406,12 +451,12 @@ void OzzKinematicsAnimated::ResetAnimationState()
     InitializeChannelState();
     motionReferences.clear();
     motionLibrary.Reset();
-    motionLibraryBuilt = false;
-    blendDestroyCallback = nullptr;
-    updateTracksCallback = nullptr;
-    animationApplied = false;
-    animationControllerReady = false;
-    embeddedAnimationData.clear();
+   motionLibraryBuilt = false;
+   blendDestroyCallback = nullptr;
+   updateTracksCallback = nullptr;
+   animationApplied = false;
+   embeddedAnimationData.clear();
+    ResetPlaybackState();
 }
 
 void OzzKinematicsAnimated::InitializeChannelState()
@@ -485,14 +530,14 @@ void OzzKinematicsAnimated::RemoveActiveBlend(size_t index, bool notifyDestroy)
     activeBlends.erase(activeBlends.begin() + index);
 
     if (activeBlends.empty())
-        ResetAnimationControllerState();
+        ResetPlaybackState();
 }
 
 void OzzKinematicsAnimated::ClearActiveBlends(bool notifyDestroy)
 {
     if (activeBlends.empty())
     {
-        ResetAnimationControllerState();
+        ResetPlaybackState();
         return;
     }
 
@@ -506,15 +551,20 @@ void OzzKinematicsAnimated::ClearActiveBlends(bool notifyDestroy)
     }
 
     activeBlends.clear();
-    ResetAnimationControllerState();
+    ResetPlaybackState();
 }
 
-void OzzKinematicsAnimated::ResetAnimationControllerState()
+void OzzKinematicsAnimated::ResetPlaybackState()
 {
     controllerMotion.invalidate();
-    if (animationController)
-        animationController->ClearAnimation();
+    activeAnimation.reset();
+    animationLoaded = false;
     animationApplied = false;
+    playbackTime = 0.f;
+    playbackSpeed = 1.f;
+    loopPlayback = true;
+    samplingContext.Resize(0);
+    ResetSamplingBuffers();
 }
 
 xr_vector<xr_string> OzzKinematicsAnimated::LegacyMotionNames()
@@ -548,9 +598,6 @@ bool OzzKinematicsAnimated::LoadMotionReference(const xr_string& reference)
 
 bool OzzKinematicsAnimated::LoadLegacyMotion(const xr_string& motion_name)
 {
-    if (!animationControllerReady || !animationController)
-        return false;
-
     EnsureMotionLibraryLoaded();
 
     const MotionRecord* record = motionLibrary.Find(motion_name);
@@ -560,14 +607,19 @@ bool OzzKinematicsAnimated::LoadLegacyMotion(const xr_string& motion_name)
         return false;
     }
 
-    if (!animationController->LoadAnimation(record->animation))
+    if (!record->animation)
+    {
+        Msg("[OzzKinematicsAnimated] Motion '%s' missing animation payload", motion_name.c_str());
+        return false;
+    }
+
+    if (!LoadAnimationClip(record->animation))
     {
         Msg("[OzzKinematicsAnimated] Failed to bind motion '%s'", motion_name.c_str());
         return false;
     }
 
     controllerMotion = record->id;
-
     animationApplied = false;
     CalculateBones_Invalidate();
     return true;
@@ -580,10 +632,7 @@ bool OzzKinematicsAnimated::PlayLegacyMotion(const xr_string& motion_name)
 
 bool OzzKinematicsAnimated::LoadAnimationFromFile(const std::filesystem::path& path)
 {
-    if (!animationControllerReady || !animationController)
-        return false;
-
-    if (!animationController->LoadAnimation(path))
+    if (!LoadAnimationClipFromFile(path))
         return false;
 
     controllerMotion.invalidate();
@@ -612,10 +661,10 @@ MotionID OzzKinematicsAnimated::ResolveLegacyMotionId(const xr_string& motion_na
 
 bool OzzKinematicsAnimated::AdvanceAnimation(float dt)
 {
-    if (!animationControllerReady || !animationController)
+    if (!core.IsInitialized())
         return false;
 
-    if (!animationController->HasAnimation())
+    if (!animationLoaded || !activeAnimation)
     {
         if (animationApplied)
         {
@@ -626,14 +675,45 @@ bool OzzKinematicsAnimated::AdvanceAnimation(float dt)
         return false;
     }
 
-    if (!animationController->Update(dt))
+    const float duration = activeAnimation->duration();
+    if (duration <= 0.f)
         return false;
 
-    const auto locals = animationController->SampledLocals();
-    if (locals.empty())
-        return false;
+    playbackTime += dt * playbackSpeed;
 
-    if (!SetPoseLocals(locals))
+    if (loopPlayback && duration > 0.f)
+    {
+        while (playbackTime < 0.f)
+            playbackTime += duration;
+        while (playbackTime > duration)
+            playbackTime -= duration;
+    }
+    else
+    {
+        if (playbackTime < 0.f)
+            playbackTime = 0.f;
+        if (playbackTime > duration)
+            playbackTime = duration;
+    }
+
+    const float ratio = duration > 0.f ? playbackTime / duration : 0.f;
+
+    if (sampledLocals.size() != static_cast<size_t>(core.Skeleton().num_soa_joints()))
+        ResetSamplingBuffers();
+
+    ozz::animation::SamplingJob job;
+    job.animation = activeAnimation.get();
+    job.context = &samplingContext;
+    job.ratio = loopPlayback ? ratio : std::clamp(ratio, 0.f, 1.f);
+    job.output = ozz::span<ozz::math::SoaTransform>(sampledLocals.data(), sampledLocals.size());
+
+    if (!job.Run())
+    {
+        Msg("[OzzKinematicsAnimated] sampling job failed during animation update");
+        return false;
+    }
+
+    if (!SetPoseLocals(ozz::span<const ozz::math::SoaTransform>(sampledLocals.data(), sampledLocals.size())))
         return false;
 
     animationApplied = true;
@@ -642,7 +722,115 @@ bool OzzKinematicsAnimated::AdvanceAnimation(float dt)
 
 bool OzzKinematicsAnimated::HasLoadedAnimation() const
 {
-    return animationControllerReady && animationController && animationController->HasAnimation();
+    return animationLoaded && activeAnimation;
+}
+
+void OzzKinematicsAnimated::SetLooping(bool loop)
+{
+    loopPlayback = loop;
+}
+
+void OzzKinematicsAnimated::SetPlaybackSpeed(float speed)
+{
+    playbackSpeed = speed;
+}
+
+float OzzKinematicsAnimated::AnimationDuration() const
+{
+    return (animationLoaded && activeAnimation) ? activeAnimation->duration() : 0.f;
+}
+
+#ifdef DEBUG
+ozz::span<const ozz::math::SoaTransform> OzzKinematicsAnimated::DebugSampledLocals() const
+{
+    if (sampledLocals.empty())
+        return {};
+    return ozz::span<const ozz::math::SoaTransform>(sampledLocals.data(), sampledLocals.size());
+}
+#endif
+
+void OzzKinematicsAnimated::InitializeSamplingState()
+{
+    ResetSamplingBuffers();
+}
+
+void OzzKinematicsAnimated::ResetSamplingBuffers()
+{
+    if (!core.IsInitialized())
+    {
+        sampledLocals.clear();
+        return;
+    }
+
+    const int soa_count = core.Skeleton().num_soa_joints();
+    sampledLocals.resize(static_cast<size_t>(soa_count));
+    for (ozz::math::SoaTransform& transform : sampledLocals)
+        transform = ozz::math::SoaTransform::identity();
+}
+
+bool OzzKinematicsAnimated::LoadAnimationClip(const std::shared_ptr<ozz::animation::Animation>& animation)
+{
+    if (!core.IsInitialized() || !animation)
+        return false;
+
+    if (animation->num_tracks() != core.Skeleton().num_joints())
+    {
+        Msg("[OzzKinematicsAnimated] animation track mismatch (%d vs %d)",
+            animation->num_tracks(), core.Skeleton().num_joints());
+        return false;
+    }
+
+    activeAnimation = animation;
+    samplingContext.Resize(animation->num_tracks());
+    ResetSamplingBuffers();
+    animationLoaded = true;
+    playbackTime = 0.f;
+    return true;
+}
+
+bool OzzKinematicsAnimated::LoadAnimationClipFromFile(const std::filesystem::path& path)
+{
+    if (!core.IsInitialized())
+        return false;
+
+    ozz::io::File file(path.u8string().c_str(), "rb");
+    if (!file.opened())
+    {
+        Msg("[OzzKinematicsAnimated] failed to open animation %s", path.u8string().c_str());
+        return false;
+    }
+
+    ozz::io::IArchive archive(&file);
+    std::shared_ptr<ozz::animation::Animation> animation = std::make_shared<ozz::animation::Animation>();
+    if (archive.TestTag<ozz::animation::Animation>())
+    {
+        archive >> *animation;
+    }
+    else
+    {
+        file.Seek(0, ozz::io::Stream::kSet);
+        ozz::io::IArchive aggregate(&file);
+
+        uint32_t animation_count = 0;
+        aggregate >> animation_count;
+        if (animation_count == 0)
+        {
+            Msg("[OzzKinematicsAnimated] file %s does not contain animations", path.u8string().c_str());
+            return false;
+        }
+
+        aggregate >> *animation;
+        SkipOzzAnimationMetadata(aggregate);
+
+        for (uint32_t idx = 1; idx < animation_count; ++idx)
+        {
+            ozz::animation::Animation discarded;
+            aggregate >> discarded;
+            SkipOzzAnimationMetadata(aggregate);
+        }
+    }
+
+    return LoadAnimationClip(animation);
 }
 
 bool OzzKinematicsAnimated::LoadOzzAnimationsFromFile(const xr_string& relative_path)
@@ -866,27 +1054,6 @@ bool OzzKinematicsAnimated::LoadOzzAnimationsFromArchive(ozz::io::IArchive& arch
     }
 
     return loaded_any;
-}
-
-bool OzzKinematicsAnimated::EnsureAnimationController()
-{
-    if (animationControllerReady)
-        return true;
-
-    if (!animationController)
-        animationController = xr_make_unique<OzzAnimationController>();
-
-    if (!core.IsInitialized())
-        return false;
-
-    animationControllerReady = animationController && animationController->Initialize(core.Skeleton());
-    if (!animationControllerReady)
-    {
-        Msg("[OzzKinematicsAnimated] Failed to initialize animation controller for skeleton");
-        return false;
-    }
-
-    return true;
 }
 
 void OzzKinematicsAnimated::OnCalculateBones()
@@ -1175,9 +1342,6 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
         return nullptr;
     }
 
-    if (!animationControllerReady || !animationController)
-        return nullptr;
-
     if (!record->animation)
     {
         Msg("[OzzKinematicsAnimated] LL_PlayCycle motion '%s' is missing animation payload", record->name.c_str());
@@ -1193,13 +1357,15 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
 
     if (!controllerMotion.valid() || controllerMotion != record->id)
     {
-        if (!animationController->LoadAnimation(record->animation))
+        if (!LoadAnimationClip(record->animation))
             return nullptr;
 
         controllerMotion = record->id;
         animationApplied = false;
         CalculateBones_Invalidate();
     }
+
+    loopPlayback = !stop_at_end;
 
     const int existingIndex = FindActiveBlendIndex(resolvedPartition, channel);
     if (existingIndex >= 0)
@@ -1227,10 +1393,11 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
     blend.blendPower = 1.f;
 
     const float def_speed = record->definition.Speed();
-    float playback_speed = Speed;
-    if (fis_zero(playback_speed))
-        playback_speed = !fis_zero(def_speed) ? def_speed : 1.f;
-    blend.speed = playback_speed;
+    float playback_speed_value = Speed;
+    if (fis_zero(playback_speed_value))
+        playback_speed_value = !fis_zero(def_speed) ? def_speed : 1.f;
+    blend.speed = playback_speed_value;
+    SetPlaybackSpeed(playback_speed_value);
 
     blend.motionID = record->id;
     blend.timeCurrent = 0.f;
@@ -1251,8 +1418,6 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
     blend.fall_at_end = blend.stop_at_end && (channel > 1);
     blend.dwFrame = Device.dwFrame ? Device.dwFrame - 1 : 0;
 
-    animationController->SetLooping(!stop_at_end);
-    animationController->SetPlaybackSpeed(playback_speed);
     animationApplied = false;
 
     return activeBlends.size() ? activeBlends.back().blend.get() : nullptr;
@@ -1303,13 +1468,13 @@ void OzzKinematicsAnimated::UpdateTracks()
 
 void OzzKinematicsAnimated::LL_UpdateTracks(float dt, bool b_force, bool leave_blends)
 {
-    if (!activeBlends.empty() && animationController)
+    if (!activeBlends.empty())
     {
         const CBlend* primaryBlend = activeBlends.front().blend.get();
         if (primaryBlend)
         {
-            animationController->SetLooping(!primaryBlend->stop_at_end);
-            animationController->SetPlaybackSpeed(primaryBlend->speed);
+            loopPlayback = !primaryBlend->stop_at_end;
+            SetPlaybackSpeed(primaryBlend->speed);
         }
     }
 
@@ -1434,9 +1599,7 @@ const CPartition& OzzKinematicsAnimated::partitions() const
 
 float OzzKinematicsAnimated::get_animation_length(MotionID /*motion_ID*/)
 {
-    if (animationController)
-        return animationController->Duration();
-    return 0.f;
+    return AnimationDuration();
 }
 
 // MotionLibrary implementation

@@ -39,9 +39,6 @@
     <ClInclude Include="OzzConversion.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="OzzAnimationController.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="LegacyOgfConverter.h">
       <Filter>Converters</Filter>
     </ClInclude>
@@ -84,9 +81,6 @@
       <Filter>tests</Filter>
     </ClCompile>
     <ClCompile Include="OzzBundle.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="OzzAnimationController.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="LegacyOmfConverter.cpp">

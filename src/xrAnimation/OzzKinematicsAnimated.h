@@ -4,8 +4,12 @@
 #include "Include/xrRender/KinematicsAnimated.h"
 #include "Include/xrRender/animation_motion.h"
 #include "Layers/xrRender/Animation.h"
-#include "OzzAnimationController.h"
 #include "xrCommon/xr_unordered_map.h"
+
+#include "ozz/animation/runtime/animation.h"
+#include "ozz/animation/runtime/sampling_job.h"
+#include "ozz/base/maths/soa_transform.h"
+#include "ozz/base/span.h"
 
 #include <filesystem>
 #include <memory>
@@ -41,6 +45,12 @@ public:
     bool AdvanceAnimation(float dt);
     bool HasActiveAnimation() const { return animationApplied; }
     bool HasLoadedAnimation() const;
+    void SetLooping(bool loop);
+    void SetPlaybackSpeed(float speed);
+    float AnimationDuration() const;
+#ifdef DEBUG
+    ozz::span<const ozz::math::SoaTransform> DebugSampledLocals() const;
+#endif
 
     // Motion record for legacy compatibility
     struct MotionRecord
@@ -163,13 +173,21 @@ private:
     int FindActiveBlendIndex(u16 partition, u8 channel) const;
     void RemoveActiveBlend(size_t index, bool notifyDestroy);
     void ClearActiveBlends(bool notifyDestroy);
-    void ResetAnimationControllerState();
-    bool EnsureAnimationController();
+    void ResetPlaybackState();
+    void InitializeSamplingState();
+    void ResetSamplingBuffers();
+    bool LoadAnimationClip(const std::shared_ptr<ozz::animation::Animation>& animation);
+    bool LoadAnimationClipFromFile(const std::filesystem::path& path);
 
 private:
-    // Animation controller
-    xr_unique_ptr<OzzAnimationController> animationController;
-    bool animationControllerReady = false;
+    // Animation playback state
+    std::shared_ptr<ozz::animation::Animation> activeAnimation;
+    ozz::animation::SamplingJob::Context samplingContext;
+    xr_vector<ozz::math::SoaTransform> sampledLocals;
+    bool animationLoaded = false;
+    bool loopPlayback = true;
+    float playbackSpeed = 1.f;
+    float playbackTime = 0.f;
 
     // Motion library
     MotionLibrary motionLibrary;

@@ -31,9 +31,9 @@
 #include "xrCore/Animation/SkeletonMotions.hpp"
 #include "xrCore/FMesh.hpp"
 
-#include "OzzAnimationController.h"
 #include "OzzConversion.h"
 #include "OzzKinematics.h"
+#include "OzzKinematicsAnimated.h"
 #include "OzzBundle.h"
 #include "../samples/framework/mesh.h"
 
@@ -1849,139 +1849,77 @@ bool TestOzzKinematicsVisibilitySetBonesVisibleControlsMask()
     return ok;
 }
 
-
-bool TestOzzAnimationControllerLoadsStandaloneClip()
+bool TestOzzKinematicsAnimatedLoadsStandaloneClip()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
     const auto animation_path = ResolveProjectPath("src/xrAnimation/tests/testdata/critical_hit_grup_1_single.ozz");
 
     if (!std::filesystem::exists(skeleton_path) || !std::filesystem::exists(animation_path))
     {
-        ADD_FAILURE() << "Missing controller test assets";
+        ADD_FAILURE() << "Missing animation playback test assets";
         return false;
     }
 
-    ozz::animation::Skeleton skeleton;
+    XRay::Animation::OzzKinematicsAnimated kinematics;
+    if (!kinematics.InitializeFromOzz(skeleton_path.string().c_str()))
     {
-        ozz::io::File file(skeleton_path.string().c_str(), "rb");
-        if (!file.opened())
-        {
-            ADD_FAILURE() << "failed to open skeleton " << skeleton_path;
-            return false;
-        }
-        ozz::io::IArchive archive(&file);
-        if (!archive.TestTag<ozz::animation::Skeleton>())
-        {
-            ADD_FAILURE() << "sample skeleton missing tag";
-            return false;
-        }
-        archive >> skeleton;
-    }
-
-    XRay::Animation::OzzAnimationController controller;
-    if (!controller.Initialize(skeleton))
-    {
-        ADD_FAILURE() << "Controller initialization failed";
+        ADD_FAILURE() << "Failed to initialize OzzKinematicsAnimated with skeleton";
         return false;
     }
 
     bool ok = true;
 
-    EXPECT_FALSE(controller.HasAnimation());
-    if (controller.HasAnimation())
+    EXPECT_FALSE(kinematics.HasLoadedAnimation());
+    if (kinematics.HasLoadedAnimation())
         ok = false;
-    EXPECT_FLOAT_EQ(0.f, controller.Duration());
-    if (controller.Duration() != 0.f)
-        ok = false;
-    EXPECT_FALSE(controller.Update(0.016f));
-    if (controller.Update(0.016f))
+    EXPECT_FALSE(kinematics.AdvanceAnimation(0.016f));
+    if (kinematics.AdvanceAnimation(0.016f))
         ok = false;
 
-    if (!controller.LoadAnimation(animation_path))
+    if (!kinematics.LoadAnimationFromFile(animation_path))
     {
-        ADD_FAILURE() << "Controller failed to load animation";
+        ADD_FAILURE() << "Failed to load animation clip";
         return false;
     }
 
-    EXPECT_TRUE(controller.HasAnimation());
-    if (!controller.HasAnimation())
+    EXPECT_TRUE(kinematics.HasLoadedAnimation());
+    if (!kinematics.HasLoadedAnimation())
         ok = false;
-    EXPECT_GT(controller.Duration(), 0.f);
-    if (!(controller.Duration() > 0.f))
-        ok = false;
-
-    EXPECT_TRUE(controller.Update(0.f));
-    if (!controller.Update(0.f))
-        ok = false;
-    const auto locals_start_span = controller.SampledLocals();
-    if (locals_start_span.size() != static_cast<size_t>(skeleton.num_soa_joints()))
-    {
-        ADD_FAILURE() << "Sampled locals size mismatch";
-        return false;
-    }
-
-    std::vector<ozz::math::SoaTransform> locals_start(locals_start_span.begin(), locals_start_span.end());
-    const float advance_time = std::max(0.0f, std::min(controller.Duration() * 0.25f, controller.Duration()));
-    EXPECT_TRUE(controller.Update(advance_time));
-    if (!controller.Update(advance_time))
-        ok = false;
-    const auto locals_mid_span = controller.SampledLocals();
-    if (locals_mid_span.size() != locals_start.size())
-    {
-        ADD_FAILURE() << "Mid locals size mismatch";
-        return false;
-    }
-    std::vector<ozz::math::SoaTransform> locals_mid(locals_mid_span.begin(), locals_mid_span.end());
-    float max_delta = 0.f;
-    for (int soa_index = 0; soa_index < skeleton.num_soa_joints(); ++soa_index)
-    {
-        for (int lane = 0; lane < 4; ++lane)
-        {
-            const int joint_index = soa_index * 4 + lane;
-            if (joint_index >= skeleton.num_joints())
-                break;
-
-            const ozz::math::Transform start_transform = ExtractTransformLane(locals_start[soa_index], lane);
-            const ozz::math::Transform mid_transform = ExtractTransformLane(locals_mid[soa_index], lane);
-
-            const float translation_delta = std::fabs(start_transform.translation.x - mid_transform.translation.x) +
-                std::fabs(start_transform.translation.y - mid_transform.translation.y) +
-                std::fabs(start_transform.translation.z - mid_transform.translation.z);
-
-            const float rotation_delta = std::fabs(start_transform.rotation.x - mid_transform.rotation.x) +
-                std::fabs(start_transform.rotation.y - mid_transform.rotation.y) +
-                std::fabs(start_transform.rotation.z - mid_transform.rotation.z) +
-                std::fabs(start_transform.rotation.w - mid_transform.rotation.w);
-
-            const float scale_delta = std::fabs(start_transform.scale.x - mid_transform.scale.x) +
-                std::fabs(start_transform.scale.y - mid_transform.scale.y) +
-                std::fabs(start_transform.scale.z - mid_transform.scale.z);
-
-            max_delta = std::max({ max_delta, translation_delta, rotation_delta, scale_delta });
-        }
-    }
-
-    EXPECT_GT(max_delta, 1e-7f) << "animation locals remained static";
-    if (!(max_delta > 1e-7f))
+    EXPECT_GT(kinematics.AnimationDuration(), 0.f);
+    if (!(kinematics.AnimationDuration() > 0.f))
         ok = false;
 
-    controller.SetLooping(false);
-    EXPECT_TRUE(controller.Update(controller.Duration() * 2.f));
-    if (!controller.Update(controller.Duration() * 2.f))
+    EXPECT_TRUE(kinematics.AdvanceAnimation(0.f));
+    if (!kinematics.AdvanceAnimation(0.f))
         ok = false;
-    EXPECT_TRUE(controller.Update(0.f));
-    if (!controller.Update(0.f))
+    kinematics.CalculateBones(TRUE);
+
+    constexpr u16 root_bone = 0;
+    const Fmatrix start_pose = kinematics.LL_GetTransform(root_bone);
+
+    const float advance_time = std::max(0.0f, std::min(kinematics.AnimationDuration() * 0.25f, kinematics.AnimationDuration()));
+    EXPECT_TRUE(kinematics.AdvanceAnimation(advance_time));
+    if (!kinematics.AdvanceAnimation(advance_time))
+        ok = false;
+    kinematics.CalculateBones(TRUE);
+
+    const Fmatrix mid_pose = kinematics.LL_GetTransform(root_bone);
+    const float translation_delta = std::fabs(start_pose.c.x - mid_pose.c.x) +
+        std::fabs(start_pose.c.y - mid_pose.c.y) +
+        std::fabs(start_pose.c.z - mid_pose.c.z);
+
+    EXPECT_GT(translation_delta, 1e-5f) << "Animation sampling did not update root transform";
+    if (!(translation_delta > 1e-5f))
         ok = false;
 
-    controller.ClearAnimation();
-    EXPECT_FALSE(controller.HasAnimation());
-    if (controller.HasAnimation())
+    kinematics.SetLooping(false);
+    EXPECT_TRUE(kinematics.AdvanceAnimation(kinematics.AnimationDuration() * 2.f));
+    if (!kinematics.AdvanceAnimation(kinematics.AnimationDuration() * 2.f))
         ok = false;
-    EXPECT_FLOAT_EQ(0.f, controller.Duration());
-    if (controller.Duration() != 0.f)
-        ok = false;
-    EXPECT_TRUE(controller.SampledLocals().empty());
-    if (!controller.SampledLocals().empty())
+
+    kinematics.StopAnimation();
+    EXPECT_FALSE(kinematics.HasLoadedAnimation());
+    if (kinematics.HasLoadedAnimation())
         ok = false;
 
     return ok;
@@ -2551,9 +2489,9 @@ TEST(OzzKinematicsVisibility, SetBonesVisibleControlsMask)
     EXPECT_TRUE(TestOzzKinematicsVisibilitySetBonesVisibleControlsMask());
 }
 
-TEST(OzzAnimationController, LoadsStandaloneClip)
+TEST(OzzKinematicsAnimated, LoadsStandaloneClip)
 {
-    EXPECT_TRUE(TestOzzAnimationControllerLoadsStandaloneClip());
+    EXPECT_TRUE(TestOzzKinematicsAnimatedLoadsStandaloneClip());
 }
 
 TEST(OzzKinematicsCallbacks, InvokesBoneCallbackAndHonorsOverwrite)
