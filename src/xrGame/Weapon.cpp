@@ -1361,7 +1361,7 @@ void CWeapon::UpdateAddonsVisibility()
     static shared_str wpn_grenade_launcher = WPN_GRENADE_LAUNCHER;
     static shared_str wpn_grenade_launcher_soc = WPN_GRENADE_LAUNCHER_SOC;
 
-    IKinematics* pWeaponVisual = smart_cast<IKinematics*>(Visual());
+    IKinematics* pWeaponVisual = smart_cast<IKinematics*>(Visual()->dcast_PKinematics());
     R_ASSERT(pWeaponVisual);
 
     u16 bone_id;

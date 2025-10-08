@@ -107,7 +107,7 @@ void CIKLimbsController::LimbUpdate(CIKLimb& L)
     if (m_supports_ozz)
         return;
 
-    if (!m_object->Visual()->dcast_PKinematicsAnimated())
+    if (!m_object->Visual() || (m_object->Visual() && !m_object->Visual()->dcast_PKinematicsAnimated()))
     {
         SwitchToOzzMode();
         return;
@@ -288,7 +288,7 @@ void CIKLimbsController::Calculate()
         return;
     }
 
-    if (!m_object->Visual()->dcast_PKinematicsAnimated())
+    if (!m_object->Visual() || (m_object->Visual() && !m_object->Visual()->dcast_PKinematicsAnimated()))
     {
         SwitchToOzzMode();
         TeardownLegacyLimbs();
@@ -312,7 +312,7 @@ void CIKLimbsController::Calculate()
     SCalculateData cd[max_size];
 
     xr_vector<CIKLimb>::iterator i, b = _bone_chains.begin(), e = _bone_chains.end();
-    if (!m_object->Visual()->dcast_PKinematicsAnimated())
+    if (!m_object->Visual() || (m_object->Visual() && !m_object->Visual()->dcast_PKinematicsAnimated()))
     {
         SwitchToOzzMode();
         TeardownLegacyLimbs();

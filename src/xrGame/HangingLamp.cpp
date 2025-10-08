@@ -136,7 +136,7 @@ bool CHangingLamp::net_Spawn(CSE_Abstract* DC)
     CPHSkeleton::Spawn(e);
     if (smart_cast<IKinematicsAnimated*>(Visual()))
         smart_cast<IKinematicsAnimated*>(Visual())->PlayCycle("idle");
-    if (Visual()->dcast_PKinematics())
+    if (Visual() && Visual()->dcast_PKinematics())
     {
         Visual()->dcast_PKinematics()->CalculateBones_Invalidate();
         Visual()->dcast_PKinematics()->CalculateBones(TRUE);
@@ -164,7 +164,7 @@ void CHangingLamp::SpawnInitPhysics(CSE_Abstract* D)
     CSE_ALifeObjectHangingLamp* lamp = smart_cast<CSE_ALifeObjectHangingLamp*>(D);
     if (lamp->flags.is(CSE_ALifeObjectHangingLamp::flPhysic))
         CreateBody(lamp);
-    if (Visual()->dcast_PKinematics())
+    if (Visual() && Visual()->dcast_PKinematics())
     {
         Visual()->dcast_PKinematics()->CalculateBones_Invalidate();
         Visual()->dcast_PKinematics()->CalculateBones(TRUE);

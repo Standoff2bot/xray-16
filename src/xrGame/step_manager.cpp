@@ -125,7 +125,7 @@ void CStepManager::on_animation_start(MotionID motion_id, CBlend* blend)
     if (!m_blend)
         return;
 
-    if (!m_object->Visual()->dcast_PKinematicsAnimated())
+    if (!m_object->Visual() || (m_object->Visual() && !m_object->Visual()->dcast_PKinematicsAnimated()))
     {
         m_step_info.disable = true;
         return;
