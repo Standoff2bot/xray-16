@@ -95,7 +95,7 @@ Fobb BuildFallbackObbFromShape(const SBoneShape& shape)
 
 OzzKinematicsCore::OzzKinematicsCore()
     : userData(nullptr), rootBone(BI_NONE), visibleMask(0), updateCallback(nullptr), updateCallbackParam(nullptr), ownerKinematics(nullptr),
-      lastUpdateTime(0), visibilityCounter(0), initialized(false)
+      ownerVisual(nullptr), lastUpdateTime(0), visibilityCounter(0), initialized(false)
 {
     cachedBox.invalidate();
 }
@@ -103,6 +103,7 @@ OzzKinematicsCore::OzzKinematicsCore()
 OzzKinematicsCore::~OzzKinematicsCore()
 {
     SetOwner(nullptr);
+    SetVisualOwner(nullptr);
     updateCallback = nullptr;
     updateCallbackParam = nullptr;
     ownerKinematics = nullptr;

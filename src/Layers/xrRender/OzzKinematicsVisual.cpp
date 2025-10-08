@@ -427,6 +427,8 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
         animated_kinematics_ = nullptr;
     }
 
+    kinematics_->SetVisualOwner(this);
+
     ozz::span<const std::byte> skeleton_span(reinterpret_cast<const std::byte*>(skeleton_payload_.data()), skeleton_payload_.size());
 
     // Initialize with or without motion refs
@@ -713,7 +715,6 @@ bool COzzKinematicsVisual::IsKinematicsReady() const
 
 bool COzzKinematicsVisual::RequiresAnimation() const
 {
-    // Use MT type from bundle to determine if we need animation system
     return Type == MT_OZZ_ANIMATED;
 }
 

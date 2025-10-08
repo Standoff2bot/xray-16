@@ -28,6 +28,7 @@ class OzzKinematicsAnimated : public OzzKinematics, public IKinematicsAnimated
 public:
     OzzKinematicsAnimated();
     ~OzzKinematicsAnimated() override;
+    virtual void OnSkeletonLoaded() override;
 
     // Initialization with motion references
     bool InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
@@ -140,13 +141,9 @@ public:
     float get_animation_length(MotionID motion_ID) override;
 
     // dcast methods (redeclared in IKinematicsAnimated)
-    IRenderVisual* dcast_RenderVisual() override { return nullptr; }
+    IRenderVisual* dcast_RenderVisual() override { return OzzKinematics::dcast_RenderVisual(); }
     IKinematics* dcast_PKinematics() override { return this; }
     IKinematicsAnimated* dcast_PKinematicsAnimated() override { return this; }
-
-protected:
-    // Virtual hooks for derived classes
-    void OnSkeletonLoaded() override;
 
 private:
     // Motion library management
@@ -197,7 +194,6 @@ private:
     MotionLibrary motionLibrary;
     xr_vector<xr_string> motionReferences;
     std::vector<std::uint8_t> embeddedAnimationData;
-    bool motionLibraryBuilt = false;
 
     // Active blends
     xr_vector<ActiveBlendEntry> activeBlends;

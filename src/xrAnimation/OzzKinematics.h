@@ -80,8 +80,12 @@ public:
     UpdateCallback GetUpdateCallback() override;
     void* GetUpdateCallbackParam() override;
 
-    IRenderVisual* dcast_RenderVisual() override;
-    IKinematicsAnimated* dcast_PKinematicsAnimated() override;
+    // Visual owner management (forwarded to core)
+    void SetVisualOwner(IRenderVisual* visual) { core.SetVisualOwner(visual); }
+    IRenderVisual* GetVisualOwner() const { return core.GetVisualOwner(); }
+
+    IRenderVisual* dcast_RenderVisual() override { return core.GetVisualOwner(); }
+    IKinematicsAnimated* dcast_PKinematicsAnimated() override { return nullptr; }
 
 #ifdef DEBUG
     void DebugRender(Fmatrix& XFORM) override;

@@ -558,8 +558,7 @@ void player_hud::load(const shared_str& player_hud_sect, bool forceReload)
 
     const shared_str& model_name = pSettings->r_string(m_sect_name, "visual");
     GEnv.Render->hud_loading = true;
-    const auto model = GEnv.Render->model_Create(model_name.c_str());
-    m_model = smart_cast<IKinematicsAnimated*>(model);
+    m_model = smart_cast<IKinematicsAnimated*>(GEnv.Render->model_Create(model_name.c_str())->dcast_PKinematics());
     GEnv.Render->hud_loading = false;
     load_ancors();
     // Msg("hands visual changed to [%s] [%s] [%s]", model_name.c_str(), b_reload ? "R" : "", m_attached_items[0] ? "Y" : "");

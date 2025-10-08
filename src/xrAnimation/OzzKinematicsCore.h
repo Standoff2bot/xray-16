@@ -95,6 +95,9 @@ public:
 
     // Set the owner IKinematics object for callbacks
     void SetOwner(IKinematics* owner) { ownerKinematics = owner; }
+    IKinematics* GetOwner() { return ownerKinematics; }
+    void SetVisualOwner(IRenderVisual* visual) { ownerVisual = visual; }  // ADD THIS
+    IRenderVisual* GetVisualOwner() const { return ownerVisual; }         // ADD THIS
 
     // Additional transforms
     void AddBoneTransform(const KinematicsABT::additional_bone_transform& transform);
@@ -159,6 +162,7 @@ protected:
     UpdateCallback updateCallback;
     void* updateCallbackParam;
     IKinematics* ownerKinematics;
+    IRenderVisual* ownerVisual;
 };
 
 } // namespace XRay::Animation

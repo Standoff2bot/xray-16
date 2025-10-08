@@ -54,9 +54,7 @@
 #include "../../../Externals/ozz-animation/samples/framework/mesh.h"
 #include "../../../Externals/ozz-animation/src/animation/offline/gltf/extern/json.hpp"
 
-#include "xrCore/xrCore.h"
 #include "OzzBundle.h"
-#include "LegacyOmfConverter.h"
 
 namespace fs = std::filesystem;
 
@@ -2563,4 +2561,164 @@ TEST(ConverterIntegration, AssetBundleContainsSkeletonAndMesh)
 TEST(LegacyOmfConverter, ConvertsCriticalHitOmf)
 {
     EXPECT_TRUE(TestLegacyOmfConverterConvertsCriticalHitOmf());
+}
+
+bool TestEmbeddedAnimationsConvertedCorrectly()
+{
+    // Load OGF with embedded animations
+    const auto ogf_path = ResolveProjectPath("res/testdata/embedded_animation/ventil_01.ogf");
+    if (!fs::exists(ogf_path))
+    {
+        std::cerr << "Missing embedded animation test file: " << ogf_path << std::endl;
+        return false;
+    }
+
+    // Convert OGF to ozz bundle
+    XRay::Animation::LegacyVisualConversionResult result;
+    XRay::Animation::LegacyVisualConversionOptions options;
+    options.build_skeleton = true;
+    options.build_mesh = true;
+
+    xr_string error;
+    if (!XRay::Animation::ConvertLegacyVisualToOzzBundle(ogf_path, result, options, &error))
+    {
+        std::cerr << "Conversion failed: " << error.c_str() << std::endl;
+        return false;
+    }
+
+    // Count embedded animations in the conversion result
+    uint32_t ogf_animation_count = 0;
+    if (!result.embedded_animation_binary.empty())
+    {
+        ozz::io::MemoryStream stream;
+        if (!stream.Write(result.embedded_animation_binary.data(), result.embedded_animation_binary.size()))
+        {
+            std::cerr << "Failed to stage embedded animation data" << std::endl;
+            return false;
+        }
+        stream.Seek(0, ozz::io::Stream::kSet);
+
+        ozz::io::IArchive archive(&stream);
+        archive >> ogf_animation_count;
+        std::cout << "[OGF] Found " << ogf_animation_count << " embedded animations" << std::endl;
+    }
+    else
+    {
+        std::cerr << "OGF conversion result missing embedded animation data" << std::endl;
+        return false;
+    }
+
+    if (ogf_animation_count == 0)
+    {
+        std::cerr << "OGF should have embedded animations" << std::endl;
+        return false;
+    }
+
+    // Write bundle to OZZX file
+    const auto ozzx_path = ResolveProjectPath("src/xrAnimation/tests/testdata/ventil_01_test.ozzx");
+    XRay::Animation::OzzxBundle bundle;
+    bundle.version = 3u;
+    bundle.model_type = result.model_type;
+    bundle.skeleton = result.skeleton_binary;
+    bundle.mesh = result.mesh_binary;
+    bundle.bone_metadata = result.bone_metadata;
+    bundle.user_data = result.user_data;
+    bundle.embedded_animation_data = result.embedded_animation_binary;
+    bundle.motion_refs = result.motion_refs;
+
+    if (!XRay::Animation::WriteOzzxBundle(ozzx_path, bundle))
+    {
+        std::cerr << "Failed to write OZZX bundle" << std::endl;
+        return false;
+    }
+
+    // Read bundle back
+    XRay::Animation::OzzxBundle read_bundle;
+    if (!XRay::Animation::ReadOzzxBundle(ozzx_path, read_bundle))
+    {
+        std::cerr << "Failed to read OZZX bundle" << std::endl;
+        return false;
+    }
+
+    // Count embedded animations in the OZZX bundle
+    uint32_t ozzx_animation_count = 0;
+    if (!read_bundle.embedded_animation_data.empty())
+    {
+        ozz::io::MemoryStream stream;
+        if (!stream.Write(read_bundle.embedded_animation_data.data(), read_bundle.embedded_animation_data.size()))
+        {
+            std::cerr << "Failed to stage OZZX embedded animation data" << std::endl;
+            return false;
+        }
+        stream.Seek(0, ozz::io::Stream::kSet);
+
+        ozz::io::IArchive archive(&stream);
+        archive >> ozzx_animation_count;
+        std::cout << "[OZZX] Found " << ozzx_animation_count << " embedded animations" << std::endl;
+    }
+    else
+    {
+        std::cerr << "OZZX bundle missing embedded animation data" << std::endl;
+        return false;
+    }
+
+    // Compare counts
+    if (ogf_animation_count != ozzx_animation_count)
+    {
+        std::cerr << "Animation count mismatch: OGF=" << ogf_animation_count
+                  << ", OZZX=" << ozzx_animation_count << std::endl;
+        return false;
+    }
+
+    // Verify the animations can be loaded
+    for (uint32_t i = 0; i < ozzx_animation_count; ++i)
+    {
+        ozz::animation::Animation animation;
+        ozz::io::MemoryStream stream;
+        if (!stream.Write(read_bundle.embedded_animation_data.data(), read_bundle.embedded_animation_data.size()))
+        {
+            std::cerr << "Failed to stage animation data for validation" << std::endl;
+            return false;
+        }
+        stream.Seek(0, ozz::io::Stream::kSet);
+        ozz::io::IArchive archive(&stream);
+
+        uint32_t count = 0;
+        archive >> count;
+
+        // Skip to animation i
+        for (uint32_t j = 0; j <= i; ++j)
+        {
+            archive >> animation;
+
+            // Skip metadata after each animation
+            SerializedMotionMetadata metadata;
+            if (!ReadSerializedMotionMetadata(archive, &metadata))
+            {
+                std::cerr << "Failed to read metadata for animation " << j << std::endl;
+                return false;
+            }
+
+            if (j == i)
+            {
+                std::cout << "  Animation " << i << ": " << metadata.name
+                          << " (" << animation.num_tracks() << " tracks, "
+                          << animation.duration() << "s)" << std::endl;
+            }
+        }
+
+        if (animation.num_tracks() == 0)
+        {
+            std::cerr << "Animation " << i << " has no tracks" << std::endl;
+            return false;
+        }
+    }
+
+    std::cout << "✓ Embedded animations converted correctly" << std::endl;
+    return true;
+}
+
+TEST(ConverterIntegration, EmbeddedAnimationsConvertedCorrectly)
+{
+    EXPECT_TRUE(TestEmbeddedAnimationsConvertedCorrectly());
 }

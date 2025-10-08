@@ -416,7 +416,6 @@ dxRender_Visual* CModelPool::Create(const char* name, IReader* data)
     VERIFY(normalized.size() < sizeof(low_name));
     xr_strcpy(low_name, normalized.c_str());
     const char* ext = strext(name);
-    const bool wants_omf = ext && 0 == xr_stricmp(ext, ".omf");
     //	Msg						("-CREATE %s",low_name);
 
     // 0. Search POOL
@@ -436,28 +435,25 @@ dxRender_Visual* CModelPool::Create(const char* name, IReader* data)
 
         if (nullptr == Base)
         {
-            if (wants_omf)
+            const shared_str bundle_identifier(normalized.c_str());
+            std::optional<std::filesystem::path> bundle_path{ ResolveOzzBundlePath(bundle_identifier) };
+            if (bundle_path.has_value())
             {
-                const shared_str bundle_identifier(normalized.c_str());
-                if (auto bundle_path = ResolveOzzBundlePath(bundle_identifier))
+                // Create with animated type - will be updated from bundle
+                auto* bundle_visual = static_cast<COzzKinematicsVisual*>(Instance_Create(MT_OZZ_ANIMATED));
+                if (!bundle_visual->LoadFromBundle(bundle_identifier.c_str(), *bundle_path))
                 {
-                    // Create with animated type - will be updated from bundle
-                    auto* bundle_visual = static_cast<COzzKinematicsVisual*>(Instance_Create(MT_OZZ_ANIMATED));
-                    if (!bundle_visual->LoadFromBundle(bundle_identifier.c_str(), *bundle_path))
-                    {
-                        xr_delete(bundle_visual);
-                    }
-                    else
-                    {
-                        Instance_Register(bundle_identifier.c_str(), bundle_visual);
-                        Base = bundle_visual;
-                    }
+                    xr_delete(bundle_visual);
+                }
+                else
+                {
+                    Instance_Register(bundle_identifier.c_str(), bundle_visual);
+                    Base = bundle_visual;
                 }
             }
-
-            // 2. If not found
-            if (!Base)
+            else
             {
+                // 2. If not found
                 bAllowChildrenDuplicate = FALSE;
                 if (data)
                     Base = Instance_Load(low_name, data, TRUE);
@@ -465,6 +461,7 @@ dxRender_Visual* CModelPool::Create(const char* name, IReader* data)
                     Base = Instance_Load(low_name, TRUE);
                 bAllowChildrenDuplicate = TRUE;
             }
+
 #ifdef _EDITOR
             if (!Base)
                 return 0;

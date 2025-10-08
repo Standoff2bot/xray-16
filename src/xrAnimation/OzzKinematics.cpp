@@ -284,17 +284,6 @@ void* OzzKinematics::GetUpdateCallbackParam()
     return core.GetUpdateCallbackParam();
 }
 
-IRenderVisual* OzzKinematics::dcast_RenderVisual()
-{
-    return nullptr;
-}
-
-IKinematicsAnimated* OzzKinematics::dcast_PKinematicsAnimated()
-{
-    // Static models return nullptr for animated interface
-    return nullptr;
-}
-
 #ifdef DEBUG
 void OzzKinematics::DebugRender(Fmatrix& XFORM)
 {
