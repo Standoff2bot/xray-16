@@ -15,17 +15,23 @@ OzzKinematics::OzzKinematics()
 }
 
 // Destructor
-OzzKinematics::~OzzKinematics() = default;
+OzzKinematics::~OzzKinematics() { }
 
 // Initialization - forward to core
 bool OzzKinematics::InitializeFromOzz(pcstr skeletonPath)
 {
-    return core.InitializeFromOzz(skeletonPath);
+    bool result = core.InitializeFromOzz(skeletonPath);
+    if (result)
+        OnSkeletonLoaded();
+    return result;
 }
 
 bool OzzKinematics::InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData)
 {
-    return core.InitializeFromOzzBuffer(skeletonData);
+    bool result = core.InitializeFromOzzBuffer(skeletonData);
+    if (result)
+        OnSkeletonLoaded();
+    return result;
 }
 
 bool OzzKinematics::ApplyExtendedBoneMetadata(const ExtendedBoneMetadataCollection& metadata)

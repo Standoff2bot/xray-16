@@ -102,6 +102,7 @@ OzzKinematicsCore::OzzKinematicsCore()
 
 OzzKinematicsCore::~OzzKinematicsCore()
 {
+    SetOwner(nullptr);
     updateCallback = nullptr;
     updateCallbackParam = nullptr;
     ownerKinematics = nullptr;

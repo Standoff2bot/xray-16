@@ -415,6 +415,11 @@ OzzKinematicsAnimated::~OzzKinematicsAnimated()
     ClearActiveBlends(true);
 }
 
+void OzzKinematicsAnimated::OnSkeletonLoaded()
+{
+    EnsureMotionLibraryLoaded();
+}
+
 bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs)
 {
     if (!skeletonPath || !skeletonPath[0])
@@ -432,7 +437,6 @@ bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vecto
 
     // Store motion references and initialize channels
     motionReferences = motionRefs;
-    motionLibraryBuilt = false;
     InitializeChannelState();
 
     return true;
@@ -449,7 +453,6 @@ bool OzzKinematicsAnimated::InitializeFromOzzBuffer(ozz::span<const std::byte> s
 
     // Store motion references and initialize channels
     motionReferences = motionRefs;
-    motionLibraryBuilt = false;
     InitializeChannelState();
 
     return true;
@@ -458,7 +461,6 @@ bool OzzKinematicsAnimated::InitializeFromOzzBuffer(ozz::span<const std::byte> s
 void OzzKinematicsAnimated::SetEmbeddedAnimationData(const std::vector<std::uint8_t>& data)
 {
     embeddedAnimationData = data;
-    motionLibraryBuilt = false;
 }
 
 void OzzKinematicsAnimated::ResetAnimationState()
@@ -466,11 +468,10 @@ void OzzKinematicsAnimated::ResetAnimationState()
     InitializeChannelState();
     motionReferences.clear();
     motionLibrary.Reset();
-   motionLibraryBuilt = false;
-   blendDestroyCallback = nullptr;
-   updateTracksCallback = nullptr;
-   animationApplied = false;
-   embeddedAnimationData.clear();
+    blendDestroyCallback = nullptr;
+    updateTracksCallback = nullptr;
+    animationApplied = false;
+    embeddedAnimationData.clear();
     ResetPlaybackState();
 }
 
@@ -485,9 +486,6 @@ void OzzKinematicsAnimated::InitializeChannelState()
 
 void OzzKinematicsAnimated::EnsureMotionLibraryLoaded()
 {
-    if (motionLibraryBuilt)
-        return;
-
     motionLibrary.Reset();
 
     if (!embeddedAnimationData.empty())
@@ -517,8 +515,6 @@ void OzzKinematicsAnimated::EnsureMotionLibraryLoaded()
 #endif
         LoadMotionReference(reference);
     }
-
-    motionLibraryBuilt = true;
 }
 
 int OzzKinematicsAnimated::FindActiveBlendIndex(u16 partition, u8 channel) const
@@ -600,8 +596,6 @@ void OzzKinematicsAnimated::ResetPlaybackState()
 
 xr_vector<xr_string> OzzKinematicsAnimated::LegacyMotionNames()
 {
-    EnsureMotionLibraryLoaded();
-
     xr_vector<xr_string> names;
     names.reserve(motionLibrary.records.size());
     for (const auto& motion : motionLibrary.records)
@@ -629,8 +623,6 @@ bool OzzKinematicsAnimated::LoadMotionReference(const xr_string& reference)
 
 bool OzzKinematicsAnimated::LoadLegacyMotion(const xr_string& motion_name)
 {
-    EnsureMotionLibraryLoaded();
-
     const MotionRecord* record = motionLibrary.Find(motion_name);
     if (!record)
     {
@@ -683,8 +675,6 @@ MotionID OzzKinematicsAnimated::ResolveLegacyMotionId(const xr_string& motion_na
 {
     if (motion_name.empty())
         return MotionID();
-
-    EnsureMotionLibraryLoaded();
 
     const MotionRecord* record = motionLibrary.Find(motion_name);
     return record ? record->id : MotionID();
@@ -1141,7 +1131,6 @@ CMotionDef* OzzKinematicsAnimated::LL_GetMotionDef(MotionID id)
         return nullptr;
 
     const u16 index = id.idx;
-    EnsureMotionLibraryLoaded();
 
     MotionRecord* record = motionLibrary.Find(index);
     return record ? &record->definition : nullptr;
@@ -1171,8 +1160,6 @@ CMotion* OzzKinematicsAnimated::LL_GetMotion(MotionID id, u16 bone_id)
     const u32 joint_count = static_cast<u32>(core.Skeleton().num_joints());
     if (joint_count == 0 || bone_id >= joint_count)
         return nullptr;
-
-    EnsureMotionLibraryLoaded();
 
     MotionRecord* record = motionLibrary.Find(id.idx);
     if (!record)
@@ -1340,8 +1327,6 @@ MotionID OzzKinematicsAnimated::LL_MotionID(LPCSTR B)
     if (!B || !*B)
         return MotionID();
 
-    EnsureMotionLibraryLoaded();
-
     const MotionRecord* record = motionLibrary.Find(xr_string(B));
     return record ? record->id : MotionID();
 }
@@ -1362,8 +1347,6 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
         Msg("[OzzKinematicsAnimated] LL_PlayCycle received motion with unsupported slot %u", motion.slot);
         return nullptr;
     }
-
-    EnsureMotionLibraryLoaded();
 
     const u16 motionIndex = motion.idx;
     MotionRecord* record = motionLibrary.Find(motionIndex);

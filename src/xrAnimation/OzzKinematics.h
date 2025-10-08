@@ -98,6 +98,9 @@ protected:
     mutable Fobb stubObb;
     mutable accel stubAccel;
 
+    // Virtual hooks for derived classes
+    virtual void OnSkeletonLoaded() {}
+
     void NotImplemented(pcstr function_name) const;
     CBoneInstance& StubBoneInstance() const;
     CBoneData& StubBoneData() const;

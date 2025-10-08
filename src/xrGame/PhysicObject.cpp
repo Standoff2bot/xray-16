@@ -184,6 +184,7 @@ void CPhysicObject::SpawnInitPhysics(CSE_Abstract* D)
 
 void CPhysicObject::RunStartupAnim(CSE_Abstract* D)
 {
+    const auto vis = Visual();
     if (Visual() && smart_cast<IKinematics*>(Visual()))
     {
         //		CSE_PHSkeleton	*po	= smart_cast<CSE_PHSkeleton*>(D);

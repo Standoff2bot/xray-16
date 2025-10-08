@@ -144,6 +144,10 @@ public:
     IKinematics* dcast_PKinematics() override { return this; }
     IKinematicsAnimated* dcast_PKinematicsAnimated() override { return this; }
 
+protected:
+    // Virtual hooks for derived classes
+    void OnSkeletonLoaded() override;
+
 private:
     // Motion library management
     struct MotionLibrary

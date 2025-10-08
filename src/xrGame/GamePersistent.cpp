@@ -229,7 +229,7 @@ void CGamePersistent::OnGameStart()
         FS.rescan_path(mesh_path->m_Path, TRUE);
         if (g_player_hud)
             g_player_hud->detach_kinematics();
-        GEnv.Render->models_Rebuild();
+        //GEnv.Render->models_Rebuild();
         if (g_player_hud)
             g_player_hud->reload();
     }
