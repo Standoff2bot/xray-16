@@ -357,6 +357,12 @@ COzzKinematicsVisual::COzzKinematicsVisual()
 
 COzzKinematicsVisual::~COzzKinematicsVisual()
 {
+    if (kinematics_)
+    {
+        kinematics_->SetUpdateCallback(nullptr);
+        kinematics_->SetUpdateCallbackParam(nullptr);
+    }
+
     DestroySurfaces();
 }
 

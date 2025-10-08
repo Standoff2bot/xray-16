@@ -398,7 +398,22 @@ OzzKinematicsAnimated::OzzKinematicsAnimated()
     ResetPlaybackState();
 }
 
-OzzKinematicsAnimated::~OzzKinematicsAnimated() = default;
+OzzKinematicsAnimated::~OzzKinematicsAnimated()
+{
+    blendDestroyCallback = nullptr;
+    updateTracksCallback = nullptr;
+
+    for (ActiveBlendEntry& entry : activeBlends)
+    {
+        if (entry.blend)
+        {
+            entry.blend->Callback = nullptr;
+            entry.blend->CallbackParam = nullptr;
+        }
+    }
+
+    ClearActiveBlends(true);
+}
 
 bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs)
 {
@@ -524,6 +539,13 @@ void OzzKinematicsAnimated::RemoveActiveBlend(size_t index, bool notifyDestroy)
         return;
 
     ActiveBlendEntry& entry = activeBlends[index];
+
+    if (entry.blend)
+    {
+        entry.blend->Callback = nullptr;
+        entry.blend->CallbackParam = nullptr;
+    }
+
     if (notifyDestroy && blendDestroyCallback && entry.blend)
         blendDestroyCallback->BlendDestroy(*entry.blend);
 
@@ -539,6 +561,15 @@ void OzzKinematicsAnimated::ClearActiveBlends(bool notifyDestroy)
     {
         ResetPlaybackState();
         return;
+    }
+
+    for (ActiveBlendEntry& entry : activeBlends)
+    {
+        if (entry.blend)
+        {
+            entry.blend->Callback = nullptr;
+            entry.blend->CallbackParam = nullptr;
+        }
     }
 
     if (notifyDestroy && blendDestroyCallback)

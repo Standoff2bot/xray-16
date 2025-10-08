@@ -100,7 +100,12 @@ OzzKinematicsCore::OzzKinematicsCore()
     cachedBox.invalidate();
 }
 
-OzzKinematicsCore::~OzzKinematicsCore() = default;
+OzzKinematicsCore::~OzzKinematicsCore()
+{
+    updateCallback = nullptr;
+    updateCallbackParam = nullptr;
+    ownerKinematics = nullptr;
+}
 
 bool OzzKinematicsCore::InitializeFromOzz(pcstr skeletonPath)
 {
