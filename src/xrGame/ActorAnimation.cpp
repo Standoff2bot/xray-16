@@ -278,7 +278,7 @@ void CActor::steer_Vehicle(float angle)
     CCar* car = smart_cast<CCar*>(m_holder);
     u16 anim_type = car->DriverAnimationType();
     SVehicleAnimCollection& anims = m_vehicle_anims->m_vehicles_type_collections[anim_type];
-    IKinematicsAnimated* animated = smart_cast<IKinematicsAnimated*>(Visual());
+    IKinematicsAnimated* animated = Visual()->dcast_PKinematicsAnimated();
     if (!animated)
         return;
     if (angle == 0.f)
@@ -313,7 +313,7 @@ void CActor::g_SetSprintAnimation(u32 mstate_rl, MotionID& head, MotionID& torso
 
 CMotion* FindMotionKeys(MotionID motion_ID, IRenderVisual* V)
 {
-    IKinematicsAnimated* VA = smart_cast<IKinematicsAnimated*>(V);
+    IKinematicsAnimated* VA = V ? V->dcast_PKinematicsAnimated() : nullptr;
     return (VA && motion_ID.valid()) ? VA->LL_GetRootMotion(motion_ID) : 0;
 }
 
@@ -347,7 +347,7 @@ void CActor::g_SetAnimation(u32 mstate_rl)
         return;
     }
 
-    IKinematicsAnimated* animated = smart_cast<IKinematicsAnimated*>(Visual());
+    IKinematicsAnimated* animated = Visual()->dcast_PKinematicsAnimated();
     if (!animated)
     {
         mstate_real = 0;
@@ -702,7 +702,7 @@ void CActor::g_SetAnimation(u32 mstate_rl)
     if (!m_current_torso_blend)
         return;
 
-    IKinematicsAnimated* skeleton_animated = smart_cast<IKinematicsAnimated*>(Visual());
+    IKinematicsAnimated* skeleton_animated = Visual()->dcast_PKinematicsAnimated();
     if (!skeleton_animated)
         return;
 

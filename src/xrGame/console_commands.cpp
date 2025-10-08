@@ -1753,7 +1753,7 @@ public:
         }
 
         IRenderVisual* visual = GEnv.Render->model_Create(arguments);
-        IKinematics* kinematics = smart_cast<IKinematics*>(visual);
+        IKinematics* kinematics = visual->dcast_PKinematics();
         if (!kinematics)
         {
             GEnv.Render->model_Delete(visual);

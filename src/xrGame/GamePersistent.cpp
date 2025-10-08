@@ -200,7 +200,8 @@ void CGamePersistent::OnGameStart()
         return;
     }
 
-    const bool force_rebuild = digest_matches && outputs_valid;
+    // If we reach here, either digest changed or some outputs are missing
+    // We only convert missing/changed assets (incremental conversion)
     StartupConversionStats conversion_stats;
     const bool show_loading_stage = psActorFlags.test(AF_LOADING_STAGES);
 
@@ -208,11 +209,10 @@ void CGamePersistent::OnGameStart()
         LoadTitle("st_converting_ozz_assets", false);
 
     const xr_string stored_display = stored_digest.empty() ? xr_string("<none>") : stored_digest;
-    Msg("[ozz] Startup conversion %s (cached=%s, computed=%s)",
-        force_rebuild ? "rebuilding all assets" : "refreshing missing assets",
+    Msg("[ozz] Startup conversion refreshing missing assets (cached=%s, computed=%s)",
         stored_display.c_str(), computed_digest.c_str());
 
-    bool didConvert = ConvertInventoryToOzz(inventory, conversion_params, force_rebuild, conversion_stats);
+    bool didConvert = ConvertInventoryToOzz(inventory, conversion_params, conversion_stats);
 
     if (!didConvert)
     {

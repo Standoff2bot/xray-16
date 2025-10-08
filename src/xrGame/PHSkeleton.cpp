@@ -38,7 +38,7 @@ CPHSkeleton::CPHSkeleton() { Init(); }
 CPHSkeleton::~CPHSkeleton() { ClearUnsplited(); }
 void CPHSkeleton::RespawnInit()
 {
-    IKinematics* K = smart_cast<IKinematics*>(PPhysicsShellHolder()->Visual());
+    IKinematics* K = PPhysicsShellHolder()->Visual()->dcast_PKinematics();
     if (K)
     {
         K->LL_SetBoneRoot(0);
@@ -87,7 +87,7 @@ bool CPHSkeleton::Spawn(CSE_Abstract* D)
         IKinematics* K = NULL;
         if (obj->Visual())
         {
-            K = smart_cast<IKinematics*>(obj->Visual());
+            K = obj->Visual()->dcast_PKinematics();
             if (K)
             {
                 K->LL_SetBoneRoot(po->saved_bones.root_bone);
@@ -159,7 +159,7 @@ void CPHSkeleton::SaveNetState(NET_Packet& P)
 {
     CPhysicsShellHolder* obj = PPhysicsShellHolder();
     CPhysicsShell* pPhysicsShell = obj->PPhysicsShell();
-    IKinematics* K = smart_cast<IKinematics*>(obj->Visual());
+    IKinematics* K = obj->Visual()->dcast_PKinematics();
     if (pPhysicsShell && pPhysicsShell->isActive())
         m_flags.set(CSE_PHSkeleton::flActive, pPhysicsShell->isEnabled());
 
@@ -221,7 +221,7 @@ void CPHSkeleton::SaveNetState(NET_Packet& P)
 void CPHSkeleton::LoadNetState(NET_Packet& P)
 {
     CPhysicsShellHolder* obj = PPhysicsShellHolder();
-    IKinematics* K = smart_cast<IKinematics*>(obj->Visual());
+    IKinematics* K = obj->Visual()->dcast_PKinematics();
     P.r_u8(m_flags.flags);
     if (K)
     {
@@ -318,8 +318,8 @@ void CPHSkeleton::UnsplitSingle(CPHSkeleton* SO)
     CPhysicsShell* newPhysicsShell = m_unsplited_shels.front().first;
     O->m_pPhysicsShell = newPhysicsShell;
     VERIFY(_valid(newPhysicsShell->mXFORM));
-    IKinematics* newKinematics = smart_cast<IKinematics*>(O->Visual());
-    IKinematics* pKinematics = smart_cast<IKinematics*>(obj->Visual());
+    IKinematics* newKinematics = O->Visual()->dcast_PKinematics();
+    IKinematics* pKinematics = obj->Visual()->dcast_PKinematics();
 
     Flags64 mask0, mask1;
     u16 split_bone = m_unsplited_shels.front().second;
@@ -382,7 +382,7 @@ void CPHSkeleton::RecursiveBonesCheck(u16 id)
     if (!removable)
         return;
     CPhysicsShellHolder* obj = PPhysicsShellHolder();
-    IKinematics* K = smart_cast<IKinematics*>(obj->Visual());
+    IKinematics* K = obj->Visual()->dcast_PKinematics();
     CBoneData& BD = K->LL_GetData(u16(id));
     //////////////////////////////////////////
     Flags64 mask;
@@ -403,7 +403,7 @@ bool CPHSkeleton::ReadyForRemove()
 {
     removable = true;
     CPhysicsShellHolder* obj = PPhysicsShellHolder();
-    RecursiveBonesCheck(smart_cast<IKinematics*>(obj->Visual())->LL_GetBoneRoot());
+    RecursiveBonesCheck(obj->Visual()->dcast_PKinematics()->LL_GetBoneRoot());
     return removable;
 }
 void CPHSkeleton::InitServerObject(CSE_Abstract* D)

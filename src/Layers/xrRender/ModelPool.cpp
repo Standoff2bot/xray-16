@@ -55,14 +55,20 @@ std::optional<std::filesystem::path> ResolveOzzBundlePath(const shared_str& iden
         candidate += kOzzBundleExtension;
     }
 
-    string_path resolved;
-    if (FS.exist(resolved, "$game_meshes$", candidate.c_str()) || FS.exist(resolved, "$level$", candidate.c_str())) // yohji TODO: this doesn't work
-        return std::filesystem::path(resolved);
+    // .ozzx bundles are managed outside the FS cache, so we use std::filesystem
+    // to check for actual file existence rather than FS.exist() which only checks the cache
+    const char* search_paths[] = { "$game_meshes$", "$level$" };
+    for (const char* path_alias : search_paths)
+    {
+        string_path resolved;
+        if (!FS.update_path(resolved, path_alias, candidate.c_str(), false))
+            continue;
 
-    std::error_code ec;
-    std::filesystem::path direct(resolved);
-    if (std::filesystem::exists(direct, ec) && !ec)
-        return direct;
+        std::error_code ec;
+        std::filesystem::path bundle_path(resolved);
+        if (std::filesystem::exists(bundle_path, ec) && !ec)
+            return bundle_path;
+    }
 
     return std::nullopt;
 }

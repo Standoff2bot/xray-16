@@ -96,7 +96,6 @@ struct StartupConversionStats
 [[nodiscard]] bool VerifyConvertedOutputs(const LegacyAssetInventory& inventory, const StartupConversionParams& params);
 bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                            const StartupConversionParams& params,
-                           bool force_rebuild,
                            StartupConversionStats& out_stats);
 
 } // namespace Animation

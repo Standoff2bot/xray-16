@@ -325,8 +325,8 @@ void CGameObject::net_Destroy()
 
     xr_delete(m_ini_file);
 
-    if (Visual() && smart_cast<IKinematics*>(Visual()))
-        smart_cast<IKinematics*>(Visual())->Callback(0, 0);
+    if (Visual() && Visual()->dcast_PKinematics())
+        Visual()->dcast_PKinematics()->Callback(0, 0);
     //
     VERIFY(getDestroy());
     xr_delete(CForm);
@@ -1145,7 +1145,7 @@ bool CGameObject::UsedAI_Locations() { return (m_server_flags.test(CSE_ALifeObje
 bool CGameObject::TestServerFlag(u32 Flag) const { return (m_server_flags.test(Flag)); }
 void CGameObject::add_visual_callback(visual_callback callback)
 {
-    IKinematics* kinematics = smart_cast<IKinematics*>(Visual());
+    IKinematics* kinematics = Visual()->dcast_PKinematics();
     if (!kinematics)
         return;
     [[maybe_unused]] auto I = std::find(visual_callbacks().begin(), visual_callbacks().end(), callback);
@@ -1171,7 +1171,7 @@ void CGameObject::SetKinematicsCallback(bool set)
 {
     if (!Visual())
         return;
-    if (IKinematics* kin = smart_cast<IKinematics*>(Visual()))
+    if (IKinematics* kin = Visual()->dcast_PKinematics())
     {
         if (set)
             kin->Callback(VisualCallback, this);
@@ -1451,7 +1451,7 @@ void render_box(
     IRenderVisual* visual, const Fmatrix& xform, const Fvector& additional, bool draw_child_boxes, const u32& color)
 {
     CDebugRenderer& renderer = Level().debug_renderer();
-    IKinematics* kinematics = smart_cast<IKinematics*>(visual);
+    IKinematics* kinematics = visual->dcast_PKinematics();
     VERIFY(kinematics);
     u16 bone_count = kinematics->LL_BoneCount();
     VERIFY(bone_count);

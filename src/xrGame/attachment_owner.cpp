@@ -70,7 +70,7 @@ void AttachmentCallback(IKinematics* tpKinematics)
     CAttachmentOwner* attachment_owner = smart_cast<CAttachmentOwner*>(game_object);
     VERIFY(attachment_owner);
 
-    IKinematics* kinematics = smart_cast<IKinematics*>(game_object->Visual());
+    IKinematics* kinematics = game_object->Visual()->dcast_PKinematics();
     if (!kinematics)
         return;
     if (!kinematics)
@@ -111,7 +111,7 @@ void CAttachmentOwner::attach(CInventoryItem* inventory_item)
             m_attachment_callback_active = true;
         }
         attachable_item->set_bone_id(
-            smart_cast<IKinematics*>(game_object->Visual())->LL_BoneID(attachable_item->bone_name()));
+            game_object->Visual()->dcast_PKinematics()->LL_BoneID(attachable_item->bone_name()));
         m_attached_objects.push_back(smart_cast<CAttachableItem*>(inventory_item));
         if (should_activate_callback)
             m_attachment_callback_suspended = false;
@@ -186,7 +186,7 @@ void CAttachmentOwner::reattach_items()
         CAttachableItem* attachable_item = *I;
         VERIFY(attachable_item);
         attachable_item->set_bone_id(
-            smart_cast<IKinematics*>(game_object->Visual())->LL_BoneID(attachable_item->bone_name()));
+            game_object->Visual()->dcast_PKinematics()->LL_BoneID(attachable_item->bone_name()));
     }
 }
 
@@ -228,7 +228,7 @@ void CAttachmentOwner::resume_attachment_callbacks()
         m_attachment_callback_active = true;
     }
 
-    if (m_attachment_callback_active && smart_cast<IKinematics*>(game_object->Visual()))
+    if (m_attachment_callback_active && game_object->Visual()->dcast_PKinematics())
     {
         reattach_items();
     }

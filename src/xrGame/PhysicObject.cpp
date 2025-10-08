@@ -185,12 +185,12 @@ void CPhysicObject::SpawnInitPhysics(CSE_Abstract* D)
 void CPhysicObject::RunStartupAnim(CSE_Abstract* D)
 {
     const auto vis = Visual();
-    if (Visual() && smart_cast<IKinematics*>(Visual()))
+    if (Visual() && Visual()->dcast_PKinematics())
     {
         //		CSE_PHSkeleton	*po	= smart_cast<CSE_PHSkeleton*>(D);
         IKinematicsAnimated* PKinematicsAnimated = NULL;
-        R_ASSERT(Visual() && smart_cast<IKinematics*>(Visual()));
-        PKinematicsAnimated = smart_cast<IKinematicsAnimated*>(Visual());
+        R_ASSERT(Visual() && Visual()->dcast_PKinematics());
+        PKinematicsAnimated = Visual()->dcast_PKinematicsAnimated();
         if (PKinematicsAnimated)
         {
             CSE_Visual* visual = smart_cast<CSE_Visual*>(D);
@@ -203,8 +203,8 @@ void CPhysicObject::RunStartupAnim(CSE_Abstract* D)
                     .c_str());
             m_anim_blend = m_anim_script_callback.play_cycle(PKinematicsAnimated, visual->startup_animation);
         }
-        smart_cast<IKinematics*>(Visual())->CalculateBones_Invalidate();
-        smart_cast<IKinematics*>(Visual())->CalculateBones(TRUE);
+        Visual()->dcast_PKinematics()->CalculateBones_Invalidate();
+        Visual()->dcast_PKinematics()->CalculateBones(TRUE);
     }
 }
 IC bool check_blend(CBlend* b, LPCSTR name, LPCSTR sect, LPCSTR visual)
@@ -262,7 +262,7 @@ void CPhysicObject::anim_time_set(float time)
         return;
     }
     m_anim_blend->timeCurrent = time;
-    IKinematics* K = smart_cast<IKinematics*>(Visual());
+    IKinematics* K = Visual()->dcast_PKinematics();
     VERIFY(K);
     K->CalculateBones_Invalidate();
     K->CalculateBones(TRUE);
@@ -301,7 +301,7 @@ void CPhysicObject::CreateSkeleton(CSE_ALifeObjectPhysic* po)
     m_pPhysicsShell = P_build_Shell(this, !po->_flags.test(CSE_PHSkeleton::flActive), fixed_bones);
     ApplySpawnIniToPhysicShell(&po->spawn_ini(), m_pPhysicsShell, fixed_bones[0] != '\0');
     ApplySpawnIniToPhysicShell(
-        smart_cast<IKinematics*>(Visual()->dcast_PKinematics())->LL_UserData(), m_pPhysicsShell, fixed_bones[0] != '\0');
+        Visual()->dcast_PKinematics()->LL_UserData(), m_pPhysicsShell, fixed_bones[0] != '\0');
 }
 
 void CPhysicObject::Load(LPCSTR section)
@@ -376,7 +376,7 @@ void CPhysicObject::PHObjectPositionUpdate()
 
 void CPhysicObject::AddElement(CPhysicsElement* root_e, int id)
 {
-    IKinematics* K = smart_cast<IKinematics*>(Visual());
+    IKinematics* K = Visual()->dcast_PKinematics();
 
     CPhysicsElement* E = P_create_Element();
     CBoneInstance& B = K->LL_GetBoneInstance(u16(id));
@@ -445,7 +445,7 @@ void CPhysicObject::CreateBody(CSE_ALifeObjectPhysic* po)
         Msg("[door_physics] CreateBody start obj='%s' visual='%s' type=%d mass=%.3f", cName().c_str(),
             visual_name ? visual_name : "<none>", int(m_type), m_mass);
     }
-    IKinematics* pKinematics = smart_cast<IKinematics*>(Visual());
+    IKinematics* pKinematics = Visual()->dcast_PKinematics();
     switch (m_type)
     {
     case epotBox:

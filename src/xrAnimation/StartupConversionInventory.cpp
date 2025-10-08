@@ -18,6 +18,7 @@
 
 #include <ozz/base/io/archive.h>
 #include <ozz/base/io/stream.h>
+#include <ozz/base/memory/unique_ptr.h>
 
 #include "xrCore/FMesh.hpp"
 #include "xrCore/FS.h"
@@ -289,8 +290,17 @@ bool FileExists(const xr_string& alias, const xr_string& relative_path)
 {
     fs::path absolute;
     if (!ResolveAbsolutePath(alias, relative_path, absolute))
+    {
+        Msg("! [ozz][debug] FileExists: Failed to resolve path alias='%s' relative='%s'", alias.c_str(), relative_path.c_str());
         return false;
-    return FS.exist(absolute.generic_string().c_str(), FSType::Any);
+    }
+
+    std::error_code ec;
+    const bool exists = fs::exists(absolute, ec);
+
+    Msg("  [ozz][debug] FileExists: alias='%s' relative='%s' -> absolute='%s' exists=%s",
+        alias.c_str(), relative_path.c_str(), absolute.generic_string().c_str(), exists ? "YES" : "NO");
+    return exists;
 }
 
 bool BundleExists(const LegacyVisualAsset& visual, const StartupConversionParams& params)
@@ -944,10 +954,12 @@ bool VerifyConvertedOutputs(const LegacyAssetInventory& inventory, const Startup
 
 bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                            const StartupConversionParams& params,
-                           bool force_rebuild,
                            StartupConversionStats& out_stats)
 {
     out_stats = {};
+
+    Msg("[ozz][debug] ConvertInventoryToOzz: ozz_output_alias='%s', inventory has %zu visuals, %zu motions",
+        params.ozz_output_alias.c_str(), inventory.visuals.size(), inventory.motions.size());
 
     struct VisualConversionWork
     {
@@ -1000,7 +1012,13 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
         work.primary = primary;
         work.output_alias = DetermineBundleOutputAlias(visual, params);
         const xr_string bundle_relative = BuildBundleRelativePath(visual);
-        work.convert_bundle = force_rebuild || !FileExists(work.output_alias, bundle_relative);
+        work.convert_bundle = !FileExists(work.output_alias, bundle_relative);
+
+        Msg("  [ozz][debug] Visual '%s': convert_bundle=%s (alias='%s', relative='%s')",
+            visual.normalized_identifier.c_str(),
+            work.convert_bundle ? "YES" : "NO",
+            work.output_alias.c_str(),
+            bundle_relative.c_str());
 
         for (const auto& reference : primary->motion_references)
         {
@@ -1029,10 +1047,13 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                     mt_it->second.asset = motion;
                     mt_it->second.output_relative = BuildMotionOutputRelativePath(*motion);
                     mt_it->second.output_alias = DetermineMotionOutputAlias(*motion, params);
-                    mt_it->second.convert = force_rebuild ||
-                        !FileExists(mt_it->second.output_alias, mt_it->second.output_relative);
+                    mt_it->second.convert = !FileExists(mt_it->second.output_alias, mt_it->second.output_relative);
 
-                    Msg("Failed to resolve file at %s %s, asset needs conversion", mt_it->second.output_alias.c_str(), mt_it->second.output_relative.c_str());
+                    Msg("  [ozz][debug] Motion '%s': convert=%s (alias='%s', relative='%s')",
+                        canonical_name.c_str(),
+                        mt_it->second.convert ? "YES" : "NO",
+                        mt_it->second.output_alias.c_str(),
+                        mt_it->second.output_relative.c_str());
                 }
             }
         }
@@ -1042,6 +1063,30 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
 
     if (visual_tasks.empty())
         return out_stats.failures == 0;
+
+    // Count how many conversions we'll actually do
+    size_t bundles_to_convert = 0;
+    size_t bundles_to_skip = 0;
+    for (const auto& work : visual_tasks)
+    {
+        if (work.convert_bundle)
+            ++bundles_to_convert;
+        else
+            ++bundles_to_skip;
+    }
+
+    size_t motions_to_convert = 0;
+    size_t motions_to_skip = 0;
+    for (const auto& motion_pair : motion_tasks)
+    {
+        if (motion_pair.second.convert)
+            ++motions_to_convert;
+        else
+            ++motions_to_skip;
+    }
+
+    Msg("[ozz][debug] Conversion plan: bundles (convert=%zu, skip=%zu), motions (convert=%zu, skip=%zu)",
+        bundles_to_convert, bundles_to_skip, motions_to_convert, motions_to_skip);
 
     xr_parallel_for(TaskRange<size_t>(0, visual_tasks.size()), [&](const TaskRange<size_t>& range)
     {
@@ -1054,6 +1099,51 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                 continue;
             }
 
+            // If bundle already exists on disk, load skeleton from it instead of reconverting
+            if (!work.convert_bundle)
+            {
+                const xr_string bundle_relative = BuildBundleRelativePath(*work.visual);
+                fs::path bundle_path;
+                if (ResolveAbsolutePath(work.output_alias, bundle_relative, bundle_path))
+                {
+                    OzzxBundle existing_bundle;
+                    if (ReadOzzxBundle(bundle_path, existing_bundle))
+                    {
+                        // Load skeleton from existing bundle for motion conversion
+                        work.conversion.skeleton_binary = std::move(existing_bundle.skeleton);
+                        work.conversion.bone_metadata = std::move(existing_bundle.bone_metadata);
+
+                        // Deserialize skeleton for motion conversion
+                        if (!work.conversion.skeleton_binary.empty())
+                        {
+                            ozz::io::MemoryStream stream;
+                            stream.Write(work.conversion.skeleton_binary.data(), work.conversion.skeleton_binary.size());
+                            stream.Seek(0, ozz::io::Stream::kSet);
+                            ozz::io::IArchive archive(&stream);
+
+                            auto skeleton = ozz::make_unique<ozz::animation::Skeleton>();
+                            archive >> *skeleton;
+                            work.conversion.skeleton = std::move(skeleton);
+                        }
+
+                        // Extract bone names for motion conversion
+                        if (work.conversion.skeleton)
+                        {
+                            const int joint_count = work.conversion.skeleton->num_joints();
+                            work.conversion.bone_names.resize(joint_count);
+                            for (int i = 0; i < joint_count; ++i)
+                                work.conversion.bone_names[i] = work.conversion.skeleton->joint_names()[i];
+                        }
+
+                        work.success = true;
+                        continue;
+                    }
+                }
+                // If loading failed, fall through to do full conversion
+                Msg("! [ozz] Failed to load existing bundle '%s', will reconvert", bundle_relative.c_str());
+            }
+
+            // Do full conversion from OGF
             auto ogf_bytes = ReadFileBytes(work.primary->location.root_alias, work.primary->location.relative_path);
             if (ogf_bytes.empty())
             {
