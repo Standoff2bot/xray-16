@@ -111,6 +111,22 @@ IC void CSmartCastStats::show()
             (*I).m_from);
 }
 
+void add_smart_cast_stats(LPCSTR from, LPCSTR to)
+{
+#ifdef SMART_CAST_STATS
+    stats().add(from, to);
+#endif
+}
+
+void add_smart_cast_stats_all(LPCSTR from, LPCSTR to)
+{
+#ifdef SMART_CAST_STATS
+#ifdef SMART_CAST_STATS_ALL
+    stats_all().add(from, to);
+#endif
+#endif
+}
+
 void show_smart_cast_stats()
 {
 #ifdef SMART_CAST_STATS

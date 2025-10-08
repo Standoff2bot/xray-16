@@ -9,23 +9,9 @@
 #pragma once
 
 #ifdef DEBUG
-// Inline stub implementations to avoid linker errors
-inline void add_smart_cast_stats(LPCSTR from_type, LPCSTR to_type)
-{
-#ifdef SMART_CAST_STATS
-    stats().add(from, to);
-#endif
-}
-
+void add_smart_cast_stats(LPCSTR, LPCSTR);
 #ifdef SMART_CAST_STATS_ALL
-inline void add_smart_cast_stats_all(LPCSTR from_type, LPCSTR to_type)
-{
-#ifdef SMART_CAST_STATS
-#ifdef SMART_CAST_STATS_ALL
-    stats_all().add(from, to);
-#endif
-#endif
-}
+void add_smart_cast_stats_all(LPCSTR, LPCSTR);
 #endif
 #endif
 
@@ -532,7 +518,16 @@ struct CHelper2
         static_assert(!std::is_const_v<T2> || std::is_const_v<T1>, "Cannot use smart cast to convert const to non const");
         typedef std::remove_const_t<T1> _T1;
         typedef std::remove_const_t<T2> _T2;
+#ifdef DEBUG
+        T1* temp = SmartDynamicCast::smart_cast<_T1>(const_cast<_T2*>(p));
+        T1* test = dynamic_cast<T1*>(p);
+        VERIFY2(temp == test, make_string("SmartCast<%s*>(%s*) FAILED (result differs from the dynamic_cast) or object "
+                                          "is CORRUPTED (0x%08x -> 0x%08x)!",
+                                  typeid(T1).name(), typeid(T2).name(), *(u32*)&test, *(u32*)&temp));
+        return (temp);
+#else
         return (SmartDynamicCast::smart_cast<_T1>(const_cast<_T2*>(p)));
+#endif
     }
 
     template <>
