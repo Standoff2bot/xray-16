@@ -2298,6 +2298,7 @@ private:
         int mid = -1;
         int end = -1;
         ozz::math::SimdFloat4 mid_axis;
+        ozz::math::SimdFloat4 pole_vector;  // Stable pole vector from bind pose
         ozz::math::Float3 target_offset = { 0.f, 0.f, 0.f };
         bool enabled = true;
         bool reached = false;
@@ -3795,8 +3796,11 @@ private:
         auto resolve_axis = [&](LimbIkChain& chain)
         {
             chain.mid_axis = ozz::math::simd_float4::z_axis();
+            chain.pole_vector = ozz::math::simd_float4::y_axis();  // Default pole vector
+
             if (chain.Valid() && chain.mid >= 0 && static_cast<size_t>(chain.mid) < bind_pose_models_.size())
             {
+                // Calculate mid_axis (bend axis) from bind pose Z-axis
                 ozz::math::SimdFloat4 axis_candidate = bind_pose_models_[chain.mid].cols[2];
                 const ozz::math::SimdFloat4 axis_len_sq = ozz::math::Length3Sqr(axis_candidate);
                 const ozz::math::SimdFloat4 min_len = ozz::math::simd_float4::Load1(1e-6f);
@@ -3809,6 +3813,14 @@ private:
                     {
                         chain.mid_axis = -chain.mid_axis;
                     }
+                }
+
+                // Calculate stable pole vector from bind pose Y-axis
+                ozz::math::SimdFloat4 pole_candidate = bind_pose_models_[chain.mid].cols[1];
+                const ozz::math::SimdFloat4 pole_len_sq = ozz::math::Length3Sqr(pole_candidate);
+                if (ozz::math::AreAllTrue1(ozz::math::CmpGt(pole_len_sq, min_len)))
+                {
+                    chain.pole_vector = ozz::math::Normalize3(pole_candidate);
                 }
             }
         };
@@ -4073,13 +4085,9 @@ private:
 
         const ozz::math::SimdFloat4 target_ms = ozz::math::simd_float4::Load3PtrU(&target_model.x);
 
-        ozz::math::SimdFloat4 pole_vector_ms = models_[chain.mid].cols[1];
-        const ozz::math::SimdFloat4 pole_len_sq = ozz::math::Length3Sqr(pole_vector_ms);
-        const ozz::math::SimdFloat4 min_len = ozz::math::simd_float4::Load1(1e-6f);
-        if (ozz::math::AreAllTrue1(ozz::math::CmpGt(pole_len_sq, min_len)))
-        {
-            pole_vector_ms = ozz::math::Normalize3(pole_vector_ms);
-        }
+        // Use the stable pole vector from bind pose instead of recalculating from current frame
+        // This prevents IK flipping/snapping issues, especially for first-person arm rigs
+        ozz::math::SimdFloat4 pole_vector_ms = chain.pole_vector;
 
         ozz::animation::IKTwoBoneJob ik_job;
         ik_job.target = target_ms;
