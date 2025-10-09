@@ -871,13 +871,14 @@ void CActor::OnBeforeChangeVisual()
 
 void CActor::OnChangeVisual()
 {
-    {
-        CPhysicsShell* tmp_shell = PPhysicsShell();
-        PPhysicsShell() = NULL;
-        inherited::OnChangeVisual();
-        PPhysicsShell() = tmp_shell;
-        tmp_shell = NULL;
-    }
+    if (!Visual())
+        return;
+
+    CPhysicsShell* tmp_shell = PPhysicsShell();
+    PPhysicsShell() = NULL;
+    inherited::OnChangeVisual();
+    PPhysicsShell() = tmp_shell;
+    tmp_shell = NULL;
 
     IKinematicsAnimated* V = Visual()->dcast_PKinematicsAnimated();
     IKinematics* K = Visual()->dcast_PKinematics();

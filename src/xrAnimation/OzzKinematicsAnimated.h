@@ -31,6 +31,9 @@ public:
     ~OzzKinematicsAnimated() override;
     virtual void OnSkeletonLoaded() override;
 
+    // Copy semantics (follows X-Ray pattern - shares motion data, re-creates instance state)
+    void Copy(OzzKinematicsAnimated* from);
+
     // Initialization with motion references
     bool InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs = xr_vector<xr_string>());
     bool InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData,

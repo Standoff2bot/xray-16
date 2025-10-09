@@ -565,18 +565,112 @@ void COzzKinematicsVisual::Copy(dxRender_Visual* pFrom)
 {
     dxRender_Visual::Copy(pFrom);
 
-    if (auto* other = dynamic_cast<COzzKinematicsVisual*>(pFrom))
-    {
-        skeleton_payload_ = other->skeleton_payload_;
-        mesh_payload_ = other->mesh_payload_;
-        meshes_ = other->meshes_;
-        motion_references_ = other->motion_references_;
-        bone_metadata_ = other->bone_metadata_;
-        user_data_payload_ = other->user_data_payload_;
-        embedded_animation_payload_ = other->embedded_animation_payload_;
+    auto* other = dynamic_cast<COzzKinematicsVisual*>(pFrom);
+    if (!other)
+        return;
 
-        R_ASSERT2(InitializeFromPayload(), "Failed to copy OzzKinematicsVisual state");
+    Msg("[COzzKinematicsVisual::Copy] Starting copy from source visual");
+
+    // Copy payload data (needed for re-initialization)
+    skeleton_payload_ = other->skeleton_payload_;
+    mesh_payload_ = other->mesh_payload_;
+    motion_references_ = other->motion_references_;
+    bone_metadata_ = other->bone_metadata_;
+    user_data_payload_ = other->user_data_payload_;
+    embedded_animation_payload_ = other->embedded_animation_payload_;
+
+    // Copy mesh data (shallow copy - meshes are immutable)
+    meshes_ = other->meshes_;
+
+    // Copy flags
+    initialized_ = false;
+    is_animated_ = other->is_animated_;
+
+    // Following ozz-animation multithread sample pattern:
+    // - Skeleton is shared (loaded once, passed as const& to jobs)
+    // - Each instance has its own runtime state (locals, context, bone instances)
+    //
+    // Since ozz::animation::Skeleton is non-copyable, we re-initialize from
+    // the cached skeleton payload, then share the motion data.
+
+    // Create appropriate kinematics type
+    if (is_animated_)
+    {
+        OzzKinematicsAnimated* animated = xr_new<OzzKinematicsAnimated>();
+        animated_kinematics_ = animated;
+        kinematics_.reset(animated);
     }
+    else
+    {
+        kinematics_ = xr_make_unique<OzzKinematics>();
+        animated_kinematics_ = nullptr;
+    }
+
+    kinematics_->SetVisualOwner(this);
+
+    // Re-initialize skeleton from cached payload (creates new instance data)
+    ozz::span<const std::byte> skeleton_span(
+        reinterpret_cast<const std::byte*>(skeleton_payload_.data()),
+        skeleton_payload_.size());
+
+    if (is_animated_)
+    {
+        auto* animated = static_cast<OzzKinematicsAnimated*>(kinematics_.get());
+
+        // Initialize skeleton first (creates per-instance buffers)
+        if (!animated->InitializeFromOzzBuffer(skeleton_span, motion_references_))
+        {
+            Msg("[COzzKinematicsVisual::Copy] Failed to initialize animated kinematics from payload");
+            return;
+        }
+
+        // Now copy motion data (shares motion handles, increments refcounts)
+        if (other->animated_kinematics_)
+        {
+            animated->Copy(other->animated_kinematics_);
+        }
+    }
+    else
+    {
+        if (!kinematics_->InitializeFromOzzBuffer(skeleton_span))
+        {
+            Msg("[COzzKinematicsVisual::Copy] Failed to initialize kinematics from payload");
+            return;
+        }
+    }
+
+    // Apply metadata and user data
+    if (!kinematics_->LoadUserDataFromBuffer(user_data_payload_) && !user_data_payload_.empty())
+        Msg("[COzzKinematicsVisual::Copy] Failed to load user data from payload");
+
+    if (!kinematics_->ApplyExtendedBoneMetadata(bone_metadata_))
+        Msg("[COzzKinematicsVisual::Copy] Bone metadata application failed");
+
+    // Re-create surfaces (per-instance state)
+    DestroySurfaces();
+    children.clear();
+    surfaces_.reserve(meshes_.size());
+    for (const auto& mesh : meshes_)
+    {
+        auto* surface = xr_new<COzzSkinnedSurface>(*this, mesh);
+        children.push_back(surface);
+        surfaces_.push_back(surface);
+    }
+    bDontDelete = TRUE;
+
+    // Set up callbacks
+    kinematics_->SetUpdateCallback(&COzzKinematicsVisual::HandleKinematicsUpdated);
+    kinematics_->SetUpdateCallbackParam(this);
+
+    last_animation_update_frame_ = u32(-1);
+    initialized_ = true;
+
+    // Initialize bone palette
+    kinematics_->CalculateBones(TRUE);
+    OnPoseUpdated();
+    EnsureSkinningPalette();
+
+    Msg("[COzzKinematicsVisual::Copy] Copy complete - skeleton re-initialized, motion data shared");
 }
 
 void COzzKinematicsVisual::Spawn()

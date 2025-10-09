@@ -30,6 +30,15 @@ std::string ReadOzzString(ozz::io::IArchive& archive)
 {
     uint32_t length = 0;
     archive >> length;
+
+    // Security: Limit string length to prevent excessive allocations
+    constexpr uint32_t kMaxStringLength = 256;
+    if (length > kMaxStringLength)
+    {
+        Msg("[OzzMotions] Warning: String length %u exceeds max %u, truncating", length, kMaxStringLength);
+        length = kMaxStringLength;
+    }
+
     std::string result;
     if (length == 0)
         return result;
@@ -85,6 +94,14 @@ MotionMetadata ReadMotionMetadataFromArchive(ozz::io::IArchive& archive)
     uint32_t mark_count = 0;
     archive >> mark_count;
 
+    // Security: Limit mark count
+    constexpr uint32_t kMaxMarks = 100;
+    if (mark_count > kMaxMarks)
+    {
+        Msg("[OzzMotions] Warning: Mark count %u exceeds max %u, truncating", mark_count, kMaxMarks);
+        mark_count = kMaxMarks;
+    }
+
     for (uint32_t mark_index = 0; mark_index < mark_count; ++mark_index)
     {
         ReadOzzString(archive); // mark name
@@ -104,6 +121,15 @@ MotionMetadata ReadMotionMetadataFromArchive(ozz::io::IArchive& archive)
 
     uint32_t bone_motion_count = 0;
     archive >> bone_motion_count;
+
+    // Security: Limit bone motion count to prevent excessive allocations
+    constexpr uint32_t kMaxBoneMotions = 512;  // More than enough for any skeleton
+    if (bone_motion_count > kMaxBoneMotions)
+    {
+        Msg("[OzzMotions] ERROR: Bone motion count %u exceeds max %u", bone_motion_count, kMaxBoneMotions);
+        bone_motion_count = kMaxBoneMotions;
+    }
+
     metadata.bone_motions.resize(bone_motion_count);
 
     for (uint32_t bone_index = 0; bone_index < bone_motion_count; ++bone_index)
@@ -393,6 +419,15 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
     uint32_t animation_count = 0;
     archive >> animation_count;
 
+    // Security: Validate animation count to prevent excessive allocations
+    constexpr uint32_t kMaxAnimations = 1000;
+    if (animation_count > kMaxAnimations)
+    {
+        Msg("[OzzMotionsContainer] ERROR: Animation count %u exceeds max %u", animation_count, kMaxAnimations);
+        loadState.store(MotionLoadState::Failed, std::memory_order_release);
+        return false;
+    }
+
     Msg("[OzzMotionsContainer] Animation count in file: %u", animation_count);
 
     const u32 joint_count = skeleton.num_joints();
@@ -588,14 +623,16 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
                 motion.set_flags(flRKeyAbsent);
                 motion.set_count(frame_count);
 
-                CKeyQR identity{};
-                identity.x = 0;
-                identity.y = 0;
-                identity.z = 0;
-                identity.w = static_cast<s16>(KEY_Quant);
+                // Create identity transform on heap to avoid stack variable issues
+                CKeyQR* identity = xr_new<CKeyQR>();
+                identity->x = 0;
+                identity->y = 0;
+                identity->z = 0;
+                identity->w = static_cast<s16>(KEY_Quant);
 
-                const u32 crc = ComputeOrDefaultCrc(0, &identity, sizeof(identity));
-                motion._keysR.create(crc, 1, const_cast<CKeyQR*>(&identity));
+                const u32 crc = ComputeOrDefaultCrc(0, identity, sizeof(CKeyQR));
+                motion._keysR.create(crc, 1, identity);
+                xr_delete(identity);  // Safe to delete after create() copies the data
                 motion._sizeT.set(0.f, 0.f, 0.f);
                 motion._initT.set(0.f, 0.f, 0.f);
             }
@@ -662,6 +699,15 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
     ozz::io::IArchive archive(&stream);
     uint32_t animation_count = 0;
     archive >> animation_count;
+
+    // Security: Validate animation count to prevent excessive allocations
+    constexpr uint32_t kMaxAnimations = 1000;
+    if (animation_count > kMaxAnimations)
+    {
+        Msg("[OzzMotionsContainer] ERROR: Animation count %u exceeds max %u", animation_count, kMaxAnimations);
+        loadState.store(MotionLoadState::Failed, std::memory_order_release);
+        return false;
+    }
 
     Msg("[OzzMotionsContainer] Animation count in memory: %u", animation_count);
 
@@ -854,14 +900,16 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
                 motion.set_flags(flRKeyAbsent);
                 motion.set_count(frame_count);
 
-                CKeyQR identity{};
-                identity.x = 0;
-                identity.y = 0;
-                identity.z = 0;
-                identity.w = static_cast<s16>(KEY_Quant);
+                // Create identity transform on heap to avoid stack variable issues
+                CKeyQR* identity = xr_new<CKeyQR>();
+                identity->x = 0;
+                identity->y = 0;
+                identity->z = 0;
+                identity->w = static_cast<s16>(KEY_Quant);
 
-                const u32 crc = ComputeOrDefaultCrc(0, &identity, sizeof(identity));
-                motion._keysR.create(crc, 1, const_cast<CKeyQR*>(&identity));
+                const u32 crc = ComputeOrDefaultCrc(0, identity, sizeof(CKeyQR));
+                motion._keysR.create(crc, 1, identity);
+                xr_delete(identity);  // Safe to delete after create() copies the data
                 motion._sizeT.set(0.f, 0.f, 0.f);
                 motion._initT.set(0.f, 0.f, 0.f);
             }

@@ -330,6 +330,63 @@ OzzKinematicsAnimated::~OzzKinematicsAnimated()
     ClearActiveBlends(true);
 }
 
+void OzzKinematicsAnimated::Copy(OzzKinematicsAnimated* from)
+{
+    if (!from || !from->core.IsInitialized())
+        return;
+
+    Msg("[OzzKinematicsAnimated::Copy] Starting copy from source kinematics");
+
+    // NOTE: ozz::animation::Skeleton is non-copyable by design (meant to be shared)
+    // Following ozz-animation multithread sample pattern: each instance gets its own
+    // runtime state (sampledLocals, samplingContext, boneInstances) but shares the skeleton
+    //
+    // We can't directly copy core because skeleton is non-copyable.
+    // Two options:
+    // 1. Refactor to use shared_ptr for skeleton data (future improvement)
+    // 2. Re-initialize from skeleton payload (current solution - matches X-Ray pattern)
+    //
+    // For now, we rely on the parent COzzKinematicsVisual to re-initialize us
+    // from its cached skeleton payload. This is similar to how X-Ray's CKinematicsAnimated
+    // worked - it shallow-copied shared data pointers but relied on proper initialization.
+
+    // Shallow copy motion library slots (SharedOzzMotions has proper copy semantics)
+    // This increments refcounts in the global motion container
+    m_Motions = from->m_Motions;
+    Msg("[OzzKinematicsAnimated::Copy] Copied %u motion slots", static_cast<u32>(m_Motions.size()));
+
+    // Copy motion references and embedded data
+    motionReferences = from->motionReferences;
+    embeddedAnimationData = from->embeddedAnimationData;
+
+    // Copy partition data (shallow copy)
+    defaultPartition = from->defaultPartition;
+
+    // Re-build per-bone motion cache (these are pointers into shared data)
+    // NOTE: This requires core to be initialized first!
+    if (core.IsInitialized())
+    {
+        for (auto& slot : m_Motions)
+        {
+            BuildBoneMotionCache(slot);
+        }
+    }
+
+    // Re-initialize instance-specific state (blend pool, channels, etc.)
+    InitializeChannelState();
+    ResetPlaybackState();
+    InitializeSamplingState();
+
+    // Clear any active blends (per-instance state)
+    activeBlends.clear();
+
+    // Don't copy callbacks - these are instance-specific
+    blendDestroyCallback = nullptr;
+    updateTracksCallback = nullptr;
+
+    Msg("[OzzKinematicsAnimated::Copy] Copy complete");
+}
+
 void OzzKinematicsAnimated::OnSkeletonLoaded()
 {
     EnsureMotionLibraryLoaded();
