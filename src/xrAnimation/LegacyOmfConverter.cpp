@@ -6,6 +6,7 @@
 
 #include "xrCore/Animation/SkeletonMotionDefs.hpp"
 #include "xrCore/Animation/SkeletonMotions.hpp"
+#include "xrCore/Threading/ParallelFor.hpp"
 
 #include <ozz/animation/offline/animation_builder.h>
 #include <ozz/animation/offline/animation_optimizer.h>
@@ -607,9 +608,17 @@ bool ConvertLegacyOmfImpl(const LegacyOmfData& omf,
         return true;
     }
 
-    out_animations.reserve(omf.motions.size());
-    for (const auto& motion : omf.motions)
-        out_animations.emplace_back(BuildConvertedAnimation(motion, omf, skeleton, optimize));
+    // Parallelize individual animation conversions within this OMF file
+    const size_t motion_count = omf.motions.size();
+    out_animations.resize(motion_count);
+
+    xr_parallel_for(TaskRange<size_t>(0, motion_count), [&](const TaskRange<size_t>& range)
+    {
+        for (size_t idx = range.begin(); idx != range.end(); ++idx)
+        {
+            out_animations[idx] = BuildConvertedAnimation(omf.motions[idx], omf, skeleton, optimize);
+        }
+    });
 
     return true;
 }
