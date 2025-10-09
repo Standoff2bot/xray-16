@@ -1610,5 +1610,89 @@ void OzzKinematicsAnimated::LL_ClearAdditionalTransform(u16 bone_id)
 {
     OzzKinematics::LL_ClearAdditionalTransform(bone_id);
 }
+
+u16 OzzKinematicsAnimated::GetAvailableMotionCount() const
+{
+    if (!g_pOzzMotionsContainer)
+        return 0;
+
+    u32 total_count = 0;
+    for (const auto& slot : m_Motions)
+    {
+        if (const OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(slot.motions.GetHandle()))
+        {
+            total_count += value->GetMotionCount();
+        }
+    }
+
+    return static_cast<u16>(std::min(total_count, static_cast<u32>(std::numeric_limits<u16>::max())));
+}
+
+bool OzzKinematicsAnimated::GetMotionName(u16 index, xr_string& out_name) const
+{
+    if (!g_pOzzMotionsContainer)
+        return false;
+
+    u16 current_offset = 0;
+    for (const auto& slot : m_Motions)
+    {
+        const OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(slot.motions.GetHandle());
+        if (!value)
+            continue;
+
+        const u16 slot_count = value->GetMotionCount();
+        if (index < current_offset + slot_count)
+        {
+            const u16 local_index = index - current_offset;
+            if (const auto* record = value->FindMotion(local_index))
+            {
+                out_name = record->name;
+                return true;
+            }
+            return false;
+        }
+
+        current_offset += slot_count;
+    }
+
+    return false;
+}
+
+bool OzzKinematicsAnimated::GetMotionInfo(u16 index, xr_string& out_name, float& out_duration) const
+{
+    if (!g_pOzzMotionsContainer)
+        return false;
+
+    u16 current_offset = 0;
+    for (const auto& slot : m_Motions)
+    {
+        const OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(slot.motions.GetHandle());
+        if (!value)
+            continue;
+
+        const u16 slot_count = value->GetMotionCount();
+        if (index < current_offset + slot_count)
+        {
+            const u16 local_index = index - current_offset;
+            if (const auto* record = value->FindMotion(local_index))
+            {
+                out_name = record->name;
+                out_duration = record->animation ? record->animation->duration() : 0.f;
+                return true;
+            }
+            return false;
+        }
+
+        current_offset += slot_count;
+    }
+
+    return false;
+}
+
+OzzMotionsContainer* OzzKinematicsAnimated::GetMotionsContainer() const
+{
+    return g_pOzzMotionsContainer;
+}
+
 } // namespace Animation
 } // namespace XRay

@@ -14,7 +14,6 @@ namespace fs = std::filesystem;
 
 namespace XRay::Animation
 {
-OzzMotionsContainer* g_pOzzMotionsContainer = nullptr;
 
 namespace
 {

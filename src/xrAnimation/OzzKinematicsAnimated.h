@@ -121,6 +121,11 @@ public:
     const CPartition& partitions() const override;
     float get_animation_length(MotionID motion_ID) override;
 
+    // Animation enumeration helpers for utilities
+    u16 GetAvailableMotionCount() const;
+    bool GetMotionName(u16 index, xr_string& out_name) const;
+    bool GetMotionInfo(u16 index, xr_string& out_name, float& out_duration) const;
+
     IRenderVisual* dcast_RenderVisual() override
     {
         return OzzKinematics::dcast_RenderVisual();
@@ -135,6 +140,8 @@ public:
     {
         return this;
     }
+
+    OzzMotionsContainer* GetMotionsContainer() const;
 
 private:
     struct SMotionsSlot

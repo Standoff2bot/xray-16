@@ -16,6 +16,11 @@
 #include <atomic>
 #include <memory>
 
+#ifndef ENGINE_API
+#include "xrAPI/xrAPI.h"
+#include "xrEngine/Engine.h"
+#endif
+
 namespace XRay::Animation
 {
 using MotionVec = xr_vector<CMotion>;
@@ -254,7 +259,7 @@ private:
     xr_vector<EvictionCandidate> GatherEvictionCandidates();
 };
 
-extern OzzMotionsContainer* g_pOzzMotionsContainer;
+extern ENGINE_API OzzMotionsContainer* g_pOzzMotionsContainer;
 
 class SharedOzzMotions
 {
