@@ -197,15 +197,18 @@ void CControlAnimationBase::select_animation(bool anim_end)
         VERIFY(m_override_animation_index < anim_it->count);
         index = m_override_animation_index;
     }
-    else if (anim_it->spec_id != -1)
+    else if (anim_it && anim_it->spec_id != -1)
     {
         index = anim_it->spec_id;
     }
-    else
+    else if (anim_it)
     {
         VERIFY(anim_it->count != 0);
         index = ::Random.randI(anim_it->count);
     }
+
+    if (!anim_it)
+        return;
 
     // установить анимацию
     string128 s1, s2;

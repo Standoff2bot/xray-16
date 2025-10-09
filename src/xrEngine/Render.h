@@ -280,8 +280,8 @@ public:
     virtual bool ConsumeOzzPaletteDebugDumpRequest() = 0;
     virtual bool LoadOzzAnimation(IRenderVisual* visual, const std::filesystem::path& path) = 0;
     virtual void StopOzzAnimation(IRenderVisual* visual) = 0;
-    virtual bool PlayOzzLegacyMotion(IRenderVisual* visual, const xr_string& motion_name) = 0;
-    virtual bool EnumerateOzzLegacyMotions(IRenderVisual* visual, xr_vector<xr_string>& out_names) = 0;
+    virtual bool PlayOzzMotion(IRenderVisual* visual, const xr_string& motion_name) = 0;
+    virtual bool GetOzzAvailableMotions(IRenderVisual* visual, xr_vector<xr_string>& out_names) = 0;
 
     // Loading / Unloading
     virtual void create() = 0;

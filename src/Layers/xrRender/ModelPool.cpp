@@ -30,6 +30,7 @@
 
 #include "OzzKinematicsVisual.h"
 #include "ModelNaming.h"
+#include "xrAnimation/OzzSharedMotions.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -329,6 +330,10 @@ void CModelPool::Destroy()
 
     // cleanup motions container
     g_pMotionsContainer->clean(false);
+
+    // cleanup ozz motions container
+    if (XRay::Animation::g_pOzzMotionsContainer)
+        XRay::Animation::g_pOzzMotionsContainer->Clean(false);
 }
 
 CModelPool::CModelPool()
@@ -337,12 +342,15 @@ CModelPool::CModelPool()
     bForceDiscard = FALSE;
     bAllowChildrenDuplicate = TRUE;
     g_pMotionsContainer = xr_new<motions_container>();
+    XRay::Animation::g_pOzzMotionsContainer = xr_new<XRay::Animation::OzzMotionsContainer>();  // NEW!
+    Msg("[ModelPool] Initialized with OzzMotionsContainer support");
 }
 
 CModelPool::~CModelPool()
 {
     Destroy();
     xr_delete(g_pMotionsContainer);
+    xr_delete(XRay::Animation::g_pOzzMotionsContainer);  // NEW!
 }
 
 void CModelPool::Rebuild()

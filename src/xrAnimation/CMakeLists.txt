@@ -36,6 +36,8 @@ set(SOURCES
     OzzKinematics.h
     OzzKinematicsAnimated.cpp
     OzzKinematicsAnimated.h
+    OzzSharedMotions.cpp
+    OzzSharedMotions.hpp
     StartupConversionInventory.cpp
     StartupConversionInventory.h
     ../../Externals/ozz-animation/samples/framework/mesh.cc

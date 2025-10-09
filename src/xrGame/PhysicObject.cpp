@@ -197,11 +197,16 @@ void CPhysicObject::RunStartupAnim(CSE_Abstract* D)
             R_ASSERT(visual);
             R_ASSERT2(*visual->startup_animation, "no startup animation");
 
-            VERIFY2((!!PKinematicsAnimated->LL_MotionID(visual->startup_animation.c_str()).valid()),
-                (make_string(" animation %s not faund ", visual->startup_animation.c_str()) +
-                    dbg_object_base_dump_string(this))
-                    .c_str());
-            m_anim_blend = m_anim_script_callback.play_cycle(PKinematicsAnimated, visual->startup_animation);
+            const auto motionID = PKinematicsAnimated->LL_MotionID(visual->startup_animation.c_str());
+            if (motionID.valid())
+            {
+                m_anim_blend = m_anim_script_callback.play_cycle(PKinematicsAnimated, visual->startup_animation);
+            }
+            else
+            {
+                Msg("Could not play startup animation %s for %s", visual->startup_animation.c_str(),
+                    dbg_object_base_dump_string(this));
+            }
         }
         Visual()->dcast_PKinematics()->CalculateBones_Invalidate();
         Visual()->dcast_PKinematics()->CalculateBones(TRUE);

@@ -163,7 +163,7 @@ void CWeapon::UpdateXForm()
     if (!parent || parent->attached(this))
         return;
 
-    IKinematics* V = smart_cast<IKinematics*>(E->Visual());
+    IKinematics* V = smart_cast<IKinematics*>(E->Visual()->dcast_PKinematics());
 
     if (!V)
         return;

@@ -244,6 +244,7 @@
     <ClInclude Include="OzzKinematics.h" />
     <ClInclude Include="OzzKinematicsAnimated.h" />
     <ClInclude Include="OzzKinematicsCore.h" />
+    <ClInclude Include="OzzSharedMotions.hpp" />
     <ClInclude Include="StartupConversionInventory.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="xrAnimation.h" />
@@ -255,6 +256,7 @@
     <ClCompile Include="OzzKinematics.cpp" />
     <ClCompile Include="OzzKinematicsAnimated.cpp" />
     <ClCompile Include="OzzKinematicsCore.cpp" />
+    <ClCompile Include="OzzSharedMotions.cpp" />
     <ClCompile Include="StartupConversionInventory.cpp" />
     <ClCompile Include="..\..\Externals\ozz-animation\samples\framework\mesh.cc">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

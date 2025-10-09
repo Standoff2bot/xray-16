@@ -395,7 +395,7 @@ void CMissile::UpdateXForm()
         if (parent && parent->attached(this))
             return;
 
-        IKinematics* V = smart_cast<IKinematics*>(E->Visual());
+        IKinematics* V = smart_cast<IKinematics*>(E->Visual()->dcast_PKinematics());
         VERIFY(V);
 
         // Get matrices

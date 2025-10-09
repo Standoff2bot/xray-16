@@ -68,8 +68,8 @@ public:
     const xr_vector<ozz::sample::Mesh>& Meshes() const { return meshes_; }
 
     // Animation helpers (forward to animated kinematics if present)
-    bool PlayLegacyMotion(const xr_string& motion_name);
-    xr_vector<xr_string> LegacyMotionNames();
+    bool PlayMotion(const xr_string& motion_name);
+    xr_vector<xr_string> GetAvailableMotions();
     bool LoadAnimationFromFile(const std::filesystem::path& path);
     void StopAnimation();
 

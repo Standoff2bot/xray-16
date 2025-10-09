@@ -1,6 +1,7 @@
 #pragma once
 
 #include "OzzKinematics.h"
+#include "OzzSharedMotions.hpp"
 #include "Include/xrRender/KinematicsAnimated.h"
 #include "Include/xrRender/animation_motion.h"
 #include "Layers/xrRender/Animation.h"
@@ -39,8 +40,6 @@ public:
     void SetEmbeddedAnimationData(const std::vector<std::uint8_t>& data);
 
     // Animation management
-    bool PlayLegacyMotion(const xr_string& motion_name);
-    xr_vector<xr_string> LegacyMotionNames();
     bool LoadAnimationFromFile(const std::filesystem::path& path);
     void StopAnimation();
     bool AdvanceAnimation(float dt);
@@ -52,17 +51,6 @@ public:
 #ifdef DEBUG
     ozz::span<const ozz::math::SoaTransform> DebugSampledLocals() const;
 #endif
-
-    // Motion record for legacy compatibility
-    struct MotionRecord
-    {
-        xr_string name;
-        std::shared_ptr<ozz::animation::Animation> animation;
-        CMotionDef definition;
-        MotionID id;
-        u32 frameCount = 0;
-        xr_vector<xr_unique_ptr<CMotion>> boneMotions;
-    };
 
     // Active blend tracking
     struct ActiveBlendEntry
@@ -146,30 +134,21 @@ public:
     IKinematicsAnimated* dcast_PKinematicsAnimated() override { return this; }
 
 private:
-    // Motion library management
-    struct MotionLibrary
+    // Motion library management (REFACTORED - using shared container)
+    struct SMotionsSlot
     {
-        xr_vector<MotionRecord> records;
-        xr_unordered_map<xr_string, u16> lookup;
-
-        void Reset();
-        bool Contains(const xr_string& name) const;
-        MotionRecord* Find(u16 index);
-        const MotionRecord* Find(u16 index) const;
-        MotionRecord* Find(const xr_string& name);
-        const MotionRecord* Find(const xr_string& name) const;
-        u16 NextIndex() const;
-        void Add(MotionRecord&& record);
+        SharedOzzMotions motions;         // Shared handle (not raw pointer!)
+        BoneMotionsVec bone_motions;      // xr_vector<MotionVec*> - per-bone motion cache
+        //             ^^^ Each entry is MotionVec* (pointer to vector of CMotions)
+        //                 bone_motions[bone_id]->at(motion_idx) gives CMotion
     };
+    using MotionsSlotVec = xr_vector<SMotionsSlot>;
+
 
     void ResetAnimationState();
     void InitializeChannelState();
     void EnsureMotionLibraryLoaded();
-    bool LoadMotionReference(const xr_string& reference);
-    bool LoadLegacyMotion(const xr_string& motion_name);
-    MotionID ResolveLegacyMotionId(const xr_string& motion_name);
-    bool LoadOzzAnimationsFromFile(const xr_string& relative_path);
-    bool LoadOzzAnimationsFromArchive(ozz::io::IArchive& archive, const xr_string& source_label);
+    void BuildBoneMotionCache(SMotionsSlot& slot);  // Build per-bone cache
 
     int FindActiveBlendIndex(u16 partition, u8 channel) const;
     void RemoveActiveBlend(size_t index, bool notifyDestroy);
@@ -190,8 +169,8 @@ private:
     float playbackSpeed = 1.f;
     float playbackTime = 0.f;
 
-    // Motion library
-    MotionLibrary motionLibrary;
+    // Motion library (REFACTORED - using shared system)
+    MotionsSlotVec m_Motions;            // Shared motion slots
     xr_vector<xr_string> motionReferences;
     std::vector<std::uint8_t> embeddedAnimationData;
 

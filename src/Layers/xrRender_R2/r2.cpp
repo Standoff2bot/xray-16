@@ -672,7 +672,7 @@ void CRender::StopOzzAnimation(IRenderVisual* visual)
     ozz_visual->StopAnimation();
 }
 
-bool CRender::PlayOzzLegacyMotion(IRenderVisual* visual, const xr_string& motion_name)
+bool CRender::PlayOzzMotion(IRenderVisual* visual, const xr_string& motion_name)
 {
     if (!visual)
         return false;
@@ -682,10 +682,10 @@ bool CRender::PlayOzzLegacyMotion(IRenderVisual* visual, const xr_string& motion
         return false;
 
     auto* ozz_visual = static_cast<COzzKinematicsVisual*>(visual);
-    return ozz_visual->PlayLegacyMotion(motion_name);
+    return ozz_visual->PlayMotion(motion_name);
 }
 
-bool CRender::EnumerateOzzLegacyMotions(IRenderVisual* visual, xr_vector<xr_string>& out_names)
+bool CRender::GetOzzAvailableMotions(IRenderVisual* visual, xr_vector<xr_string>& out_names)
 {
     out_names.clear();
     if (!visual)
@@ -696,7 +696,7 @@ bool CRender::EnumerateOzzLegacyMotions(IRenderVisual* visual, xr_vector<xr_stri
         return false;
 
     auto* ozz_visual = static_cast<COzzKinematicsVisual*>(visual);
-    out_names = ozz_visual->LegacyMotionNames();
+    out_names = ozz_visual->GetAvailableMotions();
     return true;
 }
 

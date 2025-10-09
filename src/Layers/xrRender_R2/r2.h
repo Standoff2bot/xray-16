@@ -490,8 +490,8 @@ public:
     void RequestOzzPaletteDebugDump() override;
     bool LoadOzzAnimation(IRenderVisual* visual, const std::filesystem::path& path) override;
     void StopOzzAnimation(IRenderVisual* visual) override;
-    bool PlayOzzLegacyMotion(IRenderVisual* visual, const xr_string& motion_name) override;
-    bool EnumerateOzzLegacyMotions(IRenderVisual* visual, xr_vector<xr_string>& out_names) override;
+    bool PlayOzzMotion(IRenderVisual* visual, const xr_string& motion_name) override;
+    bool GetOzzAvailableMotions(IRenderVisual* visual, xr_vector<xr_string>& out_names) override;
     bool ConsumeOzzPaletteDebugDumpRequest() override;
 
     void Calculate() override;

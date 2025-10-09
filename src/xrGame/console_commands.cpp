@@ -1938,16 +1938,16 @@ public:
 			return;
 		}
 
-		if (GEnv.Render->PlayOzzLegacyMotion(visual, xr_string(trimmed.c_str())))
+		if (GEnv.Render->PlayOzzMotion(visual, xr_string(trimmed.c_str())))
 		{
-			Msg("[ozz] playing legacy motion '%s'", trimmed.c_str());
+			Msg("[ozz] playing motion '%s'", trimmed.c_str());
 			return;
 		}
 
 		xr_vector<xr_string> available;
-		if (!GEnv.Render->EnumerateOzzLegacyMotions(visual, available) || available.empty())
+		if (!GEnv.Render->GetOzzAvailableMotions(visual, available) || available.empty())
 		{
-			Msg("[ozz] bundle has no legacy motions indexed yet");
+			Msg("[ozz] no motions available");
 			return;
 		}
 
@@ -1966,7 +1966,7 @@ public:
 
 	void Info(TInfo& I) override
 	{
-		xr_strcpy(I, "play a .ozz clip or legacy motion name on the current Ozz actor");
+		xr_strcpy(I, "play a .ozz clip or motion name on the current Ozz actor");
 	}
 };
 
@@ -2029,7 +2029,7 @@ public:
 			return;
 
 		xr_vector<xr_string> names;
-		if (!GEnv.Render->EnumerateOzzLegacyMotions(visual, names))
+		if (!GEnv.Render->GetOzzAvailableMotions(visual, names))
 		{
 			Msg("[ozz] actor visual is not an Ozz bundle");
 			return;
@@ -2037,7 +2037,7 @@ public:
 
 		if (names.empty())
 		{
-			Msg("[ozz] no legacy motions indexed");
+			Msg("[ozz] no motions available");
 			return;
 		}
 
@@ -2054,7 +2054,7 @@ public:
 
 	void Info(TInfo& I) override
 	{
-		xr_strcpy(I, "list legacy motions available on the current Ozz actor");
+		xr_strcpy(I, "list motions available on the current Ozz actor");
 	}
 };
 

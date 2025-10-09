@@ -148,6 +148,9 @@ void attachable_hud_item::update(bool bForce)
     m_parent->calc_transform(m_attach_place_idx, m_attach_offset, m_item_transform);
     m_upd_firedeps_frame = Device.dwFrame;
 
+    if (!m_model)
+        return;
+
     if (IKinematicsAnimated* ka = m_model->dcast_PKinematicsAnimated())
     {
         ka->UpdateTracks();
@@ -209,6 +212,9 @@ bool attachable_hud_item::need_renderable() const { return m_parent_hud_item->ne
 
 void attachable_hud_item::render(u32 context_id, IRenderable* root)
 {
+    if (!m_model)
+        return;
+
     GEnv.Render->add_Visual(context_id, root, m_model->dcast_RenderVisual(), m_item_transform);
     m_parent_hud_item->render_hud_mode();
 }
@@ -236,7 +242,7 @@ Fmatrix hud_item_measures::load(const shared_str& sect_name, IKinematics* K)
 
     shared_str bone_name;
     m_prop_flags.set(e_fire_point, pSettings->line_exist(sect_name, "fire_bone"));
-    if (m_prop_flags.test(e_fire_point))
+    if (m_prop_flags.test(e_fire_point) && K)
     {
         bone_name = pSettings->r_string(sect_name, "fire_bone");
         m_fire_bone = K->LL_BoneID(bone_name);
@@ -246,7 +252,7 @@ Fmatrix hud_item_measures::load(const shared_str& sect_name, IKinematics* K)
         m_fire_point_offset = {};
 
     m_prop_flags.set(e_fire_point2, pSettings->line_exist(sect_name, "fire_bone2"));
-    if (m_prop_flags.test(e_fire_point2))
+    if (m_prop_flags.test(e_fire_point2) && K)
     {
         bone_name = pSettings->r_string(sect_name, "fire_bone2");
         m_fire_bone2 = K->LL_BoneID(bone_name);
@@ -256,7 +262,7 @@ Fmatrix hud_item_measures::load(const shared_str& sect_name, IKinematics* K)
         m_fire_point2_offset = {};
 
     m_prop_flags.set(e_shell_point, pSettings->line_exist(sect_name, "shell_bone"));
-    if (m_prop_flags.test(e_shell_point))
+    if (m_prop_flags.test(e_shell_point) && K)
     {
         bone_name = pSettings->r_string(sect_name, "shell_bone");
         m_shell_bone = K->LL_BoneID(bone_name);
@@ -437,10 +443,13 @@ u32 attachable_hud_item::anim_play(const shared_str& anm_name_b, BOOL bMixIn, co
 
     const float speed = CalcMotionSpeed(anm->m_base_name, anm->m_anim_speed);
 
-    rnd_idx = (u8)Random.randI(anm->m_animations.size());
+    rnd_idx = (u8)Random.randI(_max(anm->m_animations.size(), 1));
     const motion_descr& M = anm->m_animations[rnd_idx];
 
-    IKinematicsAnimated* ka = smart_cast<IKinematicsAnimated*>(m_model);
+    if (!m_model)
+        return 0;
+
+    IKinematicsAnimated* ka = smart_cast<IKinematicsAnimated*>(m_model->dcast_PKinematicsAnimated());
     const u32 ret = m_parent->anim_play(m_attach_place_idx, M.mid, bMixIn, md, speed, m_monolithic ? ka : nullptr);
 
     if (ka)
@@ -565,7 +574,7 @@ void player_hud::load(const shared_str& player_hud_sect, bool forceReload)
 
     if (!b_reload)
     {
-        m_model->PlayCycle("hand_idle_doun");
+        //m_model->PlayCycle("hand_idle_doun");
     }
     else
     {
@@ -648,18 +657,25 @@ u32 player_hud::motion_length(const shared_str& anim_name, const shared_str& hud
         return 100; // ms TEMPORARY
     R_ASSERT2(pm,
         make_string("hudItem model [%s] has no motion with alias [%s]", hud_name.c_str(), anim_name.c_str()).c_str());
-    IKinematicsAnimated* model = pi->m_monolithic ? smart_cast<IKinematicsAnimated*>(pi->m_model) : nullptr;
+    IKinematicsAnimated* model = pi->m_monolithic ? smart_cast<IKinematicsAnimated*>(PKinematics(pi->m_model->dcast_RenderVisual())) : nullptr;
+
+    if (!model)
+        return 0;
+
     return motion_length(pm->m_animations[0].mid, md, speed, model);
 }
 
 u32 player_hud::motion_length(const MotionID& M, const CMotionDef*& md, float speed, IKinematicsAnimated* itemModel) const
 {
     IKinematicsAnimated* model = itemModel ? itemModel : m_model;
-    if (!model)
+    if (!model || !M.valid())
         return 0;
 
     md = model->LL_GetMotionDef(M);
-    VERIFY(md);
+
+    if (!md)
+        return 0;
+
     if (md->flags & esmStopAtEnd)
     {
         CMotion* motion = model->LL_GetRootMotion(M);

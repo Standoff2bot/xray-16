@@ -12,6 +12,9 @@ CBlend* PlayMotionByParts(
     CBlend* ret = 0;
     CMotionDef* md = sa->LL_GetMotionDef(motion_ID);
 
+    if (!md)
+        return ret;
+
     if (md->bone_or_part != BI_NONE)
         return sa->LL_PlayCycle(md->bone_or_part, motion_ID, bMixIn, Callback, CallbackParam);
 

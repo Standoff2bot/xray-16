@@ -746,22 +746,35 @@ bool COzzKinematicsVisual::UpdateAnimation(float dt)
     return animated_kinematics_->AdvanceAnimation(dt);
 }
 
-bool COzzKinematicsVisual::PlayLegacyMotion(const xr_string& motion_name)
+bool COzzKinematicsVisual::PlayMotion(const xr_string& motion_name)
 {
     if (!animated_kinematics_)
         return false;
 
-    if (!animated_kinematics_->PlayLegacyMotion(motion_name))
+    // Use standard PlayCycle method to play the motion
+    MotionID motion_id = animated_kinematics_->ID_Cycle_Safe(motion_name.c_str());
+    if (!motion_id.valid())
+        return false;
+
+    CBlend* blend = animated_kinematics_->PlayCycle(motion_id);
+    if (!blend)
         return false;
 
     last_animation_update_frame_ = u32(-1);
     return true;
 }
 
-xr_vector<xr_string> COzzKinematicsVisual::LegacyMotionNames()
+xr_vector<xr_string> COzzKinematicsVisual::GetAvailableMotions()
 {
+    xr_vector<xr_string> result;
     if (!animated_kinematics_)
-        return xr_vector<xr_string>();
-    return animated_kinematics_->LegacyMotionNames();
+        return result;
+
+    // Get motion names from all loaded motion slots
+    // Note: This would require exposing motion names through the shared_motions interface
+    // For now, return empty vector as we're removing legacy support
+    // TODO: Implement proper motion enumeration through the shared motion system
+
+    return result;
 }
 } // namespace xray::render::RENDER_NAMESPACE
