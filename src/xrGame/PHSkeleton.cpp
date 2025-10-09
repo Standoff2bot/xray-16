@@ -159,13 +159,14 @@ void CPHSkeleton::SaveNetState(NET_Packet& P)
 {
     CPhysicsShellHolder* obj = PPhysicsShellHolder();
     CPhysicsShell* pPhysicsShell = obj->PPhysicsShell();
-    IKinematics* K = obj->Visual()->dcast_PKinematics();
+    IRenderVisual* visual = obj->Visual();
     if (pPhysicsShell && pPhysicsShell->isActive())
         m_flags.set(CSE_PHSkeleton::flActive, pPhysicsShell->isEnabled());
 
     P.w_u8(m_flags.get());
-    if (K)
+    if (visual && visual->dcast_PKinematics())
     {
+        IKinematics* K = visual->dcast_PKinematics();
         P.w_u64(K->LL_GetBonesVisible());
         P.w_u16(K->LL_GetBoneRoot());
     }
@@ -221,10 +222,10 @@ void CPHSkeleton::SaveNetState(NET_Packet& P)
 void CPHSkeleton::LoadNetState(NET_Packet& P)
 {
     CPhysicsShellHolder* obj = PPhysicsShellHolder();
-    IKinematics* K = obj->Visual()->dcast_PKinematics();
     P.r_u8(m_flags.flags);
-    if (K)
+    if (obj->Visual() && obj->Visual()->dcast_PKinematics())
     {
+        IKinematics* K = obj->Visual()->dcast_PKinematics();
         K->LL_SetBonesVisible(P.r_u64());
         K->LL_SetBoneRoot(P.r_u16());
     }
