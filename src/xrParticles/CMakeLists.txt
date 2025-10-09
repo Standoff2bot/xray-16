@@ -20,12 +20,28 @@ target_sources_grouped(
     "particle_actions_collection.cpp"
     "particle_actions_collection.h"
     "particle_actions_collection_io.cpp"
+    "particle_console.cpp"
+    "particle_console.h"
     "particle_core.cpp"
     "particle_core.h"
     "particle_effect.cpp"
     "particle_effect.h"
     "particle_manager.cpp"
     "particle_manager.h"
+)
+
+target_sources_grouped(
+    TARGET xrParticles
+    NAME "ECS"
+    FILES
+    "ecs/Components.h"
+)
+
+target_sources_grouped(
+    TARGET xrParticles
+    NAME "ECS\\Systems"
+    FILES
+    "ecs/Systems/IParticleSystem.h"
 )
 
 target_include_directories(xrParticles
@@ -39,6 +55,7 @@ target_link_libraries(xrParticles
     xrCore
     xrMiscMath
     xrEngine
+    EnTT::EnTT
 )
 
 target_compile_definitions(xrParticles

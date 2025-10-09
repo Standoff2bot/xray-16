@@ -7,6 +7,12 @@
     <Filter Include="PAPI">
       <UniqueIdentifier>{d7e57b42-cf91-4e84-8c34-45e6d4a43f3d}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ECS">
+      <UniqueIdentifier>{8a3b5e91-7f2c-4d8e-9a1f-3c2d4e5f6a7b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ECS\Systems">
+      <UniqueIdentifier>{9b4c6f02-8e3d-5e9f-0b2e-4d3e5f6a7b8c}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="psystem.h">
@@ -33,6 +39,15 @@
     <ClInclude Include="particle_manager.h">
       <Filter>PAPI</Filter>
     </ClInclude>
+    <ClInclude Include="particle_console.h">
+      <Filter>PAPI</Filter>
+    </ClInclude>
+    <ClInclude Include="ecs\Components.h">
+      <Filter>ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="ecs\Systems\IParticleSystem.h">
+      <Filter>ECS\Systems</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">
@@ -57,6 +72,9 @@
       <Filter>PAPI</Filter>
     </ClCompile>
     <ClCompile Include="particle_manager.cpp">
+      <Filter>PAPI</Filter>
+    </ClCompile>
+    <ClCompile Include="particle_console.cpp">
       <Filter>PAPI</Filter>
     </ClCompile>
   </ItemGroup>

@@ -3,6 +3,7 @@
 #include "particle_manager.h"
 #include "particle_effect.h"
 #include "particle_actions_collection.h"
+#include "particle_console.h"
 
 using namespace PAPI;
 
@@ -10,7 +11,17 @@ using namespace PAPI;
 CParticleManager PM;
 PARTICLES_API IParticleManager* PAPI::ParticleManager() { return &PM; }
 //
-CParticleManager::CParticleManager() {}
+CParticleManager::CParticleManager()
+{
+    // Initialize console commands on first manager creation
+    static bool console_initialized = false;
+    if (!console_initialized)
+    {
+        xrParticles_initconsole();
+        console_initialized = true;
+    }
+}
+
 CParticleManager::~CParticleManager() {}
 
 ParticleEffect* CParticleManager::GetEffectPtr(int effect_id)
