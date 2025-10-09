@@ -343,32 +343,42 @@ bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vecto
         return false;
     }
 
+    // Stash motion references before the skeleton triggers OnSkeletonLoaded().
+    motionReferences = motionRefs;
+
     // Initialize skeleton using core
     if (!core.InitializeFromOzz(skeletonPath))
+    {
+        motionReferences.clear();
         return false;
+    }
 
     InitializeSamplingState();
     ResetPlaybackState();
 
-    // Store motion references and initialize channels
-    motionReferences = motionRefs;
     InitializeChannelState();
+    EnsureMotionLibraryLoaded();
 
     return true;
 }
 
 bool OzzKinematicsAnimated::InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData, const xr_vector<xr_string>& motionRefs)
 {
+    // Stash motion references before the skeleton triggers OnSkeletonLoaded().
+    motionReferences = motionRefs;
+
     // Initialize skeleton using core
     if (!core.InitializeFromOzzBuffer(skeletonData))
+    {
+        motionReferences.clear();
         return false;
+    }
 
     InitializeSamplingState();
     ResetPlaybackState();
 
-    // Store motion references and initialize channels
-    motionReferences = motionRefs;
     InitializeChannelState();
+    EnsureMotionLibraryLoaded();
 
     return true;
 }
@@ -376,6 +386,8 @@ bool OzzKinematicsAnimated::InitializeFromOzzBuffer(ozz::span<const std::byte> s
 void OzzKinematicsAnimated::SetEmbeddedAnimationData(const std::vector<std::uint8_t>& data)
 {
     embeddedAnimationData = data;
+    Msg("[OzzKinematicsAnimated::SetEmbeddedAnimationData] Received %zu bytes of embedded animation data",
+        embeddedAnimationData.size());
 }
 
 void OzzKinematicsAnimated::ResetAnimationState()
@@ -419,6 +431,44 @@ void OzzKinematicsAnimated::EnsureMotionLibraryLoaded()
     // Compute skeleton fingerprint once
     SkeletonFingerprint skelFP = SkeletonFingerprint::Compute(core.Skeleton());
 
+    // First, check if we have embedded animations
+    if (!embeddedAnimationData.empty())
+    {
+        Msg("[OzzKinematicsAnimated] Loading embedded animations (%zu bytes)", embeddedAnimationData.size());
+
+        // Create a unique key for embedded animations based on skeleton fingerprint
+        xr_string embeddedKey = xr_string("<embedded_") +
+                                xr_string(std::to_string(skelFP.hash).c_str()) +
+                                xr_string(">");
+
+        // Create motion slot for embedded animations
+        m_Motions.push_back(SMotionsSlot());
+        SMotionsSlot& slot = m_Motions.back();
+
+        // Create load request with embedded data
+        OzzMotionsContainer::LoadRequest request;
+        request.key = shared_str(embeddedKey.c_str());
+        request.skelFingerprint = skelFP;
+        request.blocking = true;
+        request.embeddedData = embeddedAnimationData;  // Pass the embedded data
+
+        // Dock to global container (will load from memory)
+        if (!slot.motions.Create(request, core.Skeleton()))
+        {
+            Msg("[OzzKinematicsAnimated] Failed to load embedded animations");
+            m_Motions.pop_back();
+        }
+        else
+        {
+            // Build per-bone motion cache
+            BuildBoneMotionCache(slot);
+            Msg("[OzzKinematicsAnimated] Successfully loaded embedded animations");
+        }
+
+        // Clear embedded data after loading
+        embeddedAnimationData.clear();
+    }
+
 #ifdef DEBUG
     Msg("[OzzKinematicsAnimated] building motion library with shared system (%zu refs)",
         static_cast<size_t>(motionReferences.size()));
@@ -426,6 +476,7 @@ void OzzKinematicsAnimated::EnsureMotionLibraryLoaded()
         skelFP.hash, skelFP.jointCount);
 #endif
 
+    // Then load external motion references
     for (const auto& reference : motionReferences)
     {
 #ifdef DEBUG
@@ -1032,27 +1083,26 @@ MotionID OzzKinematicsAnimated::LL_MotionID(LPCSTR B)
     if (!B || !*B)
         return MotionID();
 
+    if (!g_pOzzMotionsContainer || m_Motions.empty())
+        return MotionID();
+
+    const xr_string motion_name(B);
+
     // Search through all motion slots for a matching name
     for (u16 slot = 0; slot < m_Motions.size(); ++slot)
     {
-        if (g_pOzzMotionsContainer)
-        {
-            OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(
-                m_Motions[slot].motions.GetHandle()
-            );
+        OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(
+            m_Motions[slot].motions.GetHandle()
+        );
 
-            if (value)
-            {
-                auto* record = value->FindMotion(xr_string(B));
-                if (record)
-                {
-                    // Create MotionID with slot and index
-                    MotionID id;
-                    id.set(slot, record->id.idx);
-                    return id;
-                }
-            }
-        }
+        if (!value)
+            continue;
+
+        const auto lookup = value->lookup.find(motion_name);
+        if (lookup == value->lookup.end())
+            continue;
+
+        return MotionID(slot, lookup->second);
     }
 
     return MotionID();
@@ -1106,12 +1156,14 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
     if (!mixing && !activeBlends.empty())
         ClearActiveBlends(true);
 
-    if (!controllerMotion.valid() || controllerMotion != record->id)
+    const MotionID resolvedMotion(motion.slot, record->id.idx);
+
+    if (!controllerMotion.valid() || controllerMotion != resolvedMotion)
     {
         if (!LoadAnimationClip(record->animation))
             return nullptr;
 
-        controllerMotion = record->id;
+        controllerMotion = resolvedMotion;
         animationApplied = false;
         CalculateBones_Invalidate();
     }
@@ -1126,8 +1178,8 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
     ActiveBlendEntry& entry = activeBlends.back();
     entry.partition = resolvedPartition;
     entry.channel = channel;
-    entry.recordIndex = motion.idx;
-    entry.motionId = record->id;
+    entry.recordIndex = resolvedMotion.idx;
+    entry.motionId = resolvedMotion;
 
     entry.blend = xr_make_unique<CBlend>();
     if (!entry.blend)
@@ -1150,7 +1202,7 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
     blend.speed = playback_speed_value;
     SetPlaybackSpeed(playback_speed_value);
 
-    blend.motionID = record->id;
+    blend.motionID = resolvedMotion;
     blend.timeCurrent = 0.f;
     const float animationDuration = record->animation ? record->animation->duration() : 0.f;
     float motionLength = animationDuration;
@@ -1275,9 +1327,49 @@ MotionID OzzKinematicsAnimated::ID_Cycle(LPCSTR N)
 MotionID OzzKinematicsAnimated::ID_Cycle_Safe(LPCSTR N)
 {
     if (!N || !N[0])
+    {
+        Msg("[OzzKinematicsAnimated::ID_Cycle_Safe] Empty motion name provided");
         return MotionID();
+    }
 
-    return LL_MotionID(N);
+    MotionID id = LL_MotionID(N);
+    if (!id.valid())
+    {
+        Msg("[OzzKinematicsAnimated::ID_Cycle_Safe] Motion '%s' NOT FOUND in library", N);
+
+        // Log available motions for debugging
+        if (g_pOzzMotionsContainer && !m_Motions.empty())
+        {
+            Msg("[OzzKinematicsAnimated] Available motion slots: %u", static_cast<u32>(m_Motions.size()));
+            for (u16 slot = 0; slot < m_Motions.size(); ++slot)
+            {
+                OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(
+                    m_Motions[slot].motions.GetHandle()
+                );
+                if (value)
+                {
+                    Msg("[OzzKinematicsAnimated]   Slot %u: %u motions", slot, value->GetMotionCount());
+                    // List first few motion names for debugging
+                    u16 count = std::min<u16>(5, value->GetMotionCount());
+                    for (u16 i = 0; i < count; ++i)
+                    {
+                        auto* record = value->FindMotion(i);
+                        if (record)
+                            Msg("[OzzKinematicsAnimated]     - '%s'", record->name.c_str());
+                    }
+                    if (value->GetMotionCount() > count)
+                        Msg("[OzzKinematicsAnimated]     ... and %u more", value->GetMotionCount() - count);
+                }
+            }
+        }
+    }
+    else
+    {
+        Msg("[OzzKinematicsAnimated::ID_Cycle_Safe] Motion '%s' found: slot=%u, idx=%u",
+            N, id.slot, id.idx);
+    }
+
+    return id;
 }
 
 MotionID OzzKinematicsAnimated::ID_Cycle(shared_str N)

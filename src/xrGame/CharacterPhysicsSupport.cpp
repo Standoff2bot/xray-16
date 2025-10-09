@@ -191,7 +191,7 @@ void CCharacterPhysicsSupport::in_NetSpawn(CSE_Abstract* e)
     }
     if (Type() == etStalker)
     {
-        m_hit_animations.SetupHitMotions(*smart_cast<IKinematicsAnimated*>(m_EntityAlife.Visual()));
+        m_hit_animations.SetupHitMotions(*smart_cast<IKinematicsAnimated*>(m_EntityAlife.Visual()->dcast_PKinematicsAnimated()));
     }
     anim_mov_state.init();
 
@@ -524,7 +524,8 @@ IC void CCharacterPhysicsSupport::UpdateDeathAnims()
             m_interactive_motion)) //! m_flags.test(fl_use_death_motion)//!b_death_anim_on&&m_pPhysicsShell->isFullActive()
     {
         DestroyIKController();
-        smart_cast<IKinematicsAnimated*>(m_EntityAlife.Visual())->PlayCycle("death_init");
+        if (const auto kinematics = smart_cast<IKinematicsAnimated*>(m_EntityAlife.Visual()->dcast_PKinematicsAnimated()))
+            kinematics->PlayCycle("death_init");
         m_flags.set(fl_death_anim_on, TRUE);
     }
 }

@@ -124,6 +124,9 @@ struct OzzMotionsValue
     // Load from file (checks skeleton compatibility)
     bool Load(pcstr file_path, const ozz::animation::Skeleton& skeleton);
 
+    // Load from memory buffer (for embedded animations)
+    bool LoadFromMemory(const std::vector<std::uint8_t>& data, const ozz::animation::Skeleton& skeleton, pcstr source_label = "<embedded>");
+
     // Find motion by name
     MotionRecord* FindMotion(const xr_string& name);
     const MotionRecord* FindMotion(const xr_string& name) const;
@@ -196,6 +199,9 @@ public:
         shared_str key;
         SkeletonFingerprint skelFingerprint;
         bool blocking{true};  // If false, returns immediately with Loading state
+
+        // Optional embedded data (if provided, loads from memory instead of file)
+        std::vector<std::uint8_t> embeddedData;
 
         // Future: Add callback for async completion
         // std::function<void(MotionLibraryHandle)> onComplete;

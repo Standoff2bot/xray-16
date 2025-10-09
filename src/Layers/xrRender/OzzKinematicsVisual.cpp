@@ -435,12 +435,18 @@ bool COzzKinematicsVisual::InitializeFromPayload(bool spawn_children)
     if (is_animated_)
     {
         auto* animated = static_cast<OzzKinematicsAnimated*>(kinematics_.get());
+
+        if (!embedded_animation_payload_.empty())
+        {
+            Msg("[COzzKinematicsVisual] Setting embedded animation data: %zu bytes", embedded_animation_payload_.size());
+            animated->SetEmbeddedAnimationData(embedded_animation_payload_);
+        }
+
         if (!animated->InitializeFromOzzBuffer(skeleton_span, motion_references_))
         {
             Msg("[OzzKinematicsVisual] Failed to initialize animated kinematics from cached payload");
             return false;
         }
-        animated->SetEmbeddedAnimationData(embedded_animation_payload_);
     }
     else
     {
@@ -535,6 +541,13 @@ bool COzzKinematicsVisual::LoadFromBundle(const char* name, const std::filesyste
     bone_metadata_ = bundle.bone_metadata;
     user_data_payload_.assign(bundle.user_data.begin(), bundle.user_data.end());
     embedded_animation_payload_ = bundle.embedded_animation_data;
+
+    Msg("[COzzKinematicsVisual::LoadFromBundle] Bundle '%s' loaded:", name);
+    Msg("  - Skeleton: %zu bytes", skeleton_payload_.size());
+    Msg("  - Mesh: %zu bytes", mesh_payload_.size());
+    Msg("  - Motion refs: %zu", motion_references_.size());
+    Msg("  - Embedded animations: %zu bytes", embedded_animation_payload_.size());
+    Msg("  - User data: %zu bytes", user_data_payload_.size());
 
     meshes_.clear();
 
