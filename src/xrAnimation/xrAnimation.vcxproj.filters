@@ -57,6 +57,21 @@
     <ClInclude Include="OzzKinematicsAnimated.h">
       <Filter>Animation System</Filter>
     </ClInclude>
+    <ClInclude Include="AnimationECS_Components.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
+    <ClInclude Include="AnimationECS_Registry.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
+    <ClInclude Include="AnimationECS_Systems.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
+    <ClInclude Include="AnimationECS_ParallelSystems.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
+    <ClInclude Include="AnimationECS_Performance.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">

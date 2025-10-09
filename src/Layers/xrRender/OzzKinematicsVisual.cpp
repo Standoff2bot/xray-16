@@ -131,8 +131,10 @@ COzzSkinnedSurface::COzzSkinnedSurface(COzzKinematicsVisual& owner, const ozz::s
 {
     Type = mesh.xray_metadata.ogf_type;
     InitializeGeometry(mesh);
+#ifdef DEBUG
     dbg_name = mesh.xray_metadata.texture_path.c_str();
     Msg("Yohji debug - init COzzSkinnedSurface %s", dbg_name.c_str());
+#endif
 }
 
 void COzzSkinnedSurface::InitializeGeometry(const ozz::sample::Mesh& mesh)
@@ -556,8 +558,9 @@ bool COzzKinematicsVisual::LoadFromBundle(const char* name, const std::filesyste
     init_error += path.string().c_str();
     R_ASSERT2(InitializeFromPayload(), init_error.c_str());
 
+#ifdef DEBUG
     Msg("Yohji debug - init COzzKinematicsVisual %s", dbg_name.c_str());
-
+#endif
 
     return true;
 }
@@ -778,8 +781,6 @@ void COzzKinematicsVisual::EnsureSkinningPalette()
 
     kinematics_->CalculateBones(TRUE);
     kinematics_->BuildSkinningPalette(bone_palette_, true);
-
-    DebugDumpPalette(bone_palette_);
 }
 
 const xr_vector<Fmatrix>& COzzKinematicsVisual::SkinningPalette()

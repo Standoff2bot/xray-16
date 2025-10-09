@@ -202,11 +202,13 @@ void CPhysicObject::RunStartupAnim(CSE_Abstract* D)
             {
                 m_anim_blend = m_anim_script_callback.play_cycle(PKinematicsAnimated, visual->startup_animation);
             }
+#ifdef DEBUG
             else
             {
                 Msg("Could not play startup animation %s for %s", visual->startup_animation.c_str(),
                     dbg_object_base_dump_string(this));
             }
+#endif
         }
         Visual()->dcast_PKinematics()->CalculateBones_Invalidate();
         Visual()->dcast_PKinematics()->CalculateBones(TRUE);

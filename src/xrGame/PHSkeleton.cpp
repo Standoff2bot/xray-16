@@ -38,9 +38,9 @@ CPHSkeleton::CPHSkeleton() { Init(); }
 CPHSkeleton::~CPHSkeleton() { ClearUnsplited(); }
 void CPHSkeleton::RespawnInit()
 {
-    IKinematics* K = PPhysicsShellHolder()->Visual()->dcast_PKinematics();
-    if (K)
+    if (PPhysicsShellHolder()->Visual())
     {
+        IKinematics* K = PPhysicsShellHolder()->Visual()->dcast_PKinematics();
         K->LL_SetBoneRoot(0);
         K->LL_SetBonesVisible(0xffffffffffffffffL);
         K->CalculateBones_Invalidate();

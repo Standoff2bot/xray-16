@@ -667,8 +667,8 @@ Global
 		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release Master Gold|ARM.Build.0 = Release|Win32
 		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release Master Gold|ARM64.ActiveCfg = Release|x64
 		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release Master Gold|ARM64.Build.0 = Release|x64
-		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release Master Gold|x64.ActiveCfg = Release|x64
-		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release Master Gold|x64.Build.0 = Release|x64
+		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release Master Gold|x64.ActiveCfg = Release Master Gold|x64
+		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release Master Gold|x64.Build.0 = Release Master Gold|x64
 		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release Master Gold|x86.ActiveCfg = Release|Win32
 		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release Master Gold|x86.Build.0 = Release|Win32
 		{A5B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|ARM.ActiveCfg = Release|Win32
