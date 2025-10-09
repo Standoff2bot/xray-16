@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -1194,11 +1195,6 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
         }
     });
 
-    const auto visual_end = high_resolution_clock::now();
-    out_stats.visual_conversion_time_seconds = duration_cast<duration<double>>(visual_end - visual_start).count();
-
-    Msg("[ozz] Visual conversion completed in %.2f seconds", out_stats.visual_conversion_time_seconds);
-
     for (auto& work : visual_tasks)
     {
         const LegacyVisualAsset& visual = *work.visual;
@@ -1256,12 +1252,16 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
         }
     }
 
+    const auto visual_end = high_resolution_clock::now();
+    out_stats.visual_conversion_time_seconds = duration_cast<duration<double>>(visual_end - visual_start).count();
+
     // Parallelize motion conversion with atomic counters for thread safety
     const auto motion_start = high_resolution_clock::now();
 
     std::atomic<size_t> motions_written_atomic{0};
     std::atomic<size_t> motions_skipped_atomic{0};
     std::atomic<size_t> motion_failures_atomic{0};
+    std::atomic<size_t> total_animations_converted_atomic{0};
 
     // Convert map to vector for parallel processing
     xr_vector<std::pair<xr_string, MotionTask*>> motion_tasks_vec;
@@ -1319,6 +1319,7 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
             if (WriteOzzAnimations(task.output_alias, task.output_relative, converted_animations))
             {
                 ++motions_written_atomic;
+                total_animations_converted_atomic += converted_animations.size();
 
                 // Report progress for converted motions
                 progress.completed_assets = ++completed_assets_atomic;
@@ -1335,26 +1336,27 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
     const auto motion_end = high_resolution_clock::now();
     out_stats.motion_conversion_time_seconds = duration_cast<duration<double>>(motion_end - motion_start).count();
 
-    Msg("[ozz] Motion conversion completed in %.2f seconds", out_stats.motion_conversion_time_seconds);
-
     // Update stats with atomic counts
     out_stats.motions_written += motions_written_atomic.load();
     out_stats.motions_skipped += motions_skipped_atomic.load();
     out_stats.failures += motion_failures_atomic.load();
 
+    const size_t motion_files_converted = motions_written_atomic.load();
+    const size_t total_animations_converted = total_animations_converted_atomic.load();
+
+    // Grand total
+    const double total_conversion_time_s = out_stats.visual_conversion_time_seconds + out_stats.motion_conversion_time_seconds;
+
+    Msg("[xray_to_ozz_conversion] Visual (OGF -> OZZX):  %zu bundles in %.2f seconds",
+        out_stats.bundles_written, out_stats.visual_conversion_time_seconds);
+    Msg("[xray_to_ozz_conversion] Motion (OMF -> OZZ):   %zu animations from %zu files in %.2f seconds",
+        total_animations_converted, motion_files_converted, out_stats.motion_conversion_time_seconds);
+    Msg(" ");
+    Msg("[xray_to_ozz_conversion] GRAND TOTAL: %.2f seconds", total_conversion_time_s);
+
     // Calculate total time
     const auto end_time = high_resolution_clock::now();
     out_stats.total_time_seconds = duration_cast<duration<double>>(end_time - start_time).count();
-
-    Msg("[ozz] Total conversion completed in %.2f seconds (visuals: %.2f, motions: %.2f)",
-        out_stats.total_time_seconds,
-        out_stats.visual_conversion_time_seconds,
-        out_stats.motion_conversion_time_seconds);
-
-    Msg("[ozz] Conversion stats: bundles (written=%zu, skipped=%zu), motions (written=%zu, skipped=%zu), failures=%zu",
-        out_stats.bundles_written, out_stats.bundles_skipped,
-        out_stats.motions_written, out_stats.motions_skipped,
-        out_stats.failures);
 
     return out_stats.failures == 0;
 }

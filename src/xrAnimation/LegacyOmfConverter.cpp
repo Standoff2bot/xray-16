@@ -608,7 +608,6 @@ bool ConvertLegacyOmfImpl(const LegacyOmfData& omf,
         return true;
     }
 
-    // Parallelize individual animation conversions within this OMF file
     const size_t motion_count = omf.motions.size();
     out_animations.resize(motion_count);
 
