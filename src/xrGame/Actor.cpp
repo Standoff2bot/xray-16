@@ -105,7 +105,8 @@ Flags32 psActorFlags =
     AF_RUN_BACKWARD |
     AF_IMPORTANT_SAVE |
     AF_MULTI_ITEM_PICKUP |
-    AF_USE_TRACERS
+    AF_USE_TRACERS |
+    AF_LOADING_STAGES
 };
 
 float psLookIntensityMin  = 15.f;

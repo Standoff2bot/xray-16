@@ -3,6 +3,7 @@
 #include "StartupConversionInventory.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cstring>
@@ -954,8 +955,12 @@ bool VerifyConvertedOutputs(const LegacyAssetInventory& inventory, const Startup
 
 bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                            const StartupConversionParams& params,
-                           StartupConversionStats& out_stats)
+                           StartupConversionStats& out_stats,
+                           ProgressCallback progress_callback)
 {
+    using namespace std::chrono;
+    const auto start_time = high_resolution_clock::now();
+
     out_stats = {};
 
     Msg("[ozz][debug] ConvertInventoryToOzz: ozz_output_alias='%s', inventory has %zu visuals, %zu motions",
@@ -1088,6 +1093,13 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
     Msg("[ozz][debug] Conversion plan: bundles (convert=%zu, skip=%zu), motions (convert=%zu, skip=%zu)",
         bundles_to_convert, bundles_to_skip, motions_to_convert, motions_to_skip);
 
+    // Progress tracking
+    ConversionProgress progress;
+    progress.total_assets = bundles_to_convert + motions_to_convert;
+    std::atomic<size_t> completed_assets_atomic{0};
+
+    const auto visual_start = high_resolution_clock::now();
+
     xr_parallel_for(TaskRange<size_t>(0, visual_tasks.size()), [&](const TaskRange<size_t>& range)
     {
         for (size_t idx = range.begin(); idx != range.end(); ++idx)
@@ -1171,8 +1183,21 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
             }
 
             work.success = true;
+
+            // Report progress for converted bundles
+            if (work.convert_bundle)
+            {
+                progress.completed_assets = ++completed_assets_atomic;
+                if (progress_callback)
+                    progress_callback(progress);
+            }
         }
     });
+
+    const auto visual_end = high_resolution_clock::now();
+    out_stats.visual_conversion_time_seconds = duration_cast<duration<double>>(visual_end - visual_start).count();
+
+    Msg("[ozz] Visual conversion completed in %.2f seconds", out_stats.visual_conversion_time_seconds);
 
     for (auto& work : visual_tasks)
     {
@@ -1231,56 +1256,105 @@ bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
         }
     }
 
+    // Parallelize motion conversion with atomic counters for thread safety
+    const auto motion_start = high_resolution_clock::now();
+
+    std::atomic<size_t> motions_written_atomic{0};
+    std::atomic<size_t> motions_skipped_atomic{0};
+    std::atomic<size_t> motion_failures_atomic{0};
+
+    // Convert map to vector for parallel processing
+    xr_vector<std::pair<xr_string, MotionTask*>> motion_tasks_vec;
+    motion_tasks_vec.reserve(motion_tasks.size());
     for (auto& motion_entry : motion_tasks)
+        motion_tasks_vec.emplace_back(motion_entry.first, &motion_entry.second);
+
+    xr_parallel_for(TaskRange<size_t>(0, motion_tasks_vec.size()), [&](const TaskRange<size_t>& range)
     {
-        const xr_string& canonical = motion_entry.first;
-        MotionTask& task = motion_entry.second;
-
-        if (!task.asset)
-            continue; // already reported and accounted for
-
-        if (!task.source_conversion || !task.source_conversion->skeleton)
+        for (size_t idx = range.begin(); idx != range.end(); ++idx)
         {
-            Msg("! [ozz] No converted skeleton available for motion '%s'", canonical.c_str());
-            ++out_stats.failures;
-            continue;
-        }
+            const xr_string& canonical = motion_tasks_vec[idx].first;
+            MotionTask& task = *motion_tasks_vec[idx].second;
 
-        if (!task.convert)
-        {
-            ++out_stats.motions_skipped;
-            continue;
-        }
+            if (!task.asset)
+                continue; // already reported and accounted for
 
-        auto omf_bytes = ReadFileBytes(task.asset->root_alias, task.asset->relative_path);
-        if (omf_bytes.empty())
-        {
-            Msg("! [ozz] Failed to read legacy motion '%s:%s'", task.asset->root_alias.c_str(), task.asset->relative_path.c_str());
-            ++out_stats.failures;
-            continue;
-        }
+            if (!task.source_conversion || !task.source_conversion->skeleton)
+            {
+                Msg("! [ozz] No converted skeleton available for motion '%s'", canonical.c_str());
+                ++motion_failures_atomic;
+                continue;
+            }
 
-        xr_vector<ConvertedOmfAnimation> converted_animations;
-        if (!ConvertLegacyOmf(omf_bytes.data(), omf_bytes.size(), task.source_conversion->bone_names,
-                              *task.source_conversion->skeleton, converted_animations))
-        {
-            Msg("! [ozz] Failed to convert legacy motion '%s'", task.asset->relative_path.c_str());
-            ++out_stats.failures;
-            continue;
-        }
+            if (!task.convert)
+            {
+                ++motions_skipped_atomic;
+                continue;
+            }
 
-        if (converted_animations.empty())
-        {
-            Msg("! [ozz] Motion '%s' produced no Ozz animations", task.asset->relative_path.c_str());
-            ++out_stats.failures;
-            continue;
-        }
+            auto omf_bytes = ReadFileBytes(task.asset->root_alias, task.asset->relative_path);
+            if (omf_bytes.empty())
+            {
+                Msg("! [ozz] Failed to read legacy motion '%s:%s'", task.asset->root_alias.c_str(), task.asset->relative_path.c_str());
+                ++motion_failures_atomic;
+                continue;
+            }
 
-        if (WriteOzzAnimations(task.output_alias, task.output_relative, converted_animations))
-            ++out_stats.motions_written;
-        else
-            ++out_stats.failures;
-    }
+            xr_vector<ConvertedOmfAnimation> converted_animations;
+            if (!ConvertLegacyOmf(omf_bytes.data(), omf_bytes.size(), task.source_conversion->bone_names,
+                                  *task.source_conversion->skeleton, converted_animations))
+            {
+                Msg("! [ozz] Failed to convert legacy motion '%s'", task.asset->relative_path.c_str());
+                ++motion_failures_atomic;
+                continue;
+            }
+
+            if (converted_animations.empty())
+            {
+                Msg("! [ozz] Motion '%s' produced no Ozz animations", task.asset->relative_path.c_str());
+                ++motion_failures_atomic;
+                continue;
+            }
+
+            if (WriteOzzAnimations(task.output_alias, task.output_relative, converted_animations))
+            {
+                ++motions_written_atomic;
+
+                // Report progress for converted motions
+                progress.completed_assets = ++completed_assets_atomic;
+                if (progress_callback)
+                    progress_callback(progress);
+            }
+            else
+            {
+                ++motion_failures_atomic;
+            }
+        }
+    });
+
+    const auto motion_end = high_resolution_clock::now();
+    out_stats.motion_conversion_time_seconds = duration_cast<duration<double>>(motion_end - motion_start).count();
+
+    Msg("[ozz] Motion conversion completed in %.2f seconds", out_stats.motion_conversion_time_seconds);
+
+    // Update stats with atomic counts
+    out_stats.motions_written += motions_written_atomic.load();
+    out_stats.motions_skipped += motions_skipped_atomic.load();
+    out_stats.failures += motion_failures_atomic.load();
+
+    // Calculate total time
+    const auto end_time = high_resolution_clock::now();
+    out_stats.total_time_seconds = duration_cast<duration<double>>(end_time - start_time).count();
+
+    Msg("[ozz] Total conversion completed in %.2f seconds (visuals: %.2f, motions: %.2f)",
+        out_stats.total_time_seconds,
+        out_stats.visual_conversion_time_seconds,
+        out_stats.motion_conversion_time_seconds);
+
+    Msg("[ozz] Conversion stats: bundles (written=%zu, skipped=%zu), motions (written=%zu, skipped=%zu), failures=%zu",
+        out_stats.bundles_written, out_stats.bundles_skipped,
+        out_stats.motions_written, out_stats.motions_skipped,
+        out_stats.failures);
 
     return out_stats.failures == 0;
 }

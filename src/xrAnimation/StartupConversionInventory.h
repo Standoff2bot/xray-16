@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include "xrCommon/xr_string.h"
@@ -91,12 +92,25 @@ struct StartupConversionStats
     std::size_t motions_written = 0;
     std::size_t motions_skipped = 0;
     std::size_t failures = 0;
+    double total_time_seconds = 0.0;
+    double visual_conversion_time_seconds = 0.0;
+    double motion_conversion_time_seconds = 0.0;
 };
+
+struct ConversionProgress
+{
+    std::size_t total_assets = 0;
+    std::size_t completed_assets = 0;
+    float GetProgress() const { return total_assets > 0 ? static_cast<float>(completed_assets) / total_assets : 0.0f; }
+};
+
+using ProgressCallback = std::function<void(const ConversionProgress&)>;
 
 [[nodiscard]] bool VerifyConvertedOutputs(const LegacyAssetInventory& inventory, const StartupConversionParams& params);
 bool ConvertInventoryToOzz(const LegacyAssetInventory& inventory,
                            const StartupConversionParams& params,
-                           StartupConversionStats& out_stats);
+                           StartupConversionStats& out_stats,
+                           ProgressCallback progress_callback = nullptr);
 
 } // namespace Animation
 } // namespace XRay

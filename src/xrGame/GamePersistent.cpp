@@ -200,8 +200,6 @@ void CGamePersistent::OnGameStart()
         return;
     }
 
-    // If we reach here, either digest changed or some outputs are missing
-    // We only convert missing/changed assets (incremental conversion)
     StartupConversionStats conversion_stats;
     const bool show_loading_stage = psActorFlags.test(AF_LOADING_STAGES);
 
@@ -212,7 +210,18 @@ void CGamePersistent::OnGameStart()
     Msg("[ozz] Startup conversion refreshing missing assets (cached=%s, computed=%s)",
         stored_display.c_str(), computed_digest.c_str());
 
-    bool didConvert = ConvertInventoryToOzz(inventory, conversion_params, conversion_stats);
+    auto progress_callback = [show_loading_stage](const ConversionProgress& progress) {
+        if (show_loading_stage && progress.total_assets > 0)
+        {
+            const int percent = static_cast<int>(progress.GetProgress() * 100.0f);
+            string256 msg;
+            xr_sprintf(msg, "Converting ozz assets %zu/%zu (%d%%)",
+                      progress.completed_assets, progress.total_assets, percent);
+            g_pGamePersistent->LoadTitle(msg, false);
+        }
+    };
+
+    bool didConvert = ConvertInventoryToOzz(inventory, conversion_params, conversion_stats, progress_callback);
 
     if (!didConvert)
     {
@@ -234,8 +243,6 @@ void CGamePersistent::OnGameStart()
             g_player_hud->reload();
     }
 
-    if (show_loading_stage)
-        LoadStage();
 
     if (!StoreInventoryDigestInUserConfig(computed_digest))
     {
