@@ -27,6 +27,9 @@ endif()
 
 add_subdirectory(ozz-animation)
 
+# EnTT - Entity Component System library (header-only)
+add_subdirectory(entt)
+
 if (NOT TARGET xrLuabind)
     message(FATAL_ERROR
         "You probably have downloaded OpenXRay sources as ZIP archive, you can't do that. Use git to clone the repository.\n"

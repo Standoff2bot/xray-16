@@ -16,6 +16,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Externals/ozz-animation/samples
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Externals/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Externals/imgui-proj
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Externals/entt/single_include
 )
 
 # Source files
@@ -40,6 +41,9 @@ set(SOURCES
     OzzSharedMotions.hpp
     StartupConversionInventory.cpp
     StartupConversionInventory.h
+    AnimationECS_Components.h
+    AnimationECS_Systems.h
+    AnimationECS_Registry.h
     ../../Externals/ozz-animation/samples/framework/mesh.cc
 )
 
@@ -59,6 +63,7 @@ target_link_libraries(xrAnimation
     ozz_animation_offline
     ozz_animation
     ozz_base
+    EnTT::EnTT
 )
 
 # Set target properties

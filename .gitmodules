@@ -31,3 +31,6 @@
 [submodule "Externals/ozz-animation"]
 	path = Externals/ozz-animation
 	url = https://github.com/guillaumeblanc/ozz-animation.git
+[submodule "Externals/entt"]
+	path = Externals/entt
+	url = https://github.com/skypjack/entt.git

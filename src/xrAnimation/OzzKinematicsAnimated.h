@@ -12,6 +12,9 @@
 #include "ozz/base/maths/soa_transform.h"
 #include "ozz/base/span.h"
 
+#include "AnimationECS_Registry.h"
+#include "entt/entt.hpp"
+
 #include <filesystem>
 #include <memory>
 
@@ -184,5 +187,9 @@ private:
     float channelFactors[MAX_CHANNELS]{};
 
     CPartition defaultPartition{};
+
+    // ECS Integration
+    entt::entity m_ecs_entity{entt::null};
+    bool m_use_ecs{true};  // Toggle for ECS vs legacy path
 };
 } // namespace XRay::Animation

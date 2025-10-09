@@ -2,6 +2,13 @@
 
 ## X-Ray to ozz-animation Integration Project
 
+## ⚠️ CRITICAL BUILD INFORMATION
+- **CMake Build Directory:** ALWAYS use `./build` (NOT `./out/build`)
+- **Build Performance:** ALWAYS use `-j$(nproc)` flag for parallel builds
+- **Example:** `cmake --build ./build -j$(nproc)`
+
+## X-Ray to ozz-animation Integration Project
+
 ### Current Status (Phase 1, Week 2 - Completed!)
 - ✅ xrAnimation module created and building successfully
 - ✅ Dependencies resolved (ozz-animation, imgui, SDL2)

@@ -312,10 +312,29 @@ OzzKinematicsAnimated::OzzKinematicsAnimated()
     InitializeChannelState();
     ResetPlaybackState();
     IBlend_Startup();
+
+    // Initialize ECS if enabled
+    if (m_use_ecs)
+    {
+        auto& registry = AnimationECS::GetAnimationRegistry();
+        registry.Initialize();
+        m_ecs_entity = registry.CreateAnimatedEntity();
+    }
 }
 
 OzzKinematicsAnimated::~OzzKinematicsAnimated()
 {
+    // Destroy ECS entity if enabled
+    if (m_use_ecs && m_ecs_entity != entt::null)
+    {
+        auto& registry = AnimationECS::GetAnimationRegistry();
+        if (registry.IsValidEntity(m_ecs_entity))
+        {
+            registry.DestroyAnimatedEntity(m_ecs_entity);
+        }
+        m_ecs_entity = entt::null;
+    }
+
     blendDestroyCallback = nullptr;
     updateTracksCallback = nullptr;
 
@@ -364,6 +383,26 @@ void OzzKinematicsAnimated::Copy(OzzKinematicsAnimated* from)
 void OzzKinematicsAnimated::OnSkeletonLoaded()
 {
     EnsureMotionLibraryLoaded();
+
+    // Initialize ECS components when skeleton is loaded
+    if (m_use_ecs && m_ecs_entity != entt::null && core.IsInitialized())
+    {
+        auto& registry = AnimationECS::GetAnimationRegistry();
+
+        // Initialize AnimationBuffers with skeleton
+        auto* buffers = registry.GetComponent<AnimationECS::AnimationBuffers>(m_ecs_entity);
+        if (buffers)
+        {
+            buffers->Initialize(&core.Skeleton());
+        }
+
+        // Set skeleton in AnimationController
+        auto* controller = registry.GetComponent<AnimationECS::AnimationController>(m_ecs_entity);
+        if (controller)
+        {
+            controller->SetSkeleton(&core.Skeleton(), shared_str("ozz_skeleton"));
+        }
+    }
 }
 
 bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs)
@@ -1195,6 +1234,34 @@ void OzzKinematicsAnimated::UpdateTracks()
 
 void OzzKinematicsAnimated::LL_UpdateTracks(float dt, bool b_force, bool leave_blends)
 {
+    // Use ECS path if enabled
+    if (m_use_ecs && m_ecs_entity != entt::null)
+    {
+        auto& registry = AnimationECS::GetAnimationRegistry();
+
+        // Sync current animation state to ECS components
+        auto* state = registry.GetComponent<AnimationECS::AnimationState>(m_ecs_entity);
+        auto* controller = registry.GetComponent<AnimationECS::AnimationController>(m_ecs_entity);
+
+        if (state && controller && activeAnimation)
+        {
+            state->is_playing = animationLoaded && animationApplied;
+            state->is_looping = loopPlayback;
+            controller->animation = activeAnimation.get();
+            controller->playback_speed = playbackSpeed;
+        }
+
+        // Run ECS animation systems
+        registry.Update(dt);
+
+        // Sync back from ECS to legacy state (for now)
+        if (state)
+        {
+            playbackTime = state->current_time;
+        }
+    }
+
+    // Legacy path (will eventually be removed)
     if (!activeBlends.empty())
     {
         const CBlend* primaryBlend = activeBlends.front().blend;
