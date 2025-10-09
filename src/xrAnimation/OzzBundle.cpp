@@ -21,8 +21,7 @@ constexpr std::uint32_t kBoneMetadataVersion = 2u;
 constexpr char kEmbeddedAnimationsMagic[4] = { 'A', 'N', 'I', 'M' };
 constexpr char kUserDataMagic[4] = { 'U', 'D', 'T', 'A' };
 
-void LogReadFailure(const std::filesystem::path& path, const char* stage, std::streampos position,
-    const std::string& context = {})
+void LogReadFailure(const std::filesystem::path& path, const char* stage, std::streampos position, const std::string& context = {})
 {
     std::cerr << "[OzzBundle] " << stage;
     if (!context.empty())
@@ -392,7 +391,6 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
         return false;
     }
 
-    // Read model_type for version 3+
     if (version >= 3u)
     {
         if (!ReadFully(stream, &model_type, sizeof(model_type)))
@@ -402,16 +400,13 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
         }
     }
 
-    if (!ReadFully(stream, &skeleton_size, sizeof(skeleton_size)) ||
-        !ReadFully(stream, &mesh_size, sizeof(mesh_size)))
+    if (!ReadFully(stream, &skeleton_size, sizeof(skeleton_size)) || !ReadFully(stream, &mesh_size, sizeof(mesh_size)))
     {
         LogReadFailure(path, "read bundle sizes", stream.tellg());
         return false;
     }
 
-    std::cout << "[OzzBundle] header version=" << version
-              << ", model_type=" << static_cast<int>(model_type)
-              << ", skeleton_size=" << skeleton_size
+    std::cout << "[OzzBundle] header version=" << version << ", model_type=" << static_cast<int>(model_type) << ", skeleton_size=" << skeleton_size
               << ", mesh_size=" << mesh_size << std::endl;
 
     out_bundle.version = version;
@@ -532,8 +527,7 @@ bool ReadOzzxBundle(const std::filesystem::path& path, OzzxBundle& out_bundle)
     stream.seekg(0, std::ios::end);
     const std::streampos file_size = stream.tellg();
     stream.seekg(end_pos, std::ios::beg);
-    std::cout << "[OzzBundle] consumed " << static_cast<std::streamoff>(end_pos)
-              << " / " << static_cast<std::streamoff>(file_size) << " bytes" << std::endl;
+    std::cout << "[OzzBundle] consumed " << static_cast<std::streamoff>(end_pos) << " / " << static_cast<std::streamoff>(file_size) << " bytes" << std::endl;
 
     return true;
 }
@@ -582,7 +576,6 @@ bool WriteOzzxBundle(const std::filesystem::path& path, const OzzxBundle& bundle
         return false;
     }
 
-    // Write model_type for version 3+
     if (version >= 3u)
     {
         if (!WriteFully(stream, &model_type, sizeof(model_type)))
@@ -592,8 +585,7 @@ bool WriteOzzxBundle(const std::filesystem::path& path, const OzzxBundle& bundle
         }
     }
 
-    if (!WriteFully(stream, &skeleton_size, sizeof(skeleton_size)) ||
-        !WriteFully(stream, &mesh_size, sizeof(mesh_size)))
+    if (!WriteFully(stream, &skeleton_size, sizeof(skeleton_size)) || !WriteFully(stream, &mesh_size, sizeof(mesh_size)))
     {
         std::cerr << "Failed to write bundle sizes: " << path << std::endl;
         return false;
@@ -636,8 +628,7 @@ bool WriteOzzxBundle(const std::filesystem::path& path, const OzzxBundle& bundle
 
         if (bundle.embedded_animation_data.size() > static_cast<size_t>(std::numeric_limits<std::uint32_t>::max()))
         {
-            std::cerr << "Embedded animation payload too large for .ozzx bundle: "
-                      << bundle.embedded_animation_data.size() << std::endl;
+            std::cerr << "Embedded animation payload too large for .ozzx bundle: " << bundle.embedded_animation_data.size() << std::endl;
             return false;
         }
 
@@ -648,8 +639,7 @@ bool WriteOzzxBundle(const std::filesystem::path& path, const OzzxBundle& bundle
             return false;
         }
 
-        if (animation_size > 0 &&
-            !WriteFully(stream, bundle.embedded_animation_data.data(), bundle.embedded_animation_data.size()))
+        if (animation_size > 0 && !WriteFully(stream, bundle.embedded_animation_data.data(), bundle.embedded_animation_data.size()))
         {
             std::cerr << "Failed to write embedded animation payload: " << path << std::endl;
             return false;

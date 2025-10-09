@@ -118,6 +118,9 @@ Fvector& attachable_hud_item::hands_offset_rot()
 
 void attachable_hud_item::set_bone_visible(const shared_str& bone_name, BOOL bVisibility, BOOL bSilent)
 {
+    if (!m_model)
+        return;
+
     const u16 bone_id = m_model->LL_BoneID(bone_name);
     if (bone_id == BI_NONE)
     {

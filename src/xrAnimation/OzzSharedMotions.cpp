@@ -1,31 +1,23 @@
 #include "stdafx.h"
 #include "OzzSharedMotions.hpp"
-#include "xrCore/FS.h"
-#include "xrCore/FS_impl.h"
-#include "xrCore/_std_extensions.h"  // for crc32
 #include "ozz/base/io/archive.h"
 #include "ozz/base/io/stream.h"
+#include "xrCore/FS.h"
+#include "xrCore/FS_impl.h"
+#include "xrCore/_std_extensions.h" // for crc32
 
 #include <algorithm>
-#include <filesystem>
 #include <cstring>
+#include <filesystem>
 
 namespace fs = std::filesystem;
 
 namespace XRay::Animation
 {
-
-//=============================================================================
-// Global Instance
-//=============================================================================
 OzzMotionsContainer* g_pOzzMotionsContainer = nullptr;
 
-//=============================================================================
-// Helper Structures and Functions for Metadata Reading
-//=============================================================================
 namespace
 {
-
 std::string ReadOzzString(ozz::io::IArchive& archive)
 {
     uint32_t length = 0;
@@ -104,7 +96,7 @@ MotionMetadata ReadMotionMetadataFromArchive(ozz::io::IArchive& archive)
 
     for (uint32_t mark_index = 0; mark_index < mark_count; ++mark_index)
     {
-        ReadOzzString(archive); // mark name
+        ReadOzzString(archive);
 
         uint32_t interval_count = 0;
         archive >> interval_count;
@@ -123,7 +115,7 @@ MotionMetadata ReadMotionMetadataFromArchive(ozz::io::IArchive& archive)
     archive >> bone_motion_count;
 
     // Security: Limit bone motion count to prevent excessive allocations
-    constexpr uint32_t kMaxBoneMotions = 512;  // More than enough for any skeleton
+    constexpr uint32_t kMaxBoneMotions = 512;
     if (bone_motion_count > kMaxBoneMotions)
     {
         Msg("[OzzMotions] ERROR: Bone motion count %u exceeds max %u", bone_motion_count, kMaxBoneMotions);
@@ -231,20 +223,15 @@ u32 ComputeOrDefaultCrc(u32 provided_crc, const void* data, size_t byte_count)
         return provided_crc;
     return crc32(data, static_cast<u32>(byte_count));
 }
-
 } // anonymous namespace
 
-//=============================================================================
-// SkeletonFingerprint Implementation
-//=============================================================================
 SkeletonFingerprint SkeletonFingerprint::Compute(const ozz::animation::Skeleton& skeleton)
 {
     SkeletonFingerprint fp;
     fp.jointCount = static_cast<u16>(skeleton.num_joints());
-    fp.version = 1;  // Format version
+    fp.version = 1;
 
-    // Compute CRC32 of joint names
-    auto names = skeleton.joint_names();  // returns ozz::span
+    auto names = skeleton.joint_names();
     u32 hash = 0;
 
     for (int i = 0; i < skeleton.num_joints(); ++i)
@@ -262,15 +249,12 @@ bool SkeletonFingerprint::Matches(const SkeletonFingerprint& other) const
     return (hash == other.hash) && (jointCount == other.jointCount);
 }
 
-//=============================================================================
-// OzzMotionsValue Implementation
-//=============================================================================
 u32 OzzMotionsValue::MotionRecord::GetMemoryUsage() const
 {
     u32 size = sizeof(MotionRecord);
     size += static_cast<u32>(name.size());
     if (animation)
-        size += static_cast<u32>(animation->size());  // Approximate
+        size += static_cast<u32>(animation->size());
     return size;
 }
 
@@ -278,24 +262,19 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
 {
     Msg("[OzzMotionsContainer] Starting Load for file: %s", file_path);
 
-    // Transition to Loading state
     MotionLoadState expected = MotionLoadState::Unloaded;
     if (!loadState.compare_exchange_strong(expected, MotionLoadState::Loading))
     {
-        // Already loading or loaded
         bool isLoaded = loadState.load() == MotionLoadState::Loaded;
         Msg("[OzzMotionsContainer] File '%s' already %s", file_path, isLoaded ? "loaded" : "loading");
         return isLoaded;
     }
 
-    // Compute and store skeleton fingerprint
     skelFingerprint = SkeletonFingerprint::Compute(skeleton);
     sourceFile = file_path;
 
-    Msg("[OzzMotionsContainer] Skeleton fingerprint for '%s': hash=0x%08X, joints=%u",
-        file_path, skelFingerprint.hash, skelFingerprint.jointCount);
+    Msg("[OzzMotionsContainer] Skeleton fingerprint for '%s': hash=0x%08X, joints=%u", file_path, skelFingerprint.hash, skelFingerprint.jointCount);
 
-    // Load from file system
     string_path resolved;
     FileStatus status(false, false);
     xr_string source_alias;
@@ -403,7 +382,6 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
         return false;
     }
 
-    // Parse the file
     Msg("[OzzMotionsContainer] Parsing ozz file...");
     ozz::io::MemoryStream stream;
     if (!stream.Write(payload.data(), payload.size()))
@@ -414,7 +392,6 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
     }
     stream.Seek(0, ozz::io::Stream::kSet);
 
-    // Try to load as aggregate first (multiple animations)
     ozz::io::IArchive archive(&stream);
     uint32_t animation_count = 0;
     archive >> animation_count;
@@ -431,18 +408,16 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
     Msg("[OzzMotionsContainer] Animation count in file: %u", animation_count);
 
     const u32 joint_count = skeleton.num_joints();
-    auto joint_names = skeleton.joint_names();  // returns ozz::span
+    auto joint_names = skeleton.joint_names();
 
     Msg("[OzzMotionsContainer] Skeleton has %u joints", joint_count);
 
-    // Storage for all metadata to populate bone_motions later
     xr_vector<MotionMetadata> all_metadata;
 
     if (animation_count == 0)
     {
         Msg("[OzzMotionsContainer] No aggregate animations found, trying as single animation");
 
-        // Try as single animation
         stream.Seek(0, ozz::io::Stream::kSet);
         ozz::io::IArchive single_archive(&stream);
 
@@ -454,26 +429,23 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
 
             if (animation->num_tracks() != skeleton.num_joints())
             {
-                Msg("[OzzMotionsContainer] ERROR: Animation track mismatch: anim has %d tracks, skeleton has %d joints",
-                    animation->num_tracks(), skeleton.num_joints());
+                Msg("[OzzMotionsContainer] ERROR: Animation track mismatch: anim has %d tracks, skeleton has %d joints", animation->num_tracks(),
+                    skeleton.num_joints());
                 loadState.store(MotionLoadState::Failed, std::memory_order_release);
                 return false;
             }
 
-            // Read metadata
             MotionMetadata metadata = ReadMotionMetadataFromArchive(single_archive);
 
-            // Create record
             MotionRecord record;
             record.name = metadata.name.empty() ? xr_string(file_path) : metadata.name;
             record.animation = animation;
             record.id.set(0, 0);
             record.frameCount = metadata.frame_count > 0 ? metadata.frame_count : 1;
 
-            Msg("[OzzMotionsContainer] Added motion '%s' with %u frames, %u bone motions",
-                record.name.c_str(), record.frameCount, static_cast<u32>(metadata.bone_motions.size()));
+            Msg("[OzzMotionsContainer] Added motion '%s' with %u frames, %u bone motions", record.name.c_str(), record.frameCount,
+                static_cast<u32>(metadata.bone_motions.size()));
 
-            // Populate definition
             record.definition.bone_or_part = metadata.bone_or_part;
             record.definition.motion = metadata.motion_id;
             record.definition.speed = record.definition.Quantize(std::max(metadata.speed, 0.f));
@@ -499,26 +471,22 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
     {
         Msg("[OzzMotionsContainer] Loading %u aggregate animations", animation_count);
 
-        // Load multiple animations
         for (uint32_t idx = 0; idx < animation_count; ++idx)
         {
             std::shared_ptr<ozz::animation::Animation> animation = std::make_shared<ozz::animation::Animation>();
             archive >> *animation;
 
-            // Read metadata
             MotionMetadata metadata = ReadMotionMetadataFromArchive(archive);
 
-            // Create record
             MotionRecord record;
             record.name = metadata.name.empty() ? (xr_string(file_path) + "_" + xr_string(std::to_string(idx).c_str())) : metadata.name;
             record.animation = animation;
             record.id.set(0, static_cast<u16>(idx));
             record.frameCount = metadata.frame_count > 0 ? metadata.frame_count : 1;
 
-            Msg("[OzzMotionsContainer] Motion %u: '%s' with %u frames, %u bone motions",
-                idx, record.name.c_str(), record.frameCount, static_cast<u32>(metadata.bone_motions.size()));
+            Msg("[OzzMotionsContainer] Motion %u: '%s' with %u frames, %u bone motions", idx, record.name.c_str(), record.frameCount,
+                static_cast<u32>(metadata.bone_motions.size()));
 
-            // Populate definition
             record.definition.bone_or_part = metadata.bone_or_part;
             record.definition.motion = metadata.motion_id;
             record.definition.speed = record.definition.Quantize(std::max(metadata.speed, 0.f));
@@ -535,24 +503,19 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
         }
     }
 
-    Msg("[OzzMotionsContainer] Building bone-major layout for %u bones and %u motions",
-        joint_count, static_cast<u32>(records.size()));
+    Msg("[OzzMotionsContainer] Building bone-major layout for %u bones and %u motions", joint_count, static_cast<u32>(records.size()));
 
-    // Build bone-major layout from metadata
-    // Initialize vectors for all bones
     for (u32 bone_idx = 0; bone_idx < joint_count; ++bone_idx)
     {
         shared_str bone_name(joint_names[bone_idx]);
         bone_motions[bone_name].resize(records.size());
     }
 
-    // Populate CMotion data from metadata
     for (u32 motion_idx = 0; motion_idx < all_metadata.size(); ++motion_idx)
     {
         const MotionMetadata& metadata = all_metadata[motion_idx];
         const u32 frame_count = records[motion_idx].frameCount;
 
-        // Process each bone's motion data from metadata
         for (const MotionBoneData& bone_data : metadata.bone_motions)
         {
             if (bone_data.bone_id == BI_NONE || bone_data.bone_id >= joint_count)
@@ -561,69 +524,51 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
             const char* bone_name = joint_names[bone_data.bone_id];
             CMotion& motion = bone_motions[shared_str(bone_name)][motion_idx];
 
-            // Populate CMotion from MotionBoneData
             motion.set_flags(bone_data.flags);
             motion.set_count(frame_count);
 
-            // Populate rotation keys
             if (!bone_data.rotation_keys.empty())
             {
-                const u32 crc = ComputeOrDefaultCrc(
-                    bone_data.rotation_crc,
-                    bone_data.rotation_keys.data(),
-                    bone_data.rotation_keys.size() * sizeof(CKeyQR));
-                motion._keysR.create(crc, static_cast<u32>(bone_data.rotation_keys.size()),
-                    const_cast<CKeyQR*>(bone_data.rotation_keys.data()));
+                const u32 crc = ComputeOrDefaultCrc(bone_data.rotation_crc, bone_data.rotation_keys.data(), bone_data.rotation_keys.size() * sizeof(CKeyQR));
+                motion._keysR.create(crc, static_cast<u32>(bone_data.rotation_keys.size()), const_cast<CKeyQR*>(bone_data.rotation_keys.data()));
             }
 
-            // Populate translation keys based on format
             switch (bone_data.translation_format)
             {
             case 1:
                 if (!bone_data.translation_keys8.empty())
                 {
-                    const u32 crc = ComputeOrDefaultCrc(
-                        bone_data.translation_crc,
-                        bone_data.translation_keys8.data(),
-                        bone_data.translation_keys8.size() * sizeof(CKeyQT8));
-                    motion._keysT8.create(crc, static_cast<u32>(bone_data.translation_keys8.size()),
-                        const_cast<CKeyQT8*>(bone_data.translation_keys8.data()));
+                    const u32 crc =
+                        ComputeOrDefaultCrc(bone_data.translation_crc, bone_data.translation_keys8.data(), bone_data.translation_keys8.size() * sizeof(CKeyQT8));
+                    motion._keysT8.create(crc, static_cast<u32>(bone_data.translation_keys8.size()), const_cast<CKeyQT8*>(bone_data.translation_keys8.data()));
                 }
                 break;
             case 2:
                 if (!bone_data.translation_keys16.empty())
                 {
-                    const u32 crc = ComputeOrDefaultCrc(
-                        bone_data.translation_crc,
-                        bone_data.translation_keys16.data(),
+                    const u32 crc = ComputeOrDefaultCrc(bone_data.translation_crc, bone_data.translation_keys16.data(),
                         bone_data.translation_keys16.size() * sizeof(CKeyQT16));
-                    motion._keysT16.create(crc, static_cast<u32>(bone_data.translation_keys16.size()),
-                        const_cast<CKeyQT16*>(bone_data.translation_keys16.data()));
+                    motion._keysT16
+                        .create(crc, static_cast<u32>(bone_data.translation_keys16.size()), const_cast<CKeyQT16*>(bone_data.translation_keys16.data()));
                 }
                 break;
-            default:
-                break;
+            default: break;
             }
 
-            // Populate translation init/size
             motion._sizeT = bone_data.translation_size;
             motion._initT = bone_data.translation_init;
         }
 
-        // Fill in any bones that don't have motion data with identity transforms
         for (u32 bone_idx = 0; bone_idx < joint_count; ++bone_idx)
         {
             const char* bone_name = joint_names[bone_idx];
             CMotion& motion = bone_motions[shared_str(bone_name)][motion_idx];
 
-            // Check if this motion has keyframe data
             if (motion._keysR.size() == 0)
             {
-                // Create identity rotation key
                 motion.set_flags(flRKeyAbsent);
                 motion.set_count(frame_count);
 
-                // Create identity transform on heap to avoid stack variable issues
                 CKeyQR* identity = xr_new<CKeyQR>();
                 identity->x = 0;
                 identity->y = 0;
@@ -632,7 +577,7 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
 
                 const u32 crc = ComputeOrDefaultCrc(0, identity, sizeof(CKeyQR));
                 motion._keysR.create(crc, 1, identity);
-                xr_delete(identity);  // Safe to delete after create() copies the data
+                xr_delete(identity);
                 motion._sizeT.set(0.f, 0.f, 0.f);
                 motion._initT.set(0.f, 0.f, 0.f);
             }
@@ -648,7 +593,6 @@ bool OzzMotionsValue::Load(pcstr file_path, const ozz::animation::Skeleton& skel
     Msg("[OzzMotionsContainer]   Bones in skeleton: %u", joint_count);
     Msg("[OzzMotionsContainer]   Memory usage: %u KB", totalMemoryBytes / 1024);
 
-    // List all motion names
     for (const auto& record : records)
     {
         Msg("[OzzMotionsContainer]   Motion: '%s' (frames=%u)", record.name.c_str(), record.frameCount);
@@ -667,24 +611,19 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
 
     Msg("[OzzMotionsContainer] Starting LoadFromMemory for '%s' (%zu bytes)", source_label, data.size());
 
-    // Transition to Loading state
     MotionLoadState expected = MotionLoadState::Unloaded;
     if (!loadState.compare_exchange_strong(expected, MotionLoadState::Loading))
     {
-        // Already loading or loaded
         bool isLoaded = loadState.load() == MotionLoadState::Loaded;
         Msg("[OzzMotionsContainer] '%s' already %s", source_label, isLoaded ? "loaded" : "loading");
         return isLoaded;
     }
 
-    // Compute and store skeleton fingerprint
     skelFingerprint = SkeletonFingerprint::Compute(skeleton);
     sourceFile = source_label;
 
-    Msg("[OzzMotionsContainer] Skeleton fingerprint for '%s': hash=0x%08X, joints=%u",
-        source_label, skelFingerprint.hash, skelFingerprint.jointCount);
+    Msg("[OzzMotionsContainer] Skeleton fingerprint for '%s': hash=0x%08X, joints=%u", source_label, skelFingerprint.hash, skelFingerprint.jointCount);
 
-    // Parse from memory
     Msg("[OzzMotionsContainer] Parsing ozz data from memory...");
     ozz::io::MemoryStream stream;
     if (!stream.Write(data.data(), data.size()))
@@ -695,7 +634,6 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
     }
     stream.Seek(0, ozz::io::Stream::kSet);
 
-    // Try to load as aggregate first (multiple animations)
     ozz::io::IArchive archive(&stream);
     uint32_t animation_count = 0;
     archive >> animation_count;
@@ -716,14 +654,12 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
 
     Msg("[OzzMotionsContainer] Skeleton has %u joints", joint_count);
 
-    // Storage for all metadata to populate bone_motions later
     xr_vector<MotionMetadata> all_metadata;
 
     if (animation_count == 0)
     {
         Msg("[OzzMotionsContainer] No aggregate animations found, trying as single animation");
 
-        // Try as single animation
         stream.Seek(0, ozz::io::Stream::kSet);
         ozz::io::IArchive single_archive(&stream);
 
@@ -735,26 +671,23 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
 
             if (animation->num_tracks() != skeleton.num_joints())
             {
-                Msg("[OzzMotionsContainer] ERROR: Animation track mismatch: anim has %d tracks, skeleton has %d joints",
-                    animation->num_tracks(), skeleton.num_joints());
+                Msg("[OzzMotionsContainer] ERROR: Animation track mismatch: anim has %d tracks, skeleton has %d joints", animation->num_tracks(),
+                    skeleton.num_joints());
                 loadState.store(MotionLoadState::Failed, std::memory_order_release);
                 return false;
             }
 
-            // Read metadata
             MotionMetadata metadata = ReadMotionMetadataFromArchive(single_archive);
 
-            // Create record
             MotionRecord record;
             record.name = metadata.name.empty() ? xr_string(source_label) : metadata.name;
             record.animation = animation;
             record.id.set(0, 0);
             record.frameCount = metadata.frame_count > 0 ? metadata.frame_count : 1;
 
-            Msg("[OzzMotionsContainer] Added motion '%s' with %u frames, %u bone motions",
-                record.name.c_str(), record.frameCount, static_cast<u32>(metadata.bone_motions.size()));
+            Msg("[OzzMotionsContainer] Added motion '%s' with %u frames, %u bone motions", record.name.c_str(), record.frameCount,
+                static_cast<u32>(metadata.bone_motions.size()));
 
-            // Populate definition
             record.definition.bone_or_part = metadata.bone_or_part;
             record.definition.motion = metadata.motion_id;
             record.definition.speed = record.definition.Quantize(std::max(metadata.speed, 0.f));
@@ -780,26 +713,22 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
     {
         Msg("[OzzMotionsContainer] Loading %u aggregate animations from memory", animation_count);
 
-        // Load multiple animations
         for (uint32_t idx = 0; idx < animation_count; ++idx)
         {
             std::shared_ptr<ozz::animation::Animation> animation = std::make_shared<ozz::animation::Animation>();
             archive >> *animation;
 
-            // Read metadata
             MotionMetadata metadata = ReadMotionMetadataFromArchive(archive);
 
-            // Create record
             MotionRecord record;
             record.name = metadata.name.empty() ? (xr_string(source_label) + "_" + xr_string(std::to_string(idx).c_str())) : metadata.name;
             record.animation = animation;
             record.id.set(0, static_cast<u16>(idx));
             record.frameCount = metadata.frame_count > 0 ? metadata.frame_count : 1;
 
-            Msg("[OzzMotionsContainer] Motion %u: '%s' with %u frames, %u bone motions",
-                idx, record.name.c_str(), record.frameCount, static_cast<u32>(metadata.bone_motions.size()));
+            Msg("[OzzMotionsContainer] Motion %u: '%s' with %u frames, %u bone motions", idx, record.name.c_str(), record.frameCount,
+                static_cast<u32>(metadata.bone_motions.size()));
 
-            // Populate definition
             record.definition.bone_or_part = metadata.bone_or_part;
             record.definition.motion = metadata.motion_id;
             record.definition.speed = record.definition.Quantize(std::max(metadata.speed, 0.f));
@@ -816,23 +745,19 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
         }
     }
 
-    Msg("[OzzMotionsContainer] Building bone-major layout for %u bones and %u motions",
-        joint_count, static_cast<u32>(records.size()));
+    Msg("[OzzMotionsContainer] Building bone-major layout for %u bones and %u motions", joint_count, static_cast<u32>(records.size()));
 
-    // Build bone-major layout from metadata (same as Load method)
     for (u32 bone_idx = 0; bone_idx < joint_count; ++bone_idx)
     {
         shared_str bone_name(joint_names[bone_idx]);
         bone_motions[bone_name].resize(records.size());
     }
 
-    // Populate CMotion data from metadata
     for (u32 motion_idx = 0; motion_idx < all_metadata.size(); ++motion_idx)
     {
         const MotionMetadata& metadata = all_metadata[motion_idx];
         const u32 frame_count = records[motion_idx].frameCount;
 
-        // Process each bone's motion data
         for (const MotionBoneData& bone_data : metadata.bone_motions)
         {
             if (bone_data.bone_id == BI_NONE || bone_data.bone_id >= joint_count)
@@ -841,54 +766,40 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
             const char* bone_name = joint_names[bone_data.bone_id];
             CMotion& motion = bone_motions[shared_str(bone_name)][motion_idx];
 
-            // Populate CMotion from MotionBoneData
             motion.set_flags(bone_data.flags);
             motion.set_count(frame_count);
 
-            // Populate rotation keys
             if (!bone_data.rotation_keys.empty())
             {
-                const u32 crc = ComputeOrDefaultCrc(
-                    bone_data.rotation_crc,
-                    bone_data.rotation_keys.data(),
-                    bone_data.rotation_keys.size() * sizeof(CKeyQR));
-                motion._keysR.create(crc, static_cast<u32>(bone_data.rotation_keys.size()),
-                    const_cast<CKeyQR*>(bone_data.rotation_keys.data()));
+                const u32 crc = ComputeOrDefaultCrc(bone_data.rotation_crc, bone_data.rotation_keys.data(), bone_data.rotation_keys.size() * sizeof(CKeyQR));
+                motion._keysR.create(crc, static_cast<u32>(bone_data.rotation_keys.size()), const_cast<CKeyQR*>(bone_data.rotation_keys.data()));
             }
 
-            // Populate translation keys based on format
             switch (bone_data.translation_format)
             {
             case 1:
                 if (!bone_data.translation_keys8.empty())
                 {
-                    const u32 crc = ComputeOrDefaultCrc(
-                        bone_data.translation_crc,
-                        bone_data.translation_keys8.data(),
-                        bone_data.translation_keys8.size() * sizeof(CKeyQT8));
-                    motion._keysT8.create(crc, static_cast<u32>(bone_data.translation_keys8.size()),
-                        const_cast<CKeyQT8*>(bone_data.translation_keys8.data()));
+                    const u32 crc =
+                        ComputeOrDefaultCrc(bone_data.translation_crc, bone_data.translation_keys8.data(), bone_data.translation_keys8.size() * sizeof(CKeyQT8));
+                    motion._keysT8.create(crc, static_cast<u32>(bone_data.translation_keys8.size()), const_cast<CKeyQT8*>(bone_data.translation_keys8.data()));
                 }
                 break;
             case 2:
                 if (!bone_data.translation_keys16.empty())
                 {
-                    const u32 crc = ComputeOrDefaultCrc(
-                        bone_data.translation_crc,
-                        bone_data.translation_keys16.data(),
+                    const u32 crc = ComputeOrDefaultCrc(bone_data.translation_crc, bone_data.translation_keys16.data(),
                         bone_data.translation_keys16.size() * sizeof(CKeyQT16));
-                    motion._keysT16.create(crc, static_cast<u32>(bone_data.translation_keys16.size()),
-                        const_cast<CKeyQT16*>(bone_data.translation_keys16.data()));
+                    motion._keysT16
+                        .create(crc, static_cast<u32>(bone_data.translation_keys16.size()), const_cast<CKeyQT16*>(bone_data.translation_keys16.data()));
                 }
                 break;
             }
 
-            // Populate translation init/size
             motion._sizeT = bone_data.translation_size;
             motion._initT = bone_data.translation_init;
         }
 
-        // Fill in any bones that don't have motion data with identity transforms
         for (u32 bone_idx = 0; bone_idx < joint_count; ++bone_idx)
         {
             const char* bone_name = joint_names[bone_idx];
@@ -896,11 +807,9 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
 
             if (motion._keysR.size() == 0)
             {
-                // Create identity rotation key
                 motion.set_flags(flRKeyAbsent);
                 motion.set_count(frame_count);
 
-                // Create identity transform on heap to avoid stack variable issues
                 CKeyQR* identity = xr_new<CKeyQR>();
                 identity->x = 0;
                 identity->y = 0;
@@ -909,7 +818,7 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
 
                 const u32 crc = ComputeOrDefaultCrc(0, identity, sizeof(CKeyQR));
                 motion._keysR.create(crc, 1, identity);
-                xr_delete(identity);  // Safe to delete after create() copies the data
+                xr_delete(identity);
                 motion._sizeT.set(0.f, 0.f, 0.f);
                 motion._initT.set(0.f, 0.f, 0.f);
             }
@@ -925,7 +834,6 @@ bool OzzMotionsValue::LoadFromMemory(const std::vector<std::uint8_t>& data, cons
     Msg("[OzzMotionsContainer]   Bones in skeleton: %u", joint_count);
     Msg("[OzzMotionsContainer]   Memory usage: %u KB", totalMemoryBytes / 1024);
 
-    // List all motion names
     for (const auto& record : records)
     {
         Msg("[OzzMotionsContainer]   Motion: '%s' (frames=%u)", record.name.c_str(), record.frameCount);
@@ -987,7 +895,6 @@ void OzzMotionsValue::UpdateMemoryUsage()
     for (const auto& record : records)
         total += record.GetMemoryUsage();
 
-    // Bone motions memory
     for (const auto& [bone_name, motions] : bone_motions)
         total += static_cast<u32>(sizeof(CMotion) * motions.size());
 
@@ -996,13 +903,9 @@ void OzzMotionsValue::UpdateMemoryUsage()
 
 void OzzMotionsValue::MarkAccessed()
 {
-    // In full implementation, this would use Device.dwTimeGlobal or similar
     lastAccessTime = 0;
 }
 
-//=============================================================================
-// OzzMotionsContainer Implementation
-//=============================================================================
 OzzMotionsContainer::OzzMotionsContainer()
 {
     Msg("[OzzMotionsContainer] Initialized");
@@ -1036,7 +939,6 @@ MotionLibraryHandle OzzMotionsContainer::DockInternal(const LoadRequest& request
     Msg("[OzzMotionsContainer] DockInternal: Processing '%s'", request.key.c_str());
     ScopeLock lock(&containerLock);
 
-    // Check if already loaded
     auto keyIt = keyToHandle.find(request.key);
     if (keyIt != keyToHandle.end())
     {
@@ -1045,33 +947,27 @@ MotionLibraryHandle OzzMotionsContainer::DockInternal(const LoadRequest& request
 
         Msg("[OzzMotionsContainer] Found cached entry for '%s' (handle=0x%llX)", request.key.c_str(), handleID);
 
-        // Verify skeleton compatibility
         if (config.enforceSkeletonCompatibility)
         {
             if (!value->IsCompatibleWith(request.skelFingerprint))
             {
                 Msg("[OzzMotionsContainer] ERROR: Skeleton mismatch for '%s'!", request.key.c_str());
-                Msg("  Expected fingerprint: hash=0x%08X, joints=%u",
-                    request.skelFingerprint.hash, request.skelFingerprint.jointCount);
-                Msg("  Actual fingerprint:   hash=0x%08X, joints=%u",
-                    value->skelFingerprint.hash, value->skelFingerprint.jointCount);
+                Msg("  Expected fingerprint: hash=0x%08X, joints=%u", request.skelFingerprint.hash, request.skelFingerprint.jointCount);
+                Msg("  Actual fingerprint:   hash=0x%08X, joints=%u", value->skelFingerprint.hash, value->skelFingerprint.jointCount);
                 stats.cacheMisses++;
-                return MotionLibraryHandle{};  // Invalid handle
+                return MotionLibraryHandle{};
             }
         }
 
-        // Cache hit!
         value->refCount.fetch_add(1, std::memory_order_relaxed);
         value->MarkAccessed();
         stats.cacheHits++;
 
-        Msg("[OzzMotionsContainer] CACHE HIT: Reusing '%s' (refs=%u, handle=0x%llX)",
-            request.key.c_str(), value->refCount.load(), handleID);
+        Msg("[OzzMotionsContainer] CACHE HIT: Reusing '%s' (refs=%u, handle=0x%llX)", request.key.c_str(), value->refCount.load(), handleID);
 
-        return MotionLibraryHandle{handleID};
+        return MotionLibraryHandle{ handleID };
     }
 
-    // Not found - load from disk
     Msg("[OzzMotionsContainer] CACHE MISS: Loading '%s' from disk", request.key.c_str());
     stats.cacheMisses++;
     stats.totalLoads++;
@@ -1079,13 +975,11 @@ MotionLibraryHandle OzzMotionsContainer::DockInternal(const LoadRequest& request
     OzzMotionsValue* value = xr_new<OzzMotionsValue>();
     value->refCount.store(1, std::memory_order_relaxed);
 
-    // Generate unique handle
     u64 handleID = GenerateHandleID();
-    value->handle = MotionLibraryHandle{handleID};
+    value->handle = MotionLibraryHandle{ handleID };
 
     Msg("[OzzMotionsContainer] Generated handle 0x%llX for '%s'", handleID, request.key.c_str());
 
-    // Load data - check if we have embedded data or need to load from file
     bool loadSuccess = false;
     if (!request.embeddedData.empty())
     {
@@ -1102,10 +996,9 @@ MotionLibraryHandle OzzMotionsContainer::DockInternal(const LoadRequest& request
     {
         Msg("[OzzMotionsContainer] ERROR: Failed to load '%s'", request.key.c_str());
         xr_delete(value);
-        return MotionLibraryHandle{};  // Invalid handle
+        return MotionLibraryHandle{};
     }
 
-    // Store in maps
     values[handleID] = value;
     keyToHandle[request.key] = handleID;
 
@@ -1113,10 +1006,10 @@ MotionLibraryHandle OzzMotionsContainer::DockInternal(const LoadRequest& request
     CheckMemoryPressure();
     globalVersion++;
 
-    Msg("[OzzMotionsContainer] SUCCESS: Added '%s' to container (handle=0x%llX, memory=%u KB, total entries=%u)",
-        request.key.c_str(), handleID, value->totalMemoryBytes / 1024, static_cast<u32>(values.size()));
+    Msg("[OzzMotionsContainer] SUCCESS: Added '%s' to container (handle=0x%llX, memory=%u KB, total entries=%u)", request.key.c_str(), handleID,
+        value->totalMemoryBytes / 1024, static_cast<u32>(values.size()));
 
-    return MotionLibraryHandle{handleID};
+    return MotionLibraryHandle{ handleID };
 }
 
 OzzMotionsValue* OzzMotionsContainer::Resolve(MotionLibraryHandle handle)
@@ -1135,7 +1028,6 @@ const OzzMotionsValue* OzzMotionsContainer::Resolve(MotionLibraryHandle handle) 
     if (!handle.IsValid())
         return nullptr;
 
-    // We need a const-correct way to lock, but for now use const_cast
     Lock* mutable_lock = const_cast<Lock*>(&containerLock);
     ScopeLock lock(mutable_lock);
 
@@ -1165,12 +1057,10 @@ void OzzMotionsContainer::Release(MotionLibraryHandle handle)
     OzzMotionsValue* value = it->second;
     const u32 prevRef = value->refCount.fetch_sub(1, std::memory_order_release);
 
-    if (prevRef == 1)  // Was last reference
+    if (prevRef == 1)
     {
-        Msg("[OzzMotions] Last reference released for '%s' (handle=0x%llX)",
-            value->sourceFile.c_str(), handle.id);
+        Msg("[OzzMotions] Last reference released for '%s' (handle=0x%llX)", value->sourceFile.c_str(), handle.id);
 
-        // Optionally auto-evict unreferenced motions if memory pressure is high
         if (config.enableLRUEviction && GetMemoryUsage() > config.maxMemoryBytes)
         {
             EvictMotion(handle);
@@ -1196,7 +1086,6 @@ void OzzMotionsContainer::Clean(bool force_destroy)
     {
         OzzMotionsValue* value = values[handleID];
 
-        // Remove from keyToHandle
         for (auto it = keyToHandle.begin(); it != keyToHandle.end(); ++it)
         {
             if (it->second == handleID)
@@ -1206,7 +1095,6 @@ void OzzMotionsContainer::Clean(bool force_destroy)
             }
         }
 
-        // Remove from values
         values.erase(handleID);
 
         UpdateMemoryTracking(value, false);
@@ -1221,7 +1109,6 @@ void OzzMotionsContainer::Clean(bool force_destroy)
 
 void OzzMotionsContainer::PrefetchBatch(const xr_vector<LoadRequest>& requests, const ozz::animation::Skeleton& skeleton)
 {
-    // For now, just load synchronously
     for (const auto& request : requests)
     {
         Dock(request, skeleton);
@@ -1260,11 +1147,9 @@ bool OzzMotionsContainer::EvictMotion(MotionLibraryHandle handle)
 
     OzzMotionsValue* value = it->second;
 
-    // Can only evict if ref count is 0
     if (value->refCount.load() != 0)
         return false;
 
-    // Remove from keyToHandle
     for (auto kit = keyToHandle.begin(); kit != keyToHandle.end(); ++kit)
     {
         if (kit->second == handle.id)
@@ -1274,7 +1159,6 @@ bool OzzMotionsContainer::EvictMotion(MotionLibraryHandle handle)
         }
     }
 
-    // Remove from values
     values.erase(handle.id);
 
     UpdateMemoryTracking(value, false);
@@ -1327,9 +1211,7 @@ void OzzMotionsContainer::Dump()
 
     for (const auto& [handleID, value] : values)
     {
-        Msg("    [0x%llX] '%s' refs=%u memory=%u KB",
-            handleID, value->sourceFile.c_str(), value->refCount.load(),
-            value->totalMemoryBytes / 1024);
+        Msg("    [0x%llX] '%s' refs=%u memory=%u KB", handleID, value->sourceFile.c_str(), value->refCount.load(), value->totalMemoryBytes / 1024);
     }
 }
 
@@ -1344,12 +1226,9 @@ void OzzMotionsContainer::UpdateMemoryTracking(OzzMotionsValue* value, bool addi
     {
         const u64 newTotal = stats.currentMemoryBytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
 
-        // Update peak
         u64 peak = stats.peakMemoryBytes.load();
         while (newTotal > peak && !stats.peakMemoryBytes.compare_exchange_weak(peak, newTotal))
-        {
-            // Loop until we successfully update peak
-        }
+        {}
     }
     else
     {
@@ -1363,8 +1242,7 @@ void OzzMotionsContainer::CheckMemoryPressure()
 
     if (config.enableLRUEviction && current > config.maxMemoryBytes)
     {
-        Msg("[OzzMotions] Memory pressure detected (%llu KB / %llu KB)",
-            current / 1024, config.maxMemoryBytes / 1024);
+        Msg("[OzzMotions] Memory pressure detected (%llu KB / %llu KB)", current / 1024, config.maxMemoryBytes / 1024);
 
         // TODO: Implement actual eviction
         EvictLRU(config.maxMemoryBytes);
@@ -1387,7 +1265,6 @@ xr_vector<OzzMotionsContainer::EvictionCandidate> OzzMotionsContainer::GatherEvi
         }
     }
 
-    // Sort by last access time (oldest first)
     std::sort(candidates.begin(), candidates.end(),
         [](const EvictionCandidate& a, const EvictionCandidate& b)
         {
@@ -1397,16 +1274,10 @@ xr_vector<OzzMotionsContainer::EvictionCandidate> OzzMotionsContainer::GatherEvi
     return candidates;
 }
 
-//=============================================================================
-// SharedOzzMotions Implementation
-//=============================================================================
-SharedOzzMotions::SharedOzzMotions(const SharedOzzMotions& other)
-    : handle_(other.handle_)
+SharedOzzMotions::SharedOzzMotions(const SharedOzzMotions& other) : handle_(other.handle_)
 {
     if (handle_.IsValid() && g_pOzzMotionsContainer)
     {
-        // Increment ref count by resolving and re-docking
-        // This is a simplified approach - in practice we'd want a proper AddRef method
         OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(handle_);
         if (value)
         {
@@ -1433,5 +1304,4 @@ SharedOzzMotions& SharedOzzMotions::operator=(const SharedOzzMotions& other)
     }
     return *this;
 }
-
 } // namespace XRay::Animation

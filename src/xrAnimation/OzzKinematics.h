@@ -1,7 +1,7 @@
 #pragma once
 
-#include "OzzKinematicsCore.h"
 #include "Include/xrRender/Kinematics.h"
+#include "OzzKinematicsCore.h"
 
 namespace XRay::Animation
 {
@@ -15,27 +15,33 @@ public:
     OzzKinematics();
     ~OzzKinematics();
 
-    // Initialization - forward to core
     bool InitializeFromOzz(pcstr skeletonPath);
     bool InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData);
     bool ApplyExtendedBoneMetadata(const ExtendedBoneMetadataCollection& metadata);
     bool LoadUserDataFromBuffer(const std::vector<std::uint8_t>& buffer);
 
-    // Core access
-    bool HasBones() const { return core.HasBones(); }
-    bool IsInitialized() const { return core.IsInitialized(); }
-    const ozz::animation::Skeleton& Skeleton() const { return core.Skeleton(); }
+    bool HasBones() const
+    {
+        return core.HasBones();
+    }
 
-    // Pose management
+    bool IsInitialized() const
+    {
+        return core.IsInitialized();
+    }
+
+    const ozz::animation::Skeleton& Skeleton() const
+    {
+        return core.Skeleton();
+    }
+
     bool SetPoseLocals(ozz::span<const ozz::math::SoaTransform> locals);
     void ClearPose();
     void BuildSkinningPalette(xr_vector<Fmatrix>& out_matrices, bool render_space) const;
 
-    // IKinematics implementation
     void Bone_Calculate(CBoneData* bd, Fmatrix* parent) override;
     void Bone_GetAnimPos(Fmatrix& pos, u16 id, u8 channel_mask, bool ignore_callbacks) override;
-    bool PickBone(const Fmatrix& parent_xform, pick_result& r, float dist,
-                  const Fvector& start, const Fvector& dir, u16 bone_id) override;
+    bool PickBone(const Fmatrix& parent_xform, pick_result& r, float dist, const Fvector& start, const Fvector& dir, u16 bone_id) override;
     void EnumBoneVertices(SEnumVerticesCallback& C, u16 bone_id) override;
 
     u16 LL_BoneID(LPCSTR B) override;
@@ -80,12 +86,25 @@ public:
     UpdateCallback GetUpdateCallback() override;
     void* GetUpdateCallbackParam() override;
 
-    // Visual owner management (forwarded to core)
-    void SetVisualOwner(IRenderVisual* visual) { core.SetVisualOwner(visual); }
-    IRenderVisual* GetVisualOwner() const { return core.GetVisualOwner(); }
+    void SetVisualOwner(IRenderVisual* visual)
+    {
+        core.SetVisualOwner(visual);
+    }
 
-    IRenderVisual* dcast_RenderVisual() override { return core.GetVisualOwner(); }
-    IKinematicsAnimated* dcast_PKinematicsAnimated() override { return nullptr; }
+    IRenderVisual* GetVisualOwner() const
+    {
+        return core.GetVisualOwner();
+    }
+
+    IRenderVisual* dcast_RenderVisual() override
+    {
+        return core.GetVisualOwner();
+    }
+
+    IKinematicsAnimated* dcast_PKinematicsAnimated() override
+    {
+        return nullptr;
+    }
 
 #ifdef DEBUG
     void DebugRender(Fmatrix& XFORM) override;
@@ -95,14 +114,12 @@ public:
 protected:
     OzzKinematicsCore core;
 
-    // Stub storage for interface requirements
     mutable CBoneInstance stubBoneInstance;
     mutable CBoneData stubBoneData;
     mutable Fmatrix stubMatrix;
     mutable Fobb stubObb;
     mutable accel stubAccel;
 
-    // Virtual hooks for derived classes
     virtual void OnSkeletonLoaded() {}
 
     void NotImplemented(pcstr function_name) const;
@@ -111,5 +128,4 @@ protected:
     Fmatrix& StubMatrix() const;
     Fobb& StubObb() const;
 };
-
 } // namespace XRay::Animation

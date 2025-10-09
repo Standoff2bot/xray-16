@@ -5,19 +5,14 @@
 
 namespace XRay::Animation
 {
-
-// Constructor
-OzzKinematics::OzzKinematics()
-    : stubBoneData(u16(-1))  // Initialize with invalid bone ID
+OzzKinematics::OzzKinematics() : stubBoneData(u16(-1))
 {
     stubBoneInstance.construct();
-    core.SetOwner(this);  // Set this as the owner for callbacks
+    core.SetOwner(this);
 }
 
-// Destructor
-OzzKinematics::~OzzKinematics() { }
+OzzKinematics::~OzzKinematics() {}
 
-// Initialization - forward to core
 bool OzzKinematics::InitializeFromOzz(pcstr skeletonPath)
 {
     bool result = core.InitializeFromOzz(skeletonPath);
@@ -44,7 +39,6 @@ bool OzzKinematics::LoadUserDataFromBuffer(const std::vector<std::uint8_t>& buff
     return core.LoadUserDataFromBuffer(buffer);
 }
 
-// Pose management - forward to core
 bool OzzKinematics::SetPoseLocals(ozz::span<const ozz::math::SoaTransform> locals)
 {
     return core.SetPoseLocals(locals);
@@ -60,7 +54,6 @@ void OzzKinematics::BuildSkinningPalette(xr_vector<Fmatrix>& out_matrices, bool 
     core.BuildSkinningPalette(out_matrices, render_space);
 }
 
-// IKinematics implementation
 void OzzKinematics::Bone_Calculate(CBoneData* bd, Fmatrix* parent)
 {
     core.CalculateTransforms(TRUE);
@@ -78,17 +71,12 @@ void OzzKinematics::Bone_GetAnimPos(Fmatrix& pos, u16 id, u8 channel_mask, bool 
     pos = core.GetBoneTransform(id);
 }
 
-bool OzzKinematics::PickBone(const Fmatrix& parent_xform, pick_result& r, float dist,
-                             const Fvector& start, const Fvector& dir, u16 bone_id)
+bool OzzKinematics::PickBone(const Fmatrix& parent_xform, pick_result& r, float dist, const Fvector& start, const Fvector& dir, u16 bone_id)
 {
-    // Static models don't support bone picking
     return false;
 }
 
-void OzzKinematics::EnumBoneVertices(SEnumVerticesCallback& C, u16 bone_id)
-{
-    // Static models don't enumerate vertices
-}
+void OzzKinematics::EnumBoneVertices(SEnumVerticesCallback& C, u16 bone_id) {}
 
 u16 OzzKinematics::LL_BoneID(LPCSTR B)
 {
@@ -204,7 +192,6 @@ void OzzKinematics::LL_GetBindTransform(xr_vector<Fmatrix>& matrices)
 
 int OzzKinematics::LL_GetBoneGroups(xr_vector<xr_vector<u16>>& groups)
 {
-    // Static models don't have bone groups
     groups.clear();
     return 0;
 }
@@ -296,7 +283,6 @@ shared_str OzzKinematics::getDebugName()
 }
 #endif
 
-// Stub helpers
 void OzzKinematics::NotImplemented(pcstr function_name) const
 {
     Msg("[OzzKinematics] %s is not implemented for static models", function_name);
@@ -321,5 +307,4 @@ Fobb& OzzKinematics::StubObb() const
 {
     return stubObb;
 }
-
 } // namespace XRay::Animation

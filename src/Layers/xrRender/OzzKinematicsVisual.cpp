@@ -353,6 +353,7 @@ COzzKinematicsVisual::COzzKinematicsVisual()
 {
     Type = MT_OZZ_ANIMATED;  // Default, will be overwritten from bundle
     initialized_ = false;
+    kinematics_ = xr_make_unique<OzzKinematics>();
 }
 
 COzzKinematicsVisual::~COzzKinematicsVisual()
@@ -567,7 +568,13 @@ void COzzKinematicsVisual::Copy(dxRender_Visual* pFrom)
 
     auto* other = dynamic_cast<COzzKinematicsVisual*>(pFrom);
     if (!other)
+    {
+        Msg("[COzzKinematicsVisual::Copy] Source is not COzzKinematicsVisual, initializing empty");
+        kinematics_ = xr_make_unique<OzzKinematics>();
+        animated_kinematics_ = nullptr;
+        initialized_ = false;
         return;
+    }
 
     Msg("[COzzKinematicsVisual::Copy] Starting copy from source visual");
 

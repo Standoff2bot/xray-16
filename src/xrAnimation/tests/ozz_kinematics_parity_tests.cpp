@@ -63,9 +63,9 @@ std::filesystem::path ResolveProjectPath(const std::string& relative)
         std::filesystem::path from_macro(PROJECT_ROOT);
         if (!from_macro.empty())
         {
-#ifdef _WIN32
+#    ifdef _WIN32
             from_macro.make_preferred();
-#endif
+#    endif
             return from_macro;
         }
 #endif
@@ -507,13 +507,13 @@ void ParseLegacySmparams(const LegacyChunk& chunk, const std::vector<LegacyBoneR
         std::string motion_name = reader.ReadStringZ();
         output.motion_names.emplace_back(motion_name);
 
-        reader.Read<u32>();   // flags
-        reader.Read<u16>();   // bone_or_part
-        reader.Read<u16>();   // motion_id
-        reader.Read<float>(); // speed
-        reader.Read<float>(); // power
-        reader.Read<float>(); // accrue
-        reader.Read<float>(); // falloff
+        reader.Read<u32>();
+        reader.Read<u16>();
+        reader.Read<u16>();
+        reader.Read<float>();
+        reader.Read<float>();
+        reader.Read<float>();
+        reader.Read<float>();
 
         if (version >= 4)
         {
@@ -1089,6 +1089,7 @@ std::optional<BindPoseSample> LoadOzzBindPoseSample(const std::filesystem::path&
 
     return sample;
 }
+
 ozz::math::Transform ExtractTransformLane(const ozz::math::SoaTransform& soa, int lane)
 {
     R_ASSERT(lane >= 0 && lane < 4);
@@ -1108,7 +1109,6 @@ ozz::math::Transform ExtractTransformLane(const ozz::math::SoaTransform& soa, in
     ozz::math::Store3PtrU(scales[lane], &result.scale.x);
     return result;
 }
-
 } // namespace
 
 using XRay::Animation::OzzKinematics;
@@ -1146,7 +1146,6 @@ bool TestOzzKinematicsBootstrapMatchesJointCountWithReferenceSkeleton()
     EXPECT_EQ(expected, actual) << "Loaded joint count mismatch";
     return expected == actual;
 }
-
 
 bool TestOzzKinematicsBootstrapInitializesFromOzzxBundleSkeleton()
 {
@@ -1202,7 +1201,6 @@ bool TestOzzKinematicsBootstrapInitializesFromOzzxBundleSkeleton()
     EXPECT_EQ(expected, actual);
     return expected == actual;
 }
-
 
 bool TestOzzKinematicsBootstrapInitializesFromMemoryBuffer()
 {
@@ -1278,7 +1276,6 @@ bool TestOzzKinematicsBootstrapInitializesFromMemoryBuffer()
 
     return ok;
 }
-
 
 bool TestOzzKinematicsBootstrapBoneNameLookupsAndVisibilityDefaults()
 {
@@ -1379,7 +1376,6 @@ bool TestOzzKinematicsBootstrapBoneNameLookupsAndVisibilityDefaults()
     return ok;
 }
 
-
 bool TestOzzKinematicsPoseMatchesLegacyBindPoseTranslations()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
@@ -1446,7 +1442,6 @@ bool TestOzzKinematicsPoseMatchesLegacyBindPoseTranslations()
 
     return ok;
 }
-
 
 bool TestOzzKinematicsPoseSetPoseLocalsOverridesSingleBone()
 {
@@ -1535,7 +1530,6 @@ bool TestOzzKinematicsPoseSetPoseLocalsOverridesSingleBone()
     return ok;
 }
 
-
 bool TestOzzKinematicsPoseAdditionalBoneTransformsAffectSingleBone()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
@@ -1604,7 +1598,6 @@ bool TestOzzKinematicsPoseAdditionalBoneTransformsAffectSingleBone()
 
     return ok;
 }
-
 
 bool TestOzzKinematicsPoseBuildsSkinningPaletteMatchesTransforms()
 {
@@ -1682,7 +1675,6 @@ bool TestOzzKinematicsPoseBuildsSkinningPaletteMatchesTransforms()
     return ok;
 }
 
-
 bool TestOzzKinematicsVisibilityBoneVisibilityToggleZeroesTransforms()
 {
     const auto skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
@@ -1715,8 +1707,7 @@ bool TestOzzKinematicsVisibilityBoneVisibilityToggleZeroesTransforms()
         EXPECT_NEAR(expected.x, transform.c.x, epsilon);
         EXPECT_NEAR(expected.y, transform.c.y, epsilon);
         EXPECT_NEAR(expected.z, transform.c.z, epsilon);
-        if (std::fabs(expected.x - transform.c.x) > epsilon || std::fabs(expected.y - transform.c.y) > epsilon ||
-            std::fabs(expected.z - transform.c.z) > epsilon)
+        if (std::fabs(expected.x - transform.c.x) > epsilon || std::fabs(expected.y - transform.c.y) > epsilon || std::fabs(expected.z - transform.c.z) > epsilon)
         {
             ok = false;
         }
@@ -1743,7 +1734,6 @@ bool TestOzzKinematicsVisibilityBoneVisibilityToggleZeroesTransforms()
 
     return ok;
 }
-
 
 bool TestOzzKinematicsVisibilitySetBonesVisibleControlsMask()
 {
@@ -1904,9 +1894,8 @@ bool TestOzzKinematicsAnimatedLoadsStandaloneClip()
     kinematics.CalculateBones(TRUE);
 
     const Fmatrix mid_pose = kinematics.LL_GetTransform(root_bone);
-    const float translation_delta = std::fabs(start_pose.c.x - mid_pose.c.x) +
-        std::fabs(start_pose.c.y - mid_pose.c.y) +
-        std::fabs(start_pose.c.z - mid_pose.c.z);
+    const float translation_delta =
+        std::fabs(start_pose.c.x - mid_pose.c.x) + std::fabs(start_pose.c.y - mid_pose.c.y) + std::fabs(start_pose.c.z - mid_pose.c.z);
 
     EXPECT_GT(translation_delta, 1e-5f) << "Animation sampling did not update root transform";
     if (!(translation_delta > 1e-5f))
@@ -1924,7 +1913,6 @@ bool TestOzzKinematicsAnimatedLoadsStandaloneClip()
 
     return ok;
 }
-
 
 bool TestOzzKinematicsCallbacksInvokeBoneCallbackAndHonorOverwrite()
 {
@@ -1999,7 +1987,6 @@ bool TestOzzKinematicsCallbacksInvokeBoneCallbackAndHonorOverwrite()
     return ok;
 }
 
-
 bool TestOzzKinematicsParityBindPoseMatchesLegacySkeleton()
 {
     const auto ogf_path = ResolveProjectPath("res/testdata/npc/stalker_hero_1.ogf");
@@ -2060,7 +2047,6 @@ bool TestOzzKinematicsParityBindPoseMatchesLegacySkeleton()
     return ok;
 }
 
-
 bool TestOzzKinematicsParityAnimationPoseMatchesLegacySkeleton()
 {
     const auto ogf_path = ResolveProjectPath("res/testdata/npc/stalker_hero_1.ogf");
@@ -2068,7 +2054,9 @@ bool TestOzzKinematicsParityAnimationPoseMatchesLegacySkeleton()
     const auto ozz_skeleton_path = ResolveProjectPath("src/xrAnimation/tests/testdata/stalker_hero_1.ozz");
     const auto ozz_animation_path = ResolveProjectPath("src/xrAnimation/tests/testdata/critical_hit_grup_1.ozz");
 
-    if (!std::filesystem::exists(ogf_path) || !std::filesystem::exists(omf_path) || !std::filesystem::exists(ozz_skeleton_path) ||
+    if (!std::filesystem::exists(ogf_path) ||
+        !std::filesystem::exists(omf_path) ||
+        !std::filesystem::exists(ozz_skeleton_path) ||
         !std::filesystem::exists(ozz_animation_path))
     {
         ADD_FAILURE() << "Missing animation parity assets";
@@ -2133,7 +2121,6 @@ bool TestOzzKinematicsParityAnimationPoseMatchesLegacySkeleton()
 
     return ok;
 }
-
 
 bool TestOzzBundleRuntimeHydratesKinematicsAndMeshPayload()
 {
@@ -2374,7 +2361,6 @@ bool TestOzzKinematicsAppliesBoneMetadata(bool& metadata_available)
     return ok;
 }
 
-
 bool TestModelNamingNormalizesModelIdentifiers()
 {
     using xray::render::detail::NormalizeModelIdentifier;
@@ -2437,7 +2423,6 @@ bool TestModelNamingNormalizesModelIdentifiers()
 
     return ok;
 }
-
 
 TEST(OzzKinematicsBootstrap, MatchesJointCountWithReferenceSkeleton)
 {

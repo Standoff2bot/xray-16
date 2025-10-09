@@ -16,8 +16,8 @@ namespace Animation
 {
 struct OzzxBundle
 {
-    std::uint32_t version{ 3u };  // Bumped to 3 for model_type field
-    std::uint8_t model_type{ 0u };  // MT enum value (MT_OZZ_STATIC or MT_OZZ_ANIMATED)
+    std::uint32_t version{ 3u };
+    std::uint8_t model_type{ 0u };
     std::vector<std::uint8_t> skeleton;
     std::vector<std::uint8_t> mesh;
     xr_vector<xr_string> motion_refs;

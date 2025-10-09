@@ -2,14 +2,14 @@
 
 #include "OzzKinematicsAnimated.h"
 
-#include "OzzConversion.h"
 #include "Layers/xrRender/AnimationKeyCalculate.h"
+#include "OzzConversion.h"
 
-#include "xrEngine/device.h"
+#include "xrCore/Animation/Motion.hpp"
 #include "xrCore/FS.h"
 #include "xrCore/FS_impl.h"
-#include "xrCore/Animation/Motion.hpp"
 #include "xrCore/_std_extensions.h"
+#include "xrEngine/device.h"
 
 #include "ozz/animation/runtime/skeleton_utils.h"
 #include "ozz/base/io/archive.h"
@@ -34,8 +34,8 @@ namespace
 constexpr Render::animation::channal_rule kDefaultChannelRules[MAX_CHANNELS] = {
     { Render::animation::lerp, Render::animation::lerp },
     { Render::animation::lerp, Render::animation::lerp },
-    { Render::animation::lerp, Render::animation::add },
-    { Render::animation::lerp, Render::animation::add },
+    { Render::animation::lerp,  Render::animation::add },
+    { Render::animation::lerp,  Render::animation::add },
 };
 
 bool EndsWithIgnoreCase(const xr_string& value, pcstr suffix)
@@ -147,7 +147,7 @@ MotionMetadata ReadMotionMetadataFromArchive(ozz::io::IArchive& archive)
 
     for (uint32_t mark_index = 0; mark_index < mark_count; ++mark_index)
     {
-        ReadOzzString(archive); // mark name
+        ReadOzzString(archive);
 
         uint32_t interval_count = 0;
         archive >> interval_count;
@@ -311,6 +311,7 @@ OzzKinematicsAnimated::OzzKinematicsAnimated()
 {
     InitializeChannelState();
     ResetPlaybackState();
+    IBlend_Startup();
 }
 
 OzzKinematicsAnimated::~OzzKinematicsAnimated()
@@ -335,35 +336,14 @@ void OzzKinematicsAnimated::Copy(OzzKinematicsAnimated* from)
     if (!from || !from->core.IsInitialized())
         return;
 
-    Msg("[OzzKinematicsAnimated::Copy] Starting copy from source kinematics");
-
-    // NOTE: ozz::animation::Skeleton is non-copyable by design (meant to be shared)
-    // Following ozz-animation multithread sample pattern: each instance gets its own
-    // runtime state (sampledLocals, samplingContext, boneInstances) but shares the skeleton
-    //
-    // We can't directly copy core because skeleton is non-copyable.
-    // Two options:
-    // 1. Refactor to use shared_ptr for skeleton data (future improvement)
-    // 2. Re-initialize from skeleton payload (current solution - matches X-Ray pattern)
-    //
-    // For now, we rely on the parent COzzKinematicsVisual to re-initialize us
-    // from its cached skeleton payload. This is similar to how X-Ray's CKinematicsAnimated
-    // worked - it shallow-copied shared data pointers but relied on proper initialization.
-
-    // Shallow copy motion library slots (SharedOzzMotions has proper copy semantics)
-    // This increments refcounts in the global motion container
+    // Skeleton payload is shared, so runtime state must be rebuilt instead of copying the core.
     m_Motions = from->m_Motions;
-    Msg("[OzzKinematicsAnimated::Copy] Copied %u motion slots", static_cast<u32>(m_Motions.size()));
 
-    // Copy motion references and embedded data
     motionReferences = from->motionReferences;
     embeddedAnimationData = from->embeddedAnimationData;
 
-    // Copy partition data (shallow copy)
     defaultPartition = from->defaultPartition;
 
-    // Re-build per-bone motion cache (these are pointers into shared data)
-    // NOTE: This requires core to be initialized first!
     if (core.IsInitialized())
     {
         for (auto& slot : m_Motions)
@@ -372,19 +352,13 @@ void OzzKinematicsAnimated::Copy(OzzKinematicsAnimated* from)
         }
     }
 
-    // Re-initialize instance-specific state (blend pool, channels, etc.)
     InitializeChannelState();
     ResetPlaybackState();
     InitializeSamplingState();
+    IBlend_Startup();
 
-    // Clear any active blends (per-instance state)
-    activeBlends.clear();
-
-    // Don't copy callbacks - these are instance-specific
     blendDestroyCallback = nullptr;
     updateTracksCallback = nullptr;
-
-    Msg("[OzzKinematicsAnimated::Copy] Copy complete");
 }
 
 void OzzKinematicsAnimated::OnSkeletonLoaded()
@@ -395,15 +369,10 @@ void OzzKinematicsAnimated::OnSkeletonLoaded()
 bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vector<xr_string>& motionRefs)
 {
     if (!skeletonPath || !skeletonPath[0])
-    {
-        Msg("[OzzKinematicsAnimated] InitializeFromOzz received empty skeleton path");
         return false;
-    }
 
-    // Stash motion references before the skeleton triggers OnSkeletonLoaded().
     motionReferences = motionRefs;
 
-    // Initialize skeleton using core
     if (!core.InitializeFromOzz(skeletonPath))
     {
         motionReferences.clear();
@@ -421,10 +390,8 @@ bool OzzKinematicsAnimated::InitializeFromOzz(pcstr skeletonPath, const xr_vecto
 
 bool OzzKinematicsAnimated::InitializeFromOzzBuffer(ozz::span<const std::byte> skeletonData, const xr_vector<xr_string>& motionRefs)
 {
-    // Stash motion references before the skeleton triggers OnSkeletonLoaded().
     motionReferences = motionRefs;
 
-    // Initialize skeleton using core
     if (!core.InitializeFromOzzBuffer(skeletonData))
     {
         motionReferences.clear();
@@ -443,15 +410,13 @@ bool OzzKinematicsAnimated::InitializeFromOzzBuffer(ozz::span<const std::byte> s
 void OzzKinematicsAnimated::SetEmbeddedAnimationData(const std::vector<std::uint8_t>& data)
 {
     embeddedAnimationData = data;
-    Msg("[OzzKinematicsAnimated::SetEmbeddedAnimationData] Received %zu bytes of embedded animation data",
-        embeddedAnimationData.size());
 }
 
 void OzzKinematicsAnimated::ResetAnimationState()
 {
     InitializeChannelState();
     motionReferences.clear();
-    m_Motions.clear();  // Clear shared motion slots
+    m_Motions.clear();
     blendDestroyCallback = nullptr;
     updateTracksCallback = nullptr;
     animationApplied = false;
@@ -468,109 +433,83 @@ void OzzKinematicsAnimated::InitializeChannelState()
     }
 }
 
+void OzzKinematicsAnimated::IBlend_Startup()
+{
+    CBlend B;
+    B.set_free_state();
+
+    blend_pool.clear();
+    for (u32 i = 0; i < MAX_BLENDED_POOL; i++)
+    {
+        blend_pool.push_back(B);
+    }
+
+    activeBlends.clear();
+}
+
+CBlend* OzzKinematicsAnimated::IBlend_Create()
+{
+    for (auto& B : blend_pool)
+    {
+        if (B.blend_state() == CBlend::eFREE_SLOT)
+            return &B;
+    }
+
+    return nullptr;
+}
+
 void OzzKinematicsAnimated::EnsureMotionLibraryLoaded()
 {
-    // REFACTORED: Use shared motion container system
-    if (!g_pOzzMotionsContainer)
-    {
-        Msg("[OzzKinematicsAnimated] ERROR: g_pOzzMotionsContainer not initialized!");
+    if (!g_pOzzMotionsContainer || !core.IsInitialized())
         return;
-    }
 
     m_Motions.clear();
 
-    if (!core.IsInitialized())
-    {
-        Msg("[OzzKinematicsAnimated] Skeleton not initialized, cannot load motion library");
-        return;
-    }
-
-    // Compute skeleton fingerprint once
     SkeletonFingerprint skelFP = SkeletonFingerprint::Compute(core.Skeleton());
 
-    // First, check if we have embedded animations
     if (!embeddedAnimationData.empty())
     {
-        Msg("[OzzKinematicsAnimated] Loading embedded animations (%zu bytes)", embeddedAnimationData.size());
+        xr_string embeddedKey = xr_string("<embedded_") + xr_string(std::to_string(skelFP.hash).c_str()) + xr_string(">");
 
-        // Create a unique key for embedded animations based on skeleton fingerprint
-        xr_string embeddedKey = xr_string("<embedded_") +
-                                xr_string(std::to_string(skelFP.hash).c_str()) +
-                                xr_string(">");
-
-        // Create motion slot for embedded animations
         m_Motions.push_back(SMotionsSlot());
         SMotionsSlot& slot = m_Motions.back();
 
-        // Create load request with embedded data
         OzzMotionsContainer::LoadRequest request;
         request.key = shared_str(embeddedKey.c_str());
         request.skelFingerprint = skelFP;
         request.blocking = true;
-        request.embeddedData = embeddedAnimationData;  // Pass the embedded data
+        request.embeddedData = embeddedAnimationData;
 
-        // Dock to global container (will load from memory)
         if (!slot.motions.Create(request, core.Skeleton()))
-        {
-            Msg("[OzzKinematicsAnimated] Failed to load embedded animations");
             m_Motions.pop_back();
-        }
         else
-        {
-            // Build per-bone motion cache
             BuildBoneMotionCache(slot);
-            Msg("[OzzKinematicsAnimated] Successfully loaded embedded animations");
-        }
 
-        // Clear embedded data after loading
         embeddedAnimationData.clear();
     }
 
-#ifdef DEBUG
-    Msg("[OzzKinematicsAnimated] building motion library with shared system (%zu refs)",
-        static_cast<size_t>(motionReferences.size()));
-    Msg("[OzzKinematicsAnimated]   skeleton fingerprint: hash=0x%08X, joints=%u",
-        skelFP.hash, skelFP.jointCount);
-#endif
-
-    // Then load external motion references
     for (const auto& reference : motionReferences)
     {
-#ifdef DEBUG
-        Msg("[OzzKinematicsAnimated]   loading ref '%s'", reference.c_str());
-#endif
-
-        // Create motion slot
         m_Motions.push_back(SMotionsSlot());
         SMotionsSlot& slot = m_Motions.back();
 
-        // Add .ozz extension if missing
         xr_string reference_path = reference;
         if (reference_path.find(".ozz") == xr_string::npos)
             reference_path += ".ozz";
 
-        // Create load request with skeleton fingerprint
         OzzMotionsContainer::LoadRequest request;
         request.key = shared_str(reference_path.c_str());
         request.skelFingerprint = skelFP;
-        request.blocking = true;  // Synchronous for now
+        request.blocking = true;
 
-        // Dock to global container (deduplicates automatically!)
         if (!slot.motions.Create(request, core.Skeleton()))
         {
-            Msg("[OzzKinematicsAnimated] Failed to load motion ref '%s'", reference.c_str());
             m_Motions.pop_back();
             continue;
         }
 
-        // Build per-bone motion cache
         BuildBoneMotionCache(slot);
-
-#ifdef DEBUG
-        Msg("[OzzKinematicsAnimated]   successfully docked '%s' (shared)", reference.c_str());
-#endif
     }
-
 }
 
 void OzzKinematicsAnimated::BuildBoneMotionCache(SMotionsSlot& slot)
@@ -581,27 +520,12 @@ void OzzKinematicsAnimated::BuildBoneMotionCache(SMotionsSlot& slot)
     const u32 bone_count = core.Skeleton().num_joints();
     slot.bone_motions.resize(bone_count);
 
-    // Get MotionVec* for each bone from shared data
-    auto joint_names = core.Skeleton().joint_names();  // returns ozz::span
+    auto joint_names = core.Skeleton().joint_names();
     for (u32 bone_idx = 0; bone_idx < bone_count; ++bone_idx)
     {
         const char* bone_name = joint_names[bone_idx];
-
-        // Get pointer to MotionVec for this bone
         slot.bone_motions[bone_idx] = slot.motions.GetBoneMotions(bone_name);
-        //                             ^^^ Returns MotionVec* from shared container
-        //                                 This is a POINTER to the shared vector!
     }
-
-#ifdef DEBUG
-    u32 valid_caches = 0;
-    for (u32 i = 0; i < bone_count; ++i)
-    {
-        if (slot.bone_motions[i])
-            valid_caches++;
-    }
-    Msg("[OzzKinematicsAnimated]   bone motion cache built: %u/%u valid", valid_caches, bone_count);
-#endif
 }
 
 int OzzKinematicsAnimated::FindActiveBlendIndex(u16 partition, u8 channel) const
@@ -627,10 +551,12 @@ void OzzKinematicsAnimated::RemoveActiveBlend(size_t index, bool notifyDestroy)
     {
         entry.blend->Callback = nullptr;
         entry.blend->CallbackParam = nullptr;
-    }
 
-    if (notifyDestroy && blendDestroyCallback && entry.blend)
-        blendDestroyCallback->BlendDestroy(*entry.blend);
+        if (notifyDestroy && blendDestroyCallback)
+            blendDestroyCallback->BlendDestroy(*entry.blend);
+
+        entry.blend->set_free_state();
+    }
 
     activeBlends.erase(activeBlends.begin() + index);
 
@@ -652,15 +578,11 @@ void OzzKinematicsAnimated::ClearActiveBlends(bool notifyDestroy)
         {
             entry.blend->Callback = nullptr;
             entry.blend->CallbackParam = nullptr;
-        }
-    }
 
-    if (notifyDestroy && blendDestroyCallback)
-    {
-        for (ActiveBlendEntry& entry : activeBlends)
-        {
-            if (entry.blend)
+            if (notifyDestroy && blendDestroyCallback)
                 blendDestroyCallback->BlendDestroy(*entry.blend);
+
+            entry.blend->set_free_state();
         }
     }
 
@@ -681,9 +603,6 @@ void OzzKinematicsAnimated::ResetPlaybackState()
     ResetSamplingBuffers();
 }
 
-
-
-
 bool OzzKinematicsAnimated::LoadAnimationFromFile(const std::filesystem::path& path)
 {
     if (!LoadAnimationClipFromFile(path))
@@ -701,7 +620,6 @@ void OzzKinematicsAnimated::StopAnimation()
     ClearPose();
     CalculateBones_Invalidate();
 }
-
 
 bool OzzKinematicsAnimated::AdvanceAnimation(float dt)
 {
@@ -752,10 +670,7 @@ bool OzzKinematicsAnimated::AdvanceAnimation(float dt)
     job.output = ozz::span<ozz::math::SoaTransform>(sampledLocals.data(), sampledLocals.size());
 
     if (!job.Run())
-    {
-        Msg("[OzzKinematicsAnimated] sampling job failed during animation update");
         return false;
-    }
 
     if (!SetPoseLocals(ozz::span<const ozz::math::SoaTransform>(sampledLocals.data(), sampledLocals.size())))
         return false;
@@ -818,11 +733,7 @@ bool OzzKinematicsAnimated::LoadAnimationClip(const std::shared_ptr<ozz::animati
         return false;
 
     if (animation->num_tracks() != core.Skeleton().num_joints())
-    {
-        Msg("[OzzKinematicsAnimated] animation track mismatch (%d vs %d)",
-            animation->num_tracks(), core.Skeleton().num_joints());
         return false;
-    }
 
     activeAnimation = animation;
     samplingContext.Resize(animation->num_tracks());
@@ -839,10 +750,7 @@ bool OzzKinematicsAnimated::LoadAnimationClipFromFile(const std::filesystem::pat
 
     ozz::io::File file(path.u8string().c_str(), "rb");
     if (!file.opened())
-    {
-        Msg("[OzzKinematicsAnimated] failed to open animation %s", path.u8string().c_str());
         return false;
-    }
 
     ozz::io::IArchive archive(&file);
     std::shared_ptr<ozz::animation::Animation> animation = std::make_shared<ozz::animation::Animation>();
@@ -858,10 +766,7 @@ bool OzzKinematicsAnimated::LoadAnimationClipFromFile(const std::filesystem::pat
         uint32_t animation_count = 0;
         aggregate >> animation_count;
         if (animation_count == 0)
-        {
-            Msg("[OzzKinematicsAnimated] file %s does not contain animations", path.u8string().c_str());
             return false;
-        }
 
         aggregate >> *animation;
         SkipOzzAnimationMetadata(aggregate);
@@ -876,8 +781,6 @@ bool OzzKinematicsAnimated::LoadAnimationClipFromFile(const std::filesystem::pat
 
     return LoadAnimationClip(animation);
 }
-
-// LoadOzzAnimationsFromFile and LoadOzzAnimationsFromArchive removed - using shared motion system
 
 void OzzKinematicsAnimated::OnCalculateBones()
 {
@@ -898,7 +801,6 @@ std::pair<LPCSTR, LPCSTR> OzzKinematicsAnimated::LL_MotionDefName_dbg(MotionID /
 
 void OzzKinematicsAnimated::LL_DumpBlends_dbg()
 {
-    Msg("[OzzKinematicsAnimated] LL_DumpBlends_dbg not implemented");
 }
 #endif
 
@@ -912,9 +814,7 @@ CBlend* OzzKinematicsAnimated::LL_PartBlend(u32 /*bone_part_id*/, u32 /*n*/)
     return nullptr;
 }
 
-void OzzKinematicsAnimated::LL_IterateBlends(IterateBlendsCallback& /*callback*/)
-{
-}
+void OzzKinematicsAnimated::LL_IterateBlends(IterateBlendsCallback& /*callback*/) {}
 
 u16 OzzKinematicsAnimated::LL_MotionsSlotCount()
 {
@@ -932,12 +832,9 @@ CMotionDef* OzzKinematicsAnimated::LL_GetMotionDef(MotionID id)
     if (!id.valid())
         return nullptr;
 
-    // Use shared motion system
     if (id.slot < m_Motions.size() && g_pOzzMotionsContainer)
     {
-        OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(
-            m_Motions[id.slot].motions.GetHandle()
-        );
+        OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(m_Motions[id.slot].motions.GetHandle());
 
         if (value)
         {
@@ -961,7 +858,6 @@ CMotion* OzzKinematicsAnimated::LL_GetRootMotion(MotionID id)
 
 CMotion* OzzKinematicsAnimated::LL_GetMotion(MotionID id, u16 bone_id)
 {
-    // Use bone-major cache from shared container
     if (!id.valid() || id.slot >= m_Motions.size())
         return nullptr;
 
@@ -972,13 +868,11 @@ CMotion* OzzKinematicsAnimated::LL_GetMotion(MotionID id, u16 bone_id)
     if (bone_id >= joint_count)
         return nullptr;
 
-    // Get bone's motion vector from cache
     MotionVec* bone_motions = m_Motions[id.slot].bone_motions[bone_id];
 
     if (!bone_motions)
         return nullptr;
 
-    // Index into the vector by motion ID
     if (id.idx >= bone_motions->size())
         return nullptr;
 
@@ -1001,7 +895,7 @@ void OzzKinematicsAnimated::LL_BuldBoneMatrixDequatize(const CBoneData* bd, u8 c
 
     for (const ActiveBlendEntry& entry : activeBlends)
     {
-        CBlend* blend = entry.blend.get();
+        CBlend* blend = entry.blend;
         if (!blend)
             continue;
 
@@ -1097,7 +991,7 @@ void OzzKinematicsAnimated::LL_BoneMatrixBuild(CBoneInstance& bi, const Fmatrix*
         bi.mTransform = local_matrix;
 
 #ifdef DEBUG
-#ifndef _EDITOR
+#    ifndef _EDITOR
     if (!xray::render::RENDER_NAMESPACE::check_scale(local_matrix))
     {
         VERIFY(xray::render::RENDER_NAMESPACE::check_scale(bi.mTransform));
@@ -1108,10 +1002,8 @@ void OzzKinematicsAnimated::LL_BoneMatrixBuild(CBoneInstance& bi, const Fmatrix*
     constexpr float kBoxExtent = 100000.f;
     dbg_box.set(-kBoxExtent, -kBoxExtent, -kBoxExtent, kBoxExtent, kBoxExtent, kBoxExtent);
     VERIFY2(dbg_box.contains(bi.mTransform.c),
-        make_string("[OzzKinematicsAnimated] bone transform out of bounds: (%.3f, %.3f, %.3f)", bi.mTransform.c.x,
-            bi.mTransform.c.y, bi.mTransform.c.z)
-            .c_str());
-#endif
+        make_string("[OzzKinematicsAnimated] bone transform out of bounds: (%.3f, %.3f, %.3f)", bi.mTransform.c.x, bi.mTransform.c.y, bi.mTransform.c.z).c_str());
+#    endif
 #endif
 }
 
@@ -1145,12 +1037,9 @@ MotionID OzzKinematicsAnimated::LL_MotionID(LPCSTR B)
 
     const xr_string motion_name(B);
 
-    // Search through all motion slots for a matching name
     for (u16 slot = 0; slot < m_Motions.size(); ++slot)
     {
-        OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(
-            m_Motions[slot].motions.GetHandle()
-        );
+        OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(m_Motions[slot].motions.GetHandle());
 
         if (!value)
             continue;
@@ -1170,41 +1059,23 @@ u16 OzzKinematicsAnimated::LL_PartID(LPCSTR /*B*/)
     return BI_NONE;
 }
 
-CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL bMixing, float blendAccrue,
-    float blendFalloff, float Speed, BOOL noloop, PlayCallback Callback, LPVOID CallbackParam, u8 channel)
+CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL bMixing, float blendAccrue, float blendFalloff, float Speed, BOOL noloop,
+    PlayCallback Callback, LPVOID CallbackParam, u8 channel)
 {
-    if (!motion.valid())
+    if (!motion.valid() || motion.slot >= m_Motions.size())
         return nullptr;
 
-    if (motion.slot >= m_Motions.size())
-    {
-        Msg("[OzzKinematicsAnimated] LL_PlayCycle received motion with invalid slot %u", motion.slot);
-        return nullptr;
-    }
-
-    // Get motion record from shared system
     OzzMotionsValue::MotionRecord* record = nullptr;
     if (g_pOzzMotionsContainer)
     {
-        OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(
-            m_Motions[motion.slot].motions.GetHandle()
-        );
+        OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(m_Motions[motion.slot].motions.GetHandle());
 
         if (value)
             record = value->FindMotion(motion.idx);
     }
 
-    if (!record)
-    {
-        Msg("[OzzKinematicsAnimated] LL_PlayCycle motion index %u not found", motion.idx);
+    if (!record || !record->animation)
         return nullptr;
-    }
-
-    if (!record->animation)
-    {
-        Msg("[OzzKinematicsAnimated] LL_PlayCycle motion '%s' is missing animation payload", record->name.c_str());
-        return nullptr;
-    }
 
     const u16 resolvedPartition = (partition == BI_NONE) ? u16(0) : partition;
     const bool mixing = !!bMixing;
@@ -1231,19 +1102,17 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
     if (existingIndex >= 0)
         RemoveActiveBlend(static_cast<size_t>(existingIndex), true);
 
+    CBlend* B = IBlend_Create();
+    if (!B)
+        return nullptr;
+
     activeBlends.emplace_back();
     ActiveBlendEntry& entry = activeBlends.back();
+    entry.blend = B;
     entry.partition = resolvedPartition;
     entry.channel = channel;
     entry.recordIndex = resolvedMotion.idx;
     entry.motionId = resolvedMotion;
-
-    entry.blend = xr_make_unique<CBlend>();
-    if (!entry.blend)
-    {
-        activeBlends.pop_back();
-        return nullptr;
-    }
 
     CBlend& blend = *entry.blend;
     blend.set_accrue_state();
@@ -1280,18 +1149,16 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
 
     animationApplied = false;
 
-    return activeBlends.size() ? activeBlends.back().blend.get() : nullptr;
+    return activeBlends.size() ? activeBlends.back().blend : nullptr;
 }
 
-CBlend* OzzKinematicsAnimated::LL_PlayCycle(
-    u16 partition, MotionID motion, BOOL bMixIn, PlayCallback Callback, LPVOID CallbackParam, u8 channel)
+CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL bMixIn, PlayCallback Callback, LPVOID CallbackParam, u8 channel)
 {
     CMotionDef* def = LL_GetMotionDef(motion);
     if (!def)
         return nullptr;
 
-    return LL_PlayCycle(partition, motion, bMixIn, def->Accrue(), def->Falloff(), def->Speed(), def->StopAtEnd(), Callback,
-        CallbackParam, channel);
+    return LL_PlayCycle(partition, motion, bMixIn, def->Accrue(), def->Falloff(), def->Speed(), def->StopAtEnd(), Callback, CallbackParam, channel);
 }
 
 void OzzKinematicsAnimated::LL_CloseCycle(u16 partition, u8 mask_channel)
@@ -1330,7 +1197,7 @@ void OzzKinematicsAnimated::LL_UpdateTracks(float dt, bool b_force, bool leave_b
 {
     if (!activeBlends.empty())
     {
-        const CBlend* primaryBlend = activeBlends.front().blend.get();
+        const CBlend* primaryBlend = activeBlends.front().blend;
         if (primaryBlend)
         {
             loopPlayback = !primaryBlend->stop_at_end;
@@ -1365,11 +1232,6 @@ void OzzKinematicsAnimated::LL_UpdateTracks(float dt, bool b_force, bool leave_b
 
     if (updateTracksCallback)
         (*updateTracksCallback)(dt, *this);
-
-    if (advanced && activeBlends.empty())
-    {
-        // When all blends are removed the controller state has already been reset.
-    }
 }
 
 MotionID OzzKinematicsAnimated::ID_Cycle(LPCSTR N)
@@ -1384,49 +1246,9 @@ MotionID OzzKinematicsAnimated::ID_Cycle(LPCSTR N)
 MotionID OzzKinematicsAnimated::ID_Cycle_Safe(LPCSTR N)
 {
     if (!N || !N[0])
-    {
-        Msg("[OzzKinematicsAnimated::ID_Cycle_Safe] Empty motion name provided");
         return MotionID();
-    }
 
-    MotionID id = LL_MotionID(N);
-    if (!id.valid())
-    {
-        Msg("[OzzKinematicsAnimated::ID_Cycle_Safe] Motion '%s' NOT FOUND in library", N);
-
-        // Log available motions for debugging
-        if (g_pOzzMotionsContainer && !m_Motions.empty())
-        {
-            Msg("[OzzKinematicsAnimated] Available motion slots: %u", static_cast<u32>(m_Motions.size()));
-            for (u16 slot = 0; slot < m_Motions.size(); ++slot)
-            {
-                OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(
-                    m_Motions[slot].motions.GetHandle()
-                );
-                if (value)
-                {
-                    Msg("[OzzKinematicsAnimated]   Slot %u: %u motions", slot, value->GetMotionCount());
-                    // List first few motion names for debugging
-                    u16 count = std::min<u16>(5, value->GetMotionCount());
-                    for (u16 i = 0; i < count; ++i)
-                    {
-                        auto* record = value->FindMotion(i);
-                        if (record)
-                            Msg("[OzzKinematicsAnimated]     - '%s'", record->name.c_str());
-                    }
-                    if (value->GetMotionCount() > count)
-                        Msg("[OzzKinematicsAnimated]     ... and %u more", value->GetMotionCount() - count);
-                }
-            }
-        }
-    }
-    else
-    {
-        Msg("[OzzKinematicsAnimated::ID_Cycle_Safe] Motion '%s' found: slot=%u, idx=%u",
-            N, id.slot, id.idx);
-    }
-
-    return id;
+    return LL_MotionID(N);
 }
 
 MotionID OzzKinematicsAnimated::ID_Cycle(shared_str N)
@@ -1461,12 +1283,10 @@ CBlend* OzzKinematicsAnimated::PlayCycle(MotionID M, BOOL bMixIn, PlayCallback C
     if (!def)
         return nullptr;
 
-    return LL_PlayCycle(def->bone_or_part, M, bMixIn, def->Accrue(), def->Falloff(), def->Speed(), def->StopAtEnd(),
-        Callback, CallbackParam, channel);
+    return LL_PlayCycle(def->bone_or_part, M, bMixIn, def->Accrue(), def->Falloff(), def->Speed(), def->StopAtEnd(), Callback, CallbackParam, channel);
 }
 
-CBlend* OzzKinematicsAnimated::PlayCycle(u16 partition, MotionID M, BOOL bMixIn, PlayCallback Callback, LPVOID CallbackParam,
-    u8 channel)
+CBlend* OzzKinematicsAnimated::PlayCycle(u16 partition, MotionID M, BOOL bMixIn, PlayCallback Callback, LPVOID CallbackParam, u8 channel)
 {
     return LL_PlayCycle(partition, M, bMixIn, Callback, CallbackParam, channel);
 }
@@ -1506,9 +1326,6 @@ float OzzKinematicsAnimated::get_animation_length(MotionID /*motion_ID*/)
     return AnimationDuration();
 }
 
-
-// Implementations for methods redeclared in IKinematicsAnimated
-// These are already implemented in OzzKinematics, just need to be exposed here
 void OzzKinematicsAnimated::LL_AddTransformToBone(KinematicsABT::additional_bone_transform& offset)
 {
     OzzKinematics::LL_AddTransformToBone(offset);
@@ -1518,6 +1335,5 @@ void OzzKinematicsAnimated::LL_ClearAdditionalTransform(u16 bone_id)
 {
     OzzKinematics::LL_ClearAdditionalTransform(bone_id);
 }
-
 } // namespace Animation
 } // namespace XRay

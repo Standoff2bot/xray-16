@@ -290,6 +290,7 @@ bool OzzKinematicsCore::FinalizeSkeletonInitialization(pcstr debug_source)
 }
 
 using XRay::Animation::ConvertOzzMatrixToXRay;
+
 bool OzzKinematicsCore::BuildBoneMetadata()
 {
     const int joint_count = skeleton.num_joints();
@@ -332,7 +333,6 @@ bool OzzKinematicsCore::BuildBoneMetadata()
     for (size_t idx = 0; idx < boneStorage.size(); ++idx)
         bones[idx] = boneStorage[idx].get();
 
-    // Build children relationships.
     for (int joint = 0; joint < joint_count; ++joint)
     {
         const int16_t parent_index = (static_cast<size_t>(joint) < parents.size()) ? parents[joint] : static_cast<int16_t>(-1);
@@ -460,8 +460,8 @@ void OzzKinematicsCore::BuildSkinningPalette(xr_vector<Fmatrix>& out_matrices, b
 
     if (available != expected)
     {
-        Msg("[OzzKinematicsCore] BuildSkinningPalette requested before bone buffers ready (instances=%zu, model=%zu, expected=%zu)",
-            instance_count, model_count, expected);
+        Msg("[OzzKinematicsCore] BuildSkinningPalette requested before bone buffers ready (instances=%zu, model=%zu, expected=%zu)", instance_count,
+            model_count, expected);
 
         for (size_t idx = 0; idx < expected; ++idx)
             out_matrices[idx] = Fidentity;
@@ -599,12 +599,11 @@ void OzzKinematicsCore::ClearBoneTransform(u16 bone_id)
     }
     else
     {
-        boneOffsets.erase(
-            std::remove_if(boneOffsets.begin(), boneOffsets.end(),
-                [bone_id](const KinematicsABT::additional_bone_transform& entry)
-                {
-                    return entry.m_bone_id == bone_id;
-                }),
+        boneOffsets.erase(std::remove_if(boneOffsets.begin(), boneOffsets.end(),
+                              [bone_id](const KinematicsABT::additional_bone_transform& entry)
+                              {
+                                  return entry.m_bone_id == bone_id;
+                              }),
             boneOffsets.end());
     }
 
@@ -628,8 +627,7 @@ void OzzKinematicsCore::CalculateTransforms(bool force_exact)
     const size_t expected_joint_count = static_cast<size_t>(skeleton.num_joints());
     if (boneInstances.size() != expected_joint_count)
     {
-        Msg("[OzzKinematicsCore] Bone instance array size mismatch (have %zu, expected %zu). Reinitializing.",
-            boneInstances.size(), expected_joint_count);
+        Msg("[OzzKinematicsCore] Bone instance array size mismatch (have %zu, expected %zu). Reinitializing.", boneInstances.size(), expected_joint_count);
         boneInstances.resize(expected_joint_count);
         for (CBoneInstance& instance : boneInstances)
             instance.construct();
@@ -849,6 +847,5 @@ Fobb& OzzKinematicsCore::GetBoneBox(u16 bone_id)
         return boneBoxes[bone_id];
     return stub;
 }
-
 } // namespace Animation
 } // namespace XRay
