@@ -640,6 +640,30 @@ void OzzKinematicsAnimated::ResetPlaybackState()
     loopPlayback = true;
     samplingContext.Resize(0);
     ResetSamplingBuffers();
+
+    // Reset ECS animation state
+    if (m_use_ecs && m_ecs_entity != entt::null)
+    {
+        auto& registry = AnimationECS::GetAnimationRegistry();
+        auto* state = registry.GetComponent<AnimationECS::AnimationState>(m_ecs_entity);
+        auto* controller = registry.GetComponent<AnimationECS::AnimationController>(m_ecs_entity);
+
+        if (state)
+        {
+            state->is_playing = false;
+            state->is_looping = true;
+            state->current_time = 0.0f;
+            state->time_ratio = 0.0f;
+            state->current_partition = 0;
+            state->blend_amount = 1.0f;
+        }
+
+        if (controller)
+        {
+            controller->animation = nullptr;
+            controller->playback_speed = 1.0f;
+        }
+    }
 }
 
 bool OzzKinematicsAnimated::LoadAnimationFromFile(const std::filesystem::path& path)
@@ -658,6 +682,19 @@ void OzzKinematicsAnimated::StopAnimation()
     ClearActiveBlends(true);
     ClearPose();
     CalculateBones_Invalidate();
+
+    // Stop ECS animation
+    if (m_use_ecs && m_ecs_entity != entt::null)
+    {
+        auto& registry = AnimationECS::GetAnimationRegistry();
+        auto* state = registry.GetComponent<AnimationECS::AnimationState>(m_ecs_entity);
+        if (state)
+        {
+            state->is_playing = false;
+            state->current_time = 0.0f;
+            state->time_ratio = 0.0f;
+        }
+    }
 }
 
 bool OzzKinematicsAnimated::AdvanceAnimation(float dt)
@@ -1153,6 +1190,42 @@ CBlend* OzzKinematicsAnimated::LL_PlayCycle(u16 partition, MotionID motion, BOOL
     entry.recordIndex = resolvedMotion.idx;
     entry.motionId = resolvedMotion;
 
+    // Initialize ECS animation when starting playback
+    if (m_use_ecs && m_ecs_entity != entt::null && core.IsInitialized())
+    {
+        auto& registry = AnimationECS::GetAnimationRegistry();
+
+        auto* state = registry.GetComponent<AnimationECS::AnimationState>(m_ecs_entity);
+        auto* controller = registry.GetComponent<AnimationECS::AnimationController>(m_ecs_entity);
+
+        if (state && controller)
+        {
+            state->is_playing = true;
+            state->is_looping = loopPlayback;
+            state->current_time = 0.0f;
+            state->time_ratio = 0.0f;
+            state->current_partition = resolvedPartition;
+
+            controller->animation = activeAnimation.get();
+            controller->playback_speed = Speed;
+
+            // Set animation name for debugging
+            if (record)
+            {
+                controller->SetAnimation(activeAnimation.get(), shared_str(record->name.c_str()));
+            }
+        }
+
+        // Set up callbacks in ECS
+        auto* callbacks = registry.GetComponent<AnimationECS::AnimationCallbacks>(m_ecs_entity);
+        if (callbacks)
+        {
+            callbacks->callback_param = B;  // Pass CBlend pointer to callbacks
+            callbacks->on_play = Callback;
+            callbacks->on_end = Callback;
+        }
+    }
+
     CBlend& blend = *entry.blend;
     blend.set_accrue_state();
     blend.blendAmount = mixing ? EPS_S : 1.f;
@@ -1219,6 +1292,17 @@ void OzzKinematicsAnimated::LL_CloseCycle(u16 partition, u8 mask_channel)
         }
         ++index;
     }
+
+    // Stop ECS animation if all blends were removed
+    if (activeBlends.empty() && m_use_ecs && m_ecs_entity != entt::null)
+    {
+        auto& registry = AnimationECS::GetAnimationRegistry();
+        auto* state = registry.GetComponent<AnimationECS::AnimationState>(m_ecs_entity);
+        if (state)
+        {
+            state->is_playing = false;
+        }
+    }
 }
 
 void OzzKinematicsAnimated::LL_SetChannelFactor(u16 channel, float factor)
@@ -1234,34 +1318,158 @@ void OzzKinematicsAnimated::UpdateTracks()
 
 void OzzKinematicsAnimated::LL_UpdateTracks(float dt, bool b_force, bool leave_blends)
 {
-    // Use ECS path if enabled
-    if (m_use_ecs && m_ecs_entity != entt::null)
+    // ECS-driven animation pipeline
+    if (m_use_ecs && m_ecs_entity != entt::null && core.IsInitialized())
     {
         auto& registry = AnimationECS::GetAnimationRegistry();
 
         // Sync current animation state to ECS components
         auto* state = registry.GetComponent<AnimationECS::AnimationState>(m_ecs_entity);
         auto* controller = registry.GetComponent<AnimationECS::AnimationController>(m_ecs_entity);
+        auto* buffers = registry.GetComponent<AnimationECS::AnimationBuffers>(m_ecs_entity);
 
-        if (state && controller && activeAnimation)
+        if (state && controller && buffers && activeAnimation)
         {
-            state->is_playing = animationLoaded && animationApplied;
+            // Update ECS state from legacy blend system
+            state->is_playing = animationLoaded && !activeBlends.empty();
             state->is_looping = loopPlayback;
             controller->animation = activeAnimation.get();
             controller->playback_speed = playbackSpeed;
+
+            // Set partition from active blends
+            if (!activeBlends.empty() && activeBlends.front().blend)
+            {
+                state->current_partition = activeBlends.front().partition;
+            }
         }
 
-        // Run ECS animation systems
+        // Handle multi-layer blending if we have multiple active blends
+        if (activeBlends.size() > 1 && buffers)
+        {
+            // Get or add BlendState component for multi-animation blending
+            auto* blend_state = registry.GetComponent<AnimationECS::BlendState>(m_ecs_entity);
+            if (!blend_state)
+            {
+                blend_state = &registry.AddComponent<AnimationECS::BlendState>(m_ecs_entity);
+            }
+
+            // Prepare storage for all blend layers
+            const size_t num_soa_joints = static_cast<size_t>(core.Skeleton().num_soa_joints());
+            blend_state->PrepareForLayers(activeBlends.size(), num_soa_joints);
+
+            // Create blend layers from active blends
+            size_t layer_index = 0;
+            for (const auto& entry : activeBlends)
+            {
+                if (!entry.blend || !g_pOzzMotionsContainer)
+                    continue;
+
+                // Validate motion slot
+                if (entry.motionId.slot >= m_Motions.size())
+                    continue;
+
+                // Get animation from motion system
+                OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(m_Motions[entry.motionId.slot].motions.GetHandle());
+                if (!value)
+                    continue;
+
+                auto* record = value->FindMotion(entry.motionId.idx);
+                if (!record || !record->animation)
+                    continue;
+
+                // Get layer storage
+                auto layer_transforms = blend_state->GetLayerStorage(layer_index);
+                if (layer_transforms.empty())
+                    continue;
+
+                // Sample this animation into layer storage
+                ozz::animation::SamplingJob sampling_job;
+                sampling_job.animation = record->animation.get();
+                sampling_job.context = &buffers->context;
+
+                // Calculate ratio safely
+                const float time_total = entry.blend->timeTotal;
+                const float ratio = (time_total > 0.0f) ? (entry.blend->timeCurrent / time_total) : 0.0f;
+                sampling_job.ratio = std::clamp(ratio, 0.0f, 1.0f);
+                sampling_job.output = layer_transforms;
+
+                if (sampling_job.Run())
+                {
+                    // Add blend layer with calculated weight
+                    blend_state->AddLayer(entry.blend->blendAmount, layer_transforms);
+                    ++layer_index;
+                }
+            }
+        }
+        else
+        {
+            // Single animation - remove BlendState if it exists
+            if (registry.HasComponent<AnimationECS::BlendState>(m_ecs_entity))
+            {
+                registry.RemoveComponent<AnimationECS::BlendState>(m_ecs_entity);
+            }
+        }
+
+        // Run ECS animation systems (sampling + blending + local-to-model)
         registry.Update(dt);
 
-        // Sync back from ECS to legacy state (for now)
-        if (state)
+        // Apply ECS animation results to skeleton
+        if (state && buffers && buffers->IsInitialized())
         {
+            // Use ECS-generated local transforms instead of legacy sampledLocals
+            ozz::span<const ozz::math::SoaTransform> ecs_locals(buffers->locals.data(), buffers->locals.size());
+
+            if (!SetPoseLocals(ecs_locals))
+            {
+                Msg("! [OzzKinematicsAnimated] Failed to apply ECS animation results");
+            }
+            else
+            {
+                animationApplied = true;
+            }
+
+            // Sync playback time back from ECS
             playbackTime = state->current_time;
         }
+
+        // Update blend system for compatibility (callbacks, state tracking)
+        if (!activeBlends.empty())
+        {
+            size_t index = 0;
+            while (index < activeBlends.size())
+            {
+                ActiveBlendEntry& entry = activeBlends[index];
+                CBlend& blend = *entry.blend;
+
+                if (b_force || blend.dwFrame != Device.dwFrame)
+                {
+                    blend.dwFrame = Device.dwFrame;
+
+                    // Sync blend time from ECS state
+                    if (state)
+                    {
+                        blend.timeCurrent = state->current_time;
+                    }
+
+                    const bool finished = blend.update(dt, blend.Callback);
+                    if (finished && !leave_blends)
+                    {
+                        RemoveActiveBlend(index, true);
+                        continue;
+                    }
+                }
+
+                ++index;
+            }
+        }
+
+        if (updateTracksCallback)
+            (*updateTracksCallback)(dt, *this);
+
+        return;
     }
 
-    // Legacy path (will eventually be removed)
+    // Legacy path (used when m_use_ecs is false)
     if (!activeBlends.empty())
     {
         const CBlend* primaryBlend = activeBlends.front().blend;
@@ -1272,7 +1480,7 @@ void OzzKinematicsAnimated::LL_UpdateTracks(float dt, bool b_force, bool leave_b
         }
     }
 
-    const bool advanced = AdvanceAnimation(dt);
+    AdvanceAnimation(dt);
 
     if (!activeBlends.empty())
     {

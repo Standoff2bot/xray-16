@@ -240,6 +240,8 @@
     <ClInclude Include="AnimationECS_Components.h" />
     <ClInclude Include="AnimationECS_Registry.h" />
     <ClInclude Include="AnimationECS_Systems.h" />
+    <ClInclude Include="AnimationECS_ParallelSystems.h" />
+    <ClInclude Include="AnimationECS_Performance.h" />
     <ClInclude Include="LegacyOgfConverter.h" />
     <ClInclude Include="LegacyOmfConverter.h" />
     <ClInclude Include="OzzBundle.h" />

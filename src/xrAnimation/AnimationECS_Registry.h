@@ -2,6 +2,7 @@
 
 #include "AnimationECS_Components.h"
 #include "AnimationECS_Systems.h"
+#include "AnimationECS_ParallelSystems.h"
 #include "entt/entt.hpp"
 #include "xrCore/xrCore.h"
 
@@ -134,8 +135,8 @@ public:
         if (!m_initialized)
             return;
 
-        // Run all animation systems in correct order
-        AnimationUpdateOrchestrator::Update(m_registry, dt);
+        // Run all animation systems with automatic parallel/sequential selection
+        ParallelAnimationOrchestrator::Update(m_registry, dt);
     }
 
     //-------------------------------------------------------------------------

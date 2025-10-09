@@ -112,9 +112,38 @@ struct BlendState
     // Blending layers
     ozz::vector<ozz::animation::BlendingJob::Layer> layers;
 
+    // Storage for layer transforms (one vector per layer)
+    ozz::vector<ozz::vector<ozz::math::SoaTransform>> layer_storage;
+
     // Blend transition tracking
     float transition_time{0.0f};
     float transition_duration{0.0f};
+
+    void PrepareForLayers(size_t num_layers, size_t num_soa_joints)
+    {
+        layers.clear();
+        layer_storage.clear();
+        layer_storage.resize(num_layers);
+        for (auto& storage : layer_storage)
+        {
+            storage.resize(num_soa_joints);
+        }
+    }
+
+    ozz::span<ozz::math::SoaTransform> GetLayerStorage(size_t layer_index)
+    {
+        if (layer_index >= layer_storage.size())
+            return {};
+        return ozz::make_span(layer_storage[layer_index]);
+    }
+
+    void AddLayer(float weight, ozz::span<ozz::math::SoaTransform> transforms)
+    {
+        ozz::animation::BlendingJob::Layer layer;
+        layer.transform = transforms;
+        layer.weight = weight;
+        layers.push_back(layer);
+    }
 
     void AddLayer(const ozz::animation::BlendingJob::Layer& layer)
     {
@@ -124,6 +153,7 @@ struct BlendState
     void ClearLayers()
     {
         layers.clear();
+        layer_storage.clear();
     }
 
     bool HasLayers() const
