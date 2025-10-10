@@ -14,6 +14,7 @@
 
 #if defined(USE_DX11)
 #include "Layers/xrRenderDX11/StateManager/dx11SamplerStateCache.h"
+#include "Layers/xrRenderDX11/dx11ComputeTest.h"
 #endif
 
 #if (RENDER == R_R3) || (RENDER == R_R4)
@@ -571,6 +572,23 @@ public:
         RImplementation.Resources->_DumpMemoryUsage();
     }
 };
+
+#if defined(USE_DX11)
+class CCC_TestCompute final : public IConsole_Command
+{
+public:
+    CCC_TestCompute(pcstr name) : IConsole_Command(name) { bEmptyArgsHandled = true; }
+
+    void Execute(pcstr /*args*/) override
+    {
+        bool success = ComputeTest::RunTest();
+        if (success)
+            Msg("* [COMPUTE TEST] PASSED - All validations successful");
+        else
+            Msg("! [COMPUTE TEST] FAILED - Check output above for details");
+    }
+};
+#endif
 
 #if RENDER != R_R1
 class CCC_BuildSSA : public IConsole_Command
