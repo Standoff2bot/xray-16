@@ -1,5 +1,60 @@
 set(_xrAnimation_tool_targets "")
 
+# Find Vulkan SDK (required for ozz_animation_viewer Vulkan renderer)
+find_package(Vulkan)
+if(Vulkan_FOUND)
+    message(STATUS "Vulkan SDK found: ${Vulkan_INCLUDE_DIRS}")
+    message(STATUS "Vulkan library: ${Vulkan_LIBRARIES}")
+
+    # Check for shader compiler (glslc preferred, glslangValidator as fallback)
+    find_program(GLSLC glslc HINTS ${Vulkan_INCLUDE_DIRS}/../bin ENV VULKAN_SDK)
+    if(NOT GLSLC)
+        find_program(GLSLC glslangValidator HINTS ${Vulkan_INCLUDE_DIRS}/../bin ENV VULKAN_SDK)
+        if(GLSLC)
+            set(USE_GLSLANG_VALIDATOR TRUE)
+            message(STATUS "Using glslangValidator for shader compilation")
+        endif()
+    else()
+        message(STATUS "Found glslc: ${GLSLC}")
+    endif()
+else()
+    message(WARNING "Vulkan SDK not found. Vulkan renderer will not be available.")
+    message(WARNING "Install Vulkan SDK or run: sudo apt-get install libvulkan-dev vulkan-tools glslang-tools")
+endif()
+
+# Shader compilation function
+function(add_shader TARGET SHADER)
+    if(NOT GLSLC)
+        message(WARNING "Shader compiler not found. Shaders will not be compiled.")
+        return()
+    endif()
+
+    set(SHADER_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/renderer/shaders/${SHADER})
+    set(SHADER_SPIRV ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER}.spv)
+
+    if(USE_GLSLANG_VALIDATOR)
+        # glslangValidator syntax
+        add_custom_command(
+            OUTPUT ${SHADER_SPIRV}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/shaders
+            COMMAND ${GLSLC} -V ${SHADER_SOURCE} -o ${SHADER_SPIRV}
+            DEPENDS ${SHADER_SOURCE}
+            COMMENT "Compiling shader ${SHADER} with glslangValidator"
+        )
+    else()
+        # glslc syntax
+        add_custom_command(
+            OUTPUT ${SHADER_SPIRV}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/shaders
+            COMMAND ${GLSLC} ${SHADER_SOURCE} -o ${SHADER_SPIRV}
+            DEPENDS ${SHADER_SOURCE}
+            COMMENT "Compiling shader ${SHADER} with glslc"
+        )
+    endif()
+
+    target_sources(${TARGET} PRIVATE ${SHADER_SPIRV})
+endfunction()
+
 # X-Ray to ozz converter tool (optional until implementation lands)
 set(_converter_src ${CMAKE_CURRENT_SOURCE_DIR}/xray_to_ozz_converter.cpp)
 if(EXISTS ${_converter_src})
@@ -45,18 +100,34 @@ if(CMAKE_GENERATOR MATCHES "Visual Studio")
     message(STATUS "Skipping ozz_animation_viewer for Visual Studio generators")
 endif()
 
-if(_ozz_animation_viewer_supported)
+if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
+    # Renderer source files
+    set(RENDERER_SOURCES
+        renderer/VMAImplementation.cpp
+        renderer/VulkanDevice.cpp
+        renderer/VulkanBuffer.cpp
+        renderer/VulkanCommandBuffer.cpp
+        renderer/VulkanDescriptors.cpp
+        renderer/VulkanPipeline.cpp
+        renderer/InstancedSkeletonRenderer.cpp
+        renderer/InstancedMeshRenderer.cpp
+        renderer/DebugRenderer.cpp
+        renderer/Camera.cpp
+        renderer/VulkanRenderer.cpp
+    )
+
     add_executable(ozz_animation_viewer
         ozz_animation_viewer.cpp
+        ${RENDERER_SOURCES}
         ../../../Externals/imgui/imgui.cpp
         ../../../Externals/imgui/imgui_draw.cpp
         ../../../Externals/imgui/imgui_tables.cpp
         ../../../Externals/imgui/imgui_widgets.cpp
         ../../../Externals/imgui/backends/imgui_impl_glfw.cpp
-        ../../../Externals/imgui/backends/imgui_impl_opengl3.cpp
+        ../../../Externals/imgui/backends/imgui_impl_vulkan.cpp
     )
 
-    # Link to the existing ozz sample_framework
+    # Link to the existing ozz sample_framework and Vulkan
     target_link_libraries(ozz_animation_viewer
         PRIVATE
         sample_framework  # From ozz-animation
@@ -67,6 +138,7 @@ if(_ozz_animation_viewer_supported)
         xrEngine
         ozz_animation
         ozz_base
+        Vulkan::Vulkan
     )
 
     target_include_directories(ozz_animation_viewer
@@ -78,8 +150,20 @@ if(_ozz_animation_viewer_supported)
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/ozz-animation/samples
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/imgui
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/imgui/backends
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/vma
+        ${CMAKE_CURRENT_SOURCE_DIR}/renderer
     )
 
+
+    # Add shaders if compiler is available
+    if(GLSLC)
+        add_shader(ozz_animation_viewer skeleton_instanced.vert)
+        add_shader(ozz_animation_viewer skeleton_instanced.frag)
+        add_shader(ozz_animation_viewer skinned_mesh_instanced.vert)
+        add_shader(ozz_animation_viewer skinned_mesh_instanced.frag)
+        add_shader(ozz_animation_viewer debug_lines.vert)
+        add_shader(ozz_animation_viewer debug_lines.frag)
+    endif()
     # Set properties
     set_target_properties(ozz_animation_viewer PROPERTIES
         CXX_STANDARD 17
@@ -88,6 +172,9 @@ if(_ozz_animation_viewer_supported)
     )
 
     list(APPEND _xrAnimation_tool_targets ozz_animation_viewer)
+elseif(_ozz_animation_viewer_supported AND NOT Vulkan_FOUND)
+    message(WARNING "Skipping ozz_animation_viewer: Vulkan SDK not found")
+    set(_ozz_animation_viewer_supported OFF)
 endif()
 
 # Install any tools that have been enabled

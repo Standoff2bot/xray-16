@@ -24,6 +24,80 @@
 // DEALINGS IN THE SOFTWARE.                                                  //
 //                                                                            //
 //----------------------------------------------------------------------------//
+
+// ============================================================================
+// VULKAN MINIMAL TEST - Checkpoint build for Vulkan renderer
+// ============================================================================
+#define VULKAN_MINIMAL_TEST
+
+#ifdef VULKAN_MINIMAL_TEST
+
+#include "stdafx.h"
+#include <GLFW/glfw3.h>
+#include "renderer/VulkanRenderer.h"
+#include <cstdio>
+
+// Simple logging replacement
+#define Msg(...) printf(__VA_ARGS__), printf("\n")
+
+int main(int argc, const char** argv) {
+    Msg("* Starting Vulkan Minimal Test...");
+
+    // Initialize GLFW
+    if (!glfwInit()) {
+        Msg("! Failed to initialize GLFW");
+        return -1;
+    }
+
+    // Create window (no OpenGL context)
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "ozz Animation Viewer - Vulkan Test", nullptr, nullptr);
+    if (!window) {
+        Msg("! Failed to create GLFW window");
+        glfwTerminate();
+        return -1;
+    }
+
+    // Initialize Vulkan renderer
+    xray::animation::renderer::VulkanRenderer renderer;
+    if (!renderer.Initialize(window)) {
+        Msg("! Failed to initialize Vulkan renderer");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return -1;
+    }
+
+    Msg("* Vulkan renderer initialized successfully!");
+    Msg("* Rendering loop started - you should see a dark blue window");
+
+    // Main loop
+    while (!glfwWindowShouldClose(window)) {
+        glfwPollEvents();
+
+        // Render frame
+        renderer.BeginFrame();
+        // Clear screen happens in BeginFrame
+        renderer.EndFrame();
+    }
+
+    // Cleanup
+    Msg("* Shutting down...");
+    renderer.Shutdown();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+
+    Msg("* Vulkan minimal test completed successfully");
+    return 0;
+}
+
+#else  // !VULKAN_MINIMAL_TEST
+
+// ============================================================================
+// FULL IMPLEMENTATION (original code below)
+// ============================================================================
+
 #include "stdafx.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
@@ -5032,3 +5106,5 @@ int main(int _argc, const char** _argv)
     const char* title = "Ozz-animation sample: Binary animation/skeleton playback";
     return PlaybackSampleApplication().Run(_argc, _argv, "1.0", title);
 }
+
+#endif  // VULKAN_MINIMAL_TEST
