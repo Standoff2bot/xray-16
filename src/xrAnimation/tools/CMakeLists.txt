@@ -33,7 +33,7 @@ function(add_shader TARGET SHADER)
     set(SHADER_SPIRV ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER}.spv)
 
     if(USE_GLSLANG_VALIDATOR)
-        # glslangValidator syntax
+        # glslangValidator syntax: glslangValidator -V input.vert -o output.spv
         add_custom_command(
             OUTPUT ${SHADER_SPIRV}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/shaders
@@ -154,24 +154,25 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
         ${CMAKE_CURRENT_SOURCE_DIR}/renderer
     )
 
+    target_compile_definitions(ozz_animation_viewer
+        PRIVATE
+        OZZ_SHADER_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders"
+    )
+
 
     # Add shaders if compiler is available
     if(GLSLC)
-        # Triangle test shaders (validation)
+        # Triangle test shaders (validation) - only compile what exists
         add_shader(ozz_animation_viewer triangle.vert)
         add_shader(ozz_animation_viewer triangle.frag)
 
-        # Skeleton rendering shaders
-        add_shader(ozz_animation_viewer skeleton_instanced.vert)
-        add_shader(ozz_animation_viewer skeleton_instanced.frag)
-
-        # Skinned mesh shaders
-        add_shader(ozz_animation_viewer skinned_mesh_instanced.vert)
-        add_shader(ozz_animation_viewer skinned_mesh_instanced.frag)
-
-        # Debug visualization shaders
-        add_shader(ozz_animation_viewer debug_lines.vert)
-        add_shader(ozz_animation_viewer debug_lines.frag)
+        # TODO: Add more shaders as they are implemented
+        # add_shader(ozz_animation_viewer skeleton_instanced.vert)
+        # add_shader(ozz_animation_viewer skeleton_instanced.frag)
+        # add_shader(ozz_animation_viewer skinned_mesh_instanced.vert)
+        # add_shader(ozz_animation_viewer skinned_mesh_instanced.frag)
+        # add_shader(ozz_animation_viewer debug_lines.vert)
+        # add_shader(ozz_animation_viewer debug_lines.frag)
     endif()
     # Set properties
     set_target_properties(ozz_animation_viewer PROPERTIES

@@ -2,6 +2,7 @@
 
 #include <GLFW/glfw3.h>
 #include <cstdio>
+#include <filesystem>
 
 // Simple logging replacement
 #define Msg(...) printf(__VA_ARGS__), printf("\n")
@@ -55,9 +56,15 @@ bool VulkanRenderer::Initialize(GLFWwindow* window) {
 bool VulkanRenderer::InitializeTrianglePipeline() {
     PipelineConfig config;
 
+#ifdef OZZ_SHADER_BINARY_DIR
+    const std::filesystem::path shader_root{OZZ_SHADER_BINARY_DIR};
+    config.vertex_shader_path = (shader_root / "triangle.vert.spv").string();
+    config.fragment_shader_path = (shader_root / "triangle.frag.spv").string();
+#else
     // Shader paths (relative to build directory)
     config.vertex_shader_path = "src/xrAnimation/tools/shaders/triangle.vert.spv";
     config.fragment_shader_path = "src/xrAnimation/tools/shaders/triangle.frag.spv";
+#endif
 
     // No vertex input (triangle vertices are hardcoded in shader)
     config.vertex_bindings.clear();
