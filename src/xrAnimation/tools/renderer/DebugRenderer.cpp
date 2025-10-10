@@ -6,10 +6,14 @@
 #include "VulkanPipeline.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <limits>
+
+#include "../../ExtendedBoneMetadata.h"
 
 namespace xray {
 namespace animation {
@@ -18,6 +22,49 @@ namespace renderer {
 namespace {
 
 constexpr VkDeviceSize kDefaultVertexCapacity = 1024;
+constexpr float kTwoPi = 6.28318530718f;
+constexpr float kEpsilon = 1e-5f;
+
+inline ozz::math::Float3 ToFloat3(const Fvector3& v) {
+    return ozz::math::Float3{ v.x, v.y, v.z };
+}
+
+inline ozz::math::Float3 Add(const ozz::math::Float3& a, const ozz::math::Float3& b) {
+    return ozz::math::Float3{ a.x + b.x, a.y + b.y, a.z + b.z };
+}
+
+inline ozz::math::Float3 Sub(const ozz::math::Float3& a, const ozz::math::Float3& b) {
+    return ozz::math::Float3{ a.x - b.x, a.y - b.y, a.z - b.z };
+}
+
+inline ozz::math::Float3 Scale(const ozz::math::Float3& v, float s) {
+    return ozz::math::Float3{ v.x * s, v.y * s, v.z * s };
+}
+
+inline ozz::math::Float3 TransformPoint(const ozz::math::Float4x4& m, const ozz::math::Float3& p) {
+    const ozz::math::SimdFloat4 point = ozz::math::simd_float4::Load3PtrU(&p.x);
+    const ozz::math::SimdFloat4 transformed = ozz::math::TransformPoint(m, point);
+    ozz::math::Float3 result;
+    ozz::math::Store3PtrU(transformed, &result.x);
+    return result;
+}
+
+inline ozz::math::Float3 TransformVector(const ozz::math::Float4x4& m, const ozz::math::Float3& v) {
+    const ozz::math::SimdFloat4 vec = ozz::math::simd_float4::Load3PtrU(&v.x);
+    const ozz::math::SimdFloat4 transformed = ozz::math::TransformVector(m, vec);
+    ozz::math::Float3 result;
+    ozz::math::Store3PtrU(transformed, &result.x);
+    return result;
+}
+
+inline float ColumnLength(const ozz::math::SimdFloat4& column) {
+    float values[4];
+    ozz::math::StorePtrU(column, values);
+    return std::sqrt(values[0] * values[0] + values[1] * values[1] + values[2] * values[2]);
+}
+
+using ozz::math::Cross;
+using ozz::math::NormalizeSafe;
 
 } // namespace
 
@@ -116,34 +163,28 @@ void DebugRenderer::DrawLine(const ozz::math::Float3& start, const ozz::math::Fl
 
 void DebugRenderer::DrawAxes(const ozz::math::Float4x4& transform, float scale, const ozz::math::Float4& color_x,
     const ozz::math::Float4& color_y, const ozz::math::Float4& color_z) {
-    ozz::math::Float3 origin{};
-    ozz::math::Float3 axis_x{};
-    ozz::math::Float3 axis_y{};
-    ozz::math::Float3 axis_z{};
+    ozz::math::Float3 origin;
+    ozz::math::Float3 axis_x;
+    ozz::math::Float3 axis_y;
+    ozz::math::Float3 axis_z;
 
     ozz::math::Store3PtrU(transform.cols[3], &origin.x);
     ozz::math::Store3PtrU(transform.cols[0], &axis_x.x);
     ozz::math::Store3PtrU(transform.cols[1], &axis_y.x);
     ozz::math::Store3PtrU(transform.cols[2], &axis_z.x);
 
-    axis_x.x *= scale;
-    axis_x.y *= scale;
-    axis_x.z *= scale;
-    axis_y.x *= scale;
-    axis_y.y *= scale;
-    axis_y.z *= scale;
-    axis_z.x *= scale;
-    axis_z.y *= scale;
-    axis_z.z *= scale;
+    axis_x = Scale(axis_x, scale);
+    axis_y = Scale(axis_y, scale);
+    axis_z = Scale(axis_z, scale);
 
-    DrawLine(origin, ozz::math::Float3{ origin.x + axis_x.x, origin.y + axis_x.y, origin.z + axis_x.z }, color_x);
-    DrawLine(origin, ozz::math::Float3{ origin.x + axis_y.x, origin.y + axis_y.y, origin.z + axis_y.z }, color_y);
-    DrawLine(origin, ozz::math::Float3{ origin.x + axis_z.x, origin.y + axis_z.y, origin.z + axis_z.z }, color_z);
+    DrawLine(origin, Add(origin, axis_x), color_x);
+    DrawLine(origin, Add(origin, axis_y), color_y);
+    DrawLine(origin, Add(origin, axis_z), color_z);
 }
 
 void DebugRenderer::DrawPoint(const ozz::math::Float3& position, float radius, const ozz::math::Float4& color, int segments) {
     segments = std::max(segments, 4);
-    const float angle_step = 6.28318530718f / static_cast<float>(segments);
+    const float angle_step = kTwoPi / static_cast<float>(segments);
 
     float current_angle = 0.f;
     for (int i = 0; i < segments; ++i) {
@@ -163,7 +204,7 @@ void DebugRenderer::DrawPoint(const ozz::math::Float3& position, float radius, c
 
 void DebugRenderer::DrawSphere(const ozz::math::Float3& center, float radius, const ozz::math::Float4& color, int segments) {
     segments = std::max(segments, 8);
-    const float angle_step = 6.28318530718f / static_cast<float>(segments);
+    const float angle_step = kTwoPi / static_cast<float>(segments);
 
     auto draw_ring = [&](auto sample_point) {
         float current = 0.f;
@@ -196,6 +237,172 @@ void DebugRenderer::DrawSphere(const ozz::math::Float3& center, float radius, co
             center.y + std::cos(angle) * radius,
             center.z + std::sin(angle) * radius };
     });
+}
+
+void DebugRenderer::DrawOrientedBox(const ozz::math::Float4x4& transform, const Fobb& obb, const ozz::math::Float4& color) {
+    const ozz::math::Float3 center = ToFloat3(obb.m_translate);
+    const ozz::math::Float3 axis_x = Scale(ToFloat3(obb.m_rotate.i), obb.m_halfsize.x);
+    const ozz::math::Float3 axis_y = Scale(ToFloat3(obb.m_rotate.j), obb.m_halfsize.y);
+    const ozz::math::Float3 axis_z = Scale(ToFloat3(obb.m_rotate.k), obb.m_halfsize.z);
+
+    std::array<ozz::math::Float3, 8> corners{};
+    int index = 0;
+    for (int sx = -1; sx <= 1; sx += 2) {
+        for (int sy = -1; sy <= 1; sy += 2) {
+            for (int sz = -1; sz <= 1; sz += 2) {
+                ozz::math::Float3 local = center;
+                local = Add(local, Scale(axis_x, static_cast<float>(sx)));
+                local = Add(local, Scale(axis_y, static_cast<float>(sy)));
+                local = Add(local, Scale(axis_z, static_cast<float>(sz)));
+                corners[index++] = TransformPoint(transform, local);
+            }
+        }
+    }
+
+    static constexpr int edges[12][2] = {
+        {0, 1}, {0, 2}, {0, 4}, {1, 3},
+        {1, 5}, {2, 3}, {2, 6}, {3, 7},
+        {4, 5}, {4, 6}, {5, 7}, {6, 7},
+    };
+
+    for (const auto& edge : edges) {
+        DrawLine(corners[edge[0]], corners[edge[1]], color);
+    }
+}
+
+void DebugRenderer::DrawSphereShape(const ozz::math::Float4x4& transform, const Fsphere& sphere,
+    const ozz::math::Float4& color, int segments) {
+    const ozz::math::Float3 center_local = ToFloat3(sphere.P);
+    const ozz::math::Float3 center_world = TransformPoint(transform, center_local);
+
+    const float sx = ColumnLength(transform.cols[0]);
+    const float sy = ColumnLength(transform.cols[1]);
+    const float sz = ColumnLength(transform.cols[2]);
+    const float uniform_scale = (sx + sy + sz) / 3.f;
+
+    DrawSphere(center_world, sphere.R * uniform_scale, color, segments);
+}
+
+void DebugRenderer::DrawCapsuleShape(const ozz::math::Float4x4& transform, const Fcylinder& cylinder,
+    const ozz::math::Float4& color, int segments) {
+    segments = std::max(segments, 8);
+
+    ozz::math::Float3 axis_dir = NormalizeSafe(ToFloat3(cylinder.m_direction), ozz::math::Float3::z_axis());
+    const float half_height = std::max(0.f, cylinder.m_height * 0.5f);
+
+    const ozz::math::Float3 center = ToFloat3(cylinder.m_center);
+    const ozz::math::Float3 top_center = Add(center, Scale(axis_dir, half_height));
+    const ozz::math::Float3 bottom_center = Sub(center, Scale(axis_dir, half_height));
+
+    ozz::math::Float3 tangent = Cross(axis_dir, ozz::math::Float3::y_axis());
+    if (Length(tangent) <= kEpsilon) {
+        tangent = Cross(axis_dir, ozz::math::Float3::x_axis());
+    }
+    tangent = NormalizeSafe(tangent, ozz::math::Float3::x_axis());
+    ozz::math::Float3 bitangent = NormalizeSafe(Cross(axis_dir, tangent), ozz::math::Float3::z_axis());
+
+    const float angle_step = kTwoPi / static_cast<float>(segments);
+
+    ozz::math::Float3 first_top{};
+    ozz::math::Float3 prev_top{};
+    ozz::math::Float3 first_bottom{};
+    ozz::math::Float3 prev_bottom{};
+    bool first_point = true;
+
+    for (int i = 0; i < segments; ++i) {
+        const float angle = angle_step * static_cast<float>(i);
+        const float cos_a = std::cos(angle);
+        const float sin_a = std::sin(angle);
+        const ozz::math::Float3 offset =
+            Add(Scale(tangent, cos_a * cylinder.m_radius), Scale(bitangent, sin_a * cylinder.m_radius));
+
+        const ozz::math::Float3 top_world = TransformPoint(transform, Add(top_center, offset));
+        const ozz::math::Float3 bottom_world = TransformPoint(transform, Add(bottom_center, offset));
+
+        if (first_point) {
+            first_top = top_world;
+            first_bottom = bottom_world;
+            first_point = false;
+        } else {
+            DrawLine(prev_top, top_world, color);
+            DrawLine(prev_bottom, bottom_world, color);
+        }
+
+        DrawLine(top_world, bottom_world, color);
+
+        prev_top = top_world;
+        prev_bottom = bottom_world;
+    }
+
+    if (!first_point) {
+        DrawLine(prev_top, first_top, color);
+        DrawLine(prev_bottom, first_bottom, color);
+    }
+
+    const ozz::math::Float3 top_world = TransformPoint(transform, top_center);
+    const ozz::math::Float3 bottom_world = TransformPoint(transform, bottom_center);
+    DrawLine(top_world, bottom_world, color);
+}
+
+void DebugRenderer::DrawBoneShape(const XRay::Animation::ExtendedBoneMetadata& metadata,
+    const ozz::math::Float4x4& local_to_world, const ozz::math::Float4& color, int segments) {
+    switch (metadata.shape.type) {
+    case SBoneShape::stBox:
+        DrawOrientedBox(local_to_world, metadata.shape.box, color);
+        break;
+    case SBoneShape::stSphere:
+        DrawSphereShape(local_to_world, metadata.shape.sphere, color, segments);
+        break;
+    case SBoneShape::stCylinder:
+        DrawCapsuleShape(local_to_world, metadata.shape.cylinder, color, segments);
+        break;
+    default:
+    {
+        float length = metadata.rest_length;
+        if (length <= kEpsilon) {
+            Fvector diag;
+            diag.sub(metadata.local_aabb_max, metadata.local_aabb_min);
+            length = diag.magnitude();
+        }
+        if (length <= kEpsilon) {
+            length = 0.1f;
+        }
+
+        const float radius = std::max(length * 0.12f, 0.015f);
+        const float inter = std::min(length * 0.35f, length * 0.85f);
+
+        std::array<ozz::math::Float3, 6> local_points = {
+            ozz::math::Float3{length, 0.f, 0.f},
+            ozz::math::Float3{inter, radius, radius},
+            ozz::math::Float3{inter, radius, -radius},
+            ozz::math::Float3{inter, -radius, -radius},
+            ozz::math::Float3{inter, -radius, radius},
+            ozz::math::Float3{0.f, 0.f, 0.f},
+        };
+
+        std::array<ozz::math::Float3, local_points.size()> world_points{};
+        for (size_t i = 0; i < local_points.size(); ++i) {
+            world_points[i] = TransformPoint(local_to_world, local_points[i]);
+        }
+
+        constexpr int ring_edges[][2] = {
+            {1, 2}, {2, 3}, {3, 4}, {4, 1}, {1, 3}, {2, 4},
+        };
+
+        for (const auto& edge : ring_edges) {
+            DrawLine(world_points[edge[0]], world_points[edge[1]], color);
+        }
+
+        for (int i = 1; i <= 4; ++i) {
+            DrawLine(world_points[0], world_points[i], color);
+            DrawLine(world_points[5], world_points[i], color);
+        }
+
+        DrawLine(world_points[5], world_points[0], color);
+        DrawSphere(world_points[5], radius * 0.5f, color, segments);
+        break;
+    }
+    }
 }
 
 void DebugRenderer::EndFrame() {

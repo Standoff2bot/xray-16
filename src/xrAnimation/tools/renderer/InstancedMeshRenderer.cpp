@@ -416,7 +416,7 @@ bool InstancedMeshRenderer::CreatePipeline() {
     };
 
     config.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    config.cull_mode = VK_CULL_MODE_BACK_BIT;
+    config.cull_mode = VK_CULL_MODE_NONE;
     config.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     config.depth_test_enable = true;
     config.depth_write_enable = true;

@@ -3,13 +3,51 @@
 #include "framework/mesh.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <ozz/animation/runtime/local_to_model_job.h>
+#include <ozz/animation/runtime/skeleton.h>
+#include <ozz/base/containers/vector.h>
 #include <ozz/base/maths/vec_float.h>
+#include <ozz/base/span.h>
+
+#include "../../../../Externals/imgui/backends/imgui_impl_glfw.h"
+#include "../../../../Externals/imgui/backends/imgui_impl_vulkan.h"
+#include "../../../../Externals/imgui/imgui.h"
 
 // Simple logging replacement
 #define Msg(...) printf(__VA_ARGS__), printf("\n")
+
+namespace {
+
+void CheckVkResult(VkResult result) {
+    if (result == VK_SUCCESS) {
+        return;
+    }
+    Msg("! ImGui Vulkan backend error: VkResult = %d", static_cast<int>(result));
+}
+
+constexpr float kSkeletonDebugEpsilon = 1e-5f;
+constexpr float kSkeletonDefaultRadius = 0.05f;
+
+inline ozz::math::Float3 ExtractTranslation(const ozz::math::Float4x4& matrix) {
+    ozz::math::Float3 result{};
+    ozz::math::Store3PtrU(matrix.cols[3], &result.x);
+    return result;
+}
+
+inline float DistanceBetween(const ozz::math::Float4x4& a, const ozz::math::Float4x4& b) {
+    const ozz::math::Float3 pa = ExtractTranslation(a);
+    const ozz::math::Float3 pb = ExtractTranslation(b);
+    const float dx = pa.x - pb.x;
+    const float dy = pa.y - pb.y;
+    const float dz = pa.z - pb.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+} // namespace
 
 namespace xray {
 namespace animation {
@@ -66,10 +104,20 @@ bool VulkanRenderer::Initialize(GLFWwindow* window) {
     if (!mesh_renderer_initialized_) {
         Msg("! Failed to initialize mesh renderer");
     } else {
-        mesh_debug_loaded_ = InitializeDebugMesh();
-        if (!mesh_debug_loaded_) {
+        mesh_loaded_ = InitializeDebugMesh();
+        if (!mesh_loaded_) {
             Msg("! Failed to upload debug skinned mesh");
         }
+    }
+
+    debug_renderer_initialized_ = debug_renderer_.Initialize(&device_);
+    if (!debug_renderer_initialized_) {
+        Msg("! Failed to initialize debug renderer");
+    }
+
+    if (!InitializeImGui()) {
+        Msg("! Failed to initialize Dear ImGui");
+        return false;
     }
 
     Msg("* Vulkan Renderer initialized successfully");
@@ -123,23 +171,197 @@ bool VulkanRenderer::InitializeTrianglePipeline() {
     return true;
 }
 
+bool VulkanRenderer::InitializeImGui() {
+    if (imgui_initialized_) {
+        return true;
+    }
+
+    if (!window_) {
+        Msg("! Cannot initialize Dear ImGui without a valid GLFW window");
+        return false;
+    }
+
+    VkDevice device_handle = device_.GetDevice();
+    if (device_handle == VK_NULL_HANDLE) {
+        Msg("! Cannot initialize Dear ImGui without a valid Vulkan device");
+        return false;
+    }
+
+    // Descriptor pool for Dear ImGui
+    const std::array<VkDescriptorPoolSize, 11> pool_sizes = {{
+        {VK_DESCRIPTOR_TYPE_SAMPLER, 1000},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000},
+        {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000},
+        {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000}
+    }};
+
+    VkDescriptorPoolCreateInfo pool_info = {};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pool_info.maxSets = static_cast<uint32_t>(pool_sizes.size()) * 1000;
+    pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+    pool_info.pPoolSizes = pool_sizes.data();
+
+    if (vkCreateDescriptorPool(device_handle, &pool_info, nullptr, &imgui_descriptor_pool_) != VK_SUCCESS) {
+        Msg("! Failed to create Dear ImGui descriptor pool");
+        return false;
+    }
+
+    IMGUI_CHECKVERSION();
+    imgui_context_ = ImGui::CreateContext();
+    if (!imgui_context_) {
+        Msg("! Failed to create Dear ImGui context");
+        vkDestroyDescriptorPool(device_handle, imgui_descriptor_pool_, nullptr);
+        imgui_descriptor_pool_ = VK_NULL_HANDLE;
+        return false;
+    }
+
+    ImGui::SetCurrentContext(imgui_context_);
+    ImGui::StyleColorsDark();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    if (!ImGui_ImplGlfw_InitForVulkan(window_, true)) {
+        Msg("! Failed to initialize Dear ImGui GLFW backend");
+        ImGui::DestroyContext(imgui_context_);
+        imgui_context_ = nullptr;
+        vkDestroyDescriptorPool(device_handle, imgui_descriptor_pool_, nullptr);
+        imgui_descriptor_pool_ = VK_NULL_HANDLE;
+        return false;
+    }
+
+    ImGui_ImplVulkan_InitInfo init_info = {};
+    init_info.ApiVersion = VK_API_VERSION_1_2;
+    init_info.Instance = device_.GetInstance();
+    init_info.PhysicalDevice = device_.GetPhysicalDevice();
+    init_info.Device = device_handle;
+    init_info.QueueFamily = device_.GetQueueFamilyIndices().graphics_family;
+    init_info.Queue = device_.GetGraphicsQueue();
+    init_info.DescriptorPool = imgui_descriptor_pool_;
+    init_info.MinImageCount = device_.GetSwapchainImageCount();
+    init_info.ImageCount = device_.GetSwapchainImageCount();
+    init_info.PipelineCache = VK_NULL_HANDLE;
+    init_info.PipelineInfoMain.RenderPass = device_.GetRenderPass();
+    init_info.PipelineInfoMain.Subpass = 0;
+    init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    init_info.UseDynamicRendering = false;
+    init_info.Allocator = nullptr;
+    init_info.CheckVkResultFn = CheckVkResult;
+    init_info.MinAllocationSize = 1024 * 1024;
+
+    if (!ImGui_ImplVulkan_Init(&init_info)) {
+        Msg("! Failed to initialize Dear ImGui Vulkan backend");
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext(imgui_context_);
+        imgui_context_ = nullptr;
+        vkDestroyDescriptorPool(device_handle, imgui_descriptor_pool_, nullptr);
+        imgui_descriptor_pool_ = VK_NULL_HANDLE;
+        return false;
+    }
+
+    imgui_initialized_ = true;
+    imgui_frame_started_ = false;
+    imgui_image_count_ = init_info.ImageCount;
+    return true;
+}
+
+void VulkanRenderer::ShutdownImGui() {
+    if (!imgui_initialized_) {
+        if (imgui_descriptor_pool_ != VK_NULL_HANDLE && device_.GetDevice() != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(device_.GetDevice(), imgui_descriptor_pool_, nullptr);
+            imgui_descriptor_pool_ = VK_NULL_HANDLE;
+        }
+        return;
+    }
+
+    ImGui::SetCurrentContext(imgui_context_);
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext(imgui_context_);
+    imgui_context_ = nullptr;
+    imgui_initialized_ = false;
+    imgui_frame_started_ = false;
+    imgui_image_count_ = 0;
+
+    if (imgui_descriptor_pool_ != VK_NULL_HANDLE && device_.GetDevice() != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device_.GetDevice(), imgui_descriptor_pool_, nullptr);
+        imgui_descriptor_pool_ = VK_NULL_HANDLE;
+    }
+}
+
+void VulkanRenderer::BeginImGuiFrame() {
+    if (!imgui_initialized_) {
+        return;
+    }
+
+    ImGui::SetCurrentContext(imgui_context_);
+
+    const uint32_t image_count = device_.GetSwapchainImageCount();
+    if (image_count != imgui_image_count_) {
+        ImGui_ImplVulkan_SetMinImageCount(image_count);
+        imgui_image_count_ = image_count;
+    }
+
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    imgui_frame_started_ = true;
+}
+
+void VulkanRenderer::RenderImGui(VkCommandBuffer cmd) {
+    if (!imgui_initialized_ || !imgui_frame_started_) {
+        return;
+    }
+
+    ImGui::SetCurrentContext(imgui_context_);
+    ImGui::Render();
+    ImDrawData* draw_data = ImGui::GetDrawData();
+    if (draw_data) {
+        ImGui_ImplVulkan_RenderDrawData(draw_data, cmd);
+    }
+
+    imgui_frame_started_ = false;
+}
+
 void VulkanRenderer::Shutdown() {
     if (mesh_renderer_initialized_) {
         mesh_renderer_.Shutdown();
         mesh_renderer_initialized_ = false;
-        mesh_debug_loaded_ = false;
+        mesh_loaded_ = false;
         mesh_instances_.clear();
         mesh_bone_matrices_.clear();
+        mesh_bind_pose_palette_.clear();
     }
 
     if (skeleton_renderer_initialized_) {
         skeleton_renderer_.Shutdown();
         skeleton_renderer_initialized_ = false;
     }
+
+    skeleton_loaded_ = false;
+    skeleton_rest_models_.clear();
+    skeleton_parents_.clear();
+    bone_metadata_.clear();
+
+    if (debug_renderer_initialized_) {
+        debug_renderer_.Shutdown();
+        debug_renderer_initialized_ = false;
+    }
+
     window_ = nullptr;
 
     if (device_.GetDevice() != VK_NULL_HANDLE) {
         device_.WaitIdle();
+
+        ShutdownImGui();
 
         if (!command_buffers_.empty() && device_.GetCommandPool() != VK_NULL_HANDLE) {
             vkFreeCommandBuffers(device_.GetDevice(), device_.GetCommandPool(),
@@ -152,15 +374,40 @@ void VulkanRenderer::Shutdown() {
 }
 
 void VulkanRenderer::BeginFrame() {
-    if (window_) {
-        camera_.Update(window_, 0.0f);
+    const double now_seconds = glfwGetTime();
+    if (!frame_time_initialized_) {
+        frame_delta_seconds_ = 0.0;
+        frame_time_initialized_ = true;
+    } else {
+        frame_delta_seconds_ = std::max(0.0, now_seconds - last_frame_timestamp_);
     }
-
-    if (mesh_renderer_initialized_ && mesh_debug_loaded_) {
-        UpdateMeshAnimation(static_cast<float>(glfwGetTime()));
-    }
+    last_frame_timestamp_ = now_seconds;
 
     device_.BeginFrame();
+
+    if (debug_renderer_initialized_) {
+        debug_renderer_.BeginFrame();
+    }
+
+    if (imgui_initialized_) {
+        BeginImGuiFrame();
+    }
+
+    if (window_) {
+        bool capture_mouse = false;
+        if (imgui_initialized_) {
+            ImGui::SetCurrentContext(imgui_context_);
+            capture_mouse = ImGui::GetIO().WantCaptureMouse;
+        }
+
+        if (!capture_mouse) {
+            camera_.Update(window_, 0.0f);
+        }
+    }
+
+    if (mesh_renderer_initialized_ && mesh_loaded_) {
+        UpdateMeshAnimation(static_cast<float>(frame_delta_seconds_));
+    }
 
     // Get current frame info
     uint32_t image_index = device_.GetCurrentImageIndex();
@@ -211,6 +458,8 @@ void VulkanRenderer::BeginFrame() {
 void VulkanRenderer::EndFrame() {
     uint32_t image_index = device_.GetCurrentImageIndex();
     VkCommandBuffer cmd = command_buffers_[image_index];
+
+    RenderImGui(cmd);
 
     // End render pass
     vkCmdEndRenderPass(cmd);
@@ -304,8 +553,11 @@ bool VulkanRenderer::InitializeDebugMesh() {
     }
 
     mesh_bone_matrices_.resize(static_cast<size_t>(bones_per_instance) * mesh_instances_.size());
-    for (auto& matrix : mesh_bone_matrices_) {
-        matrix = ozz::math::Float4x4::identity();
+    mesh_bind_pose_palette_.resize(bones_per_instance);
+
+    for (size_t idx = 0; idx < mesh_bind_pose_palette_.size(); ++idx) {
+        mesh_bind_pose_palette_[idx] = ozz::math::Float4x4::identity();
+        mesh_bone_matrices_[idx] = mesh_bind_pose_palette_[idx];
     }
 
     for (size_t i = 0; i < mesh_instances_.size(); ++i) {
@@ -318,32 +570,157 @@ bool VulkanRenderer::InitializeDebugMesh() {
     return true;
 }
 
+bool VulkanRenderer::LoadBundleMesh(const ozz::sample::Mesh& mesh, const ozz::animation::Skeleton& skeleton) {
+    if (!mesh_renderer_initialized_) {
+        Msg("! Mesh renderer not initialized; cannot upload bundle mesh");
+        return false;
+    }
+
+    if (!mesh_renderer_.UploadMesh(mesh)) {
+        Msg("! Failed to upload bundle mesh to GPU");
+        return false;
+    }
+
+    const uint32_t bones_per_instance = mesh_renderer_.BonesPerInstance();
+    if (bones_per_instance == 0) {
+        Msg("! Uploaded mesh reports zero bones; skipping mesh rendering");
+        return false;
+    }
+
+    mesh_instances_.clear();
+    mesh_instances_.resize(1);
+    mesh_instances_[0].transform = ozz::math::Float4x4::identity();
+    mesh_instances_[0].bone_matrix_offset = 0;
+
+    mesh_bind_pose_palette_.assign(bones_per_instance, ozz::math::Float4x4::identity());
+    mesh_bone_matrices_.assign(static_cast<size_t>(bones_per_instance) * mesh_instances_.size(), ozz::math::Float4x4::identity());
+
+    if (skeleton.num_joints() == 0) {
+        Msg("! Skeleton has no joints; mesh skinning palette will remain identity");
+    } else {
+        ozz::vector<ozz::math::Float4x4> models(skeleton.num_joints());
+        ozz::animation::LocalToModelJob job;
+        job.skeleton = &skeleton;
+        job.input = skeleton.joint_rest_poses();
+        job.output = ozz::make_span(models);
+
+        if (!job.Run()) {
+            Msg("! Failed to compute skeleton bind pose for mesh palette");
+        } else {
+            for (uint32_t palette_index = 0; palette_index < bones_per_instance; ++palette_index) {
+                ozz::math::Float4x4 palette_matrix = ozz::math::Float4x4::identity();
+
+                if (palette_index < mesh.joint_remaps.size()) {
+                    const uint16_t joint = mesh.joint_remaps[palette_index];
+                    if (joint < models.size() && palette_index < mesh.inverse_bind_poses.size()) {
+                        palette_matrix = models[joint] * mesh.inverse_bind_poses[palette_index];
+                    }
+                }
+
+                mesh_bind_pose_palette_[palette_index] = palette_matrix;
+                if (palette_index < mesh_bone_matrices_.size()) {
+                    mesh_bone_matrices_[palette_index] = palette_matrix;
+                }
+            }
+        }
+    }
+
+    for (size_t i = 0; i < mesh_instances_.size(); ++i) {
+        mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(i * bones_per_instance);
+    }
+
+    mesh_loaded_ = true;
+    Msg("* Bundle mesh uploaded (%d vertices, %zu indices, bones=%u)",
+        mesh.vertex_count(), mesh.triangle_indices.size(), bones_per_instance);
+
+    return true;
+}
+
+bool VulkanRenderer::SetSkeletonDebugData(const ozz::animation::Skeleton& skeleton,
+    const XRay::Animation::ExtendedBoneMetadataCollection& metadata) {
+    if (!debug_renderer_initialized_) {
+        return false;
+    }
+
+    skeleton_data_ = &skeleton;
+
+    const int joint_count = skeleton.num_joints();
+    if (joint_count <= 0) {
+        skeleton_rest_models_.clear();
+        skeleton_parents_.clear();
+        bone_metadata_.clear();
+        skeleton_loaded_ = false;
+        return false;
+    }
+
+    ozz::vector<ozz::math::Float4x4> models;
+    models.resize(joint_count);
+
+    ozz::animation::LocalToModelJob job;
+    job.skeleton = &skeleton;
+    job.input = skeleton.joint_rest_poses();
+    job.output = ozz::make_span(models);
+    if (!job.Run()) {
+        Msg("! Failed to compute skeleton rest pose for debug visualization");
+        return false;
+    }
+
+    skeleton_rest_models_.assign(models.begin(), models.end());
+
+    const auto parents = skeleton.joint_parents();
+    skeleton_parents_.resize(parents.size());
+    for (size_t i = 0; i < parents.size(); ++i) {
+        skeleton_parents_[i] = static_cast<int>(parents[i]);
+    }
+
+    bone_metadata_ = metadata;
+    if (bone_metadata_.size() < skeleton_rest_models_.size()) {
+        bone_metadata_.resize(skeleton_rest_models_.size());
+    }
+
+    skeleton_loaded_ = true;
+    return true;
+}
+
 void VulkanRenderer::RenderSkinnedMeshes(VkCommandBuffer cmd) {
-    if (!mesh_renderer_initialized_ || !mesh_debug_loaded_) {
+    if (!mesh_renderer_initialized_ || !mesh_loaded_ || !show_skinned_mesh_) {
         return;
     }
 
     mesh_renderer_.Render(cmd, camera_.GetViewProjectionMatrix(), mesh_instances_, mesh_bone_matrices_);
 }
 
-void VulkanRenderer::UpdateMeshAnimation(float time_seconds) {
+void VulkanRenderer::UpdateMeshAnimation(float delta_time_seconds) {
     if (mesh_instances_.empty()) {
         return;
     }
 
-    const float rotation_speed = 0.75f;
-    const float angle = time_seconds * rotation_speed;
+    if (animate_mesh_) {
+        mesh_animation_time_ += delta_time_seconds;
+    }
+
+    const float rotation_speed = mesh_rotation_speed_;
+    const float angle = mesh_animation_time_ * rotation_speed;
 
     const ozz::math::Float4x4 rotation = ozz::math::Float4x4::FromAxisAngle(ozz::math::Float3::y_axis(), angle);
     const ozz::math::Float4x4 translation = ozz::math::Float4x4::Translation(ozz::math::Float3(0.0f, -0.5f, 0.0f));
     mesh_instances_[0].transform = translation * rotation;
 
-    if (!mesh_bone_matrices_.empty()) {
-        mesh_bone_matrices_[0] = ozz::math::Float4x4::identity();
+    if (!mesh_bind_pose_palette_.empty()) {
+        const size_t bones_per_instance = mesh_bind_pose_palette_.size();
+        for (size_t instance_index = 0; instance_index < mesh_instances_.size(); ++instance_index) {
+            const size_t offset = static_cast<size_t>(mesh_instances_[instance_index].bone_matrix_offset);
+            for (size_t bone = 0; bone < bones_per_instance; ++bone) {
+                const size_t dst_index = offset + bone;
+                if (dst_index < mesh_bone_matrices_.size()) {
+                    mesh_bone_matrices_[dst_index] = mesh_bind_pose_palette_[bone];
+                }
+            }
+        }
     }
 }
 
-void VulkanRenderer::RenderTriangle() {
+void VulkanRenderer::RenderScene() {
     if (!triangle_pipeline_initialized_) {
         return;
     }
@@ -351,23 +728,167 @@ void VulkanRenderer::RenderTriangle() {
     uint32_t image_index = device_.GetCurrentImageIndex();
     VkCommandBuffer cmd = command_buffers_[image_index];
 
-    // Bind triangle pipeline
-    triangle_pipeline_.Bind(cmd);
-
-    // Draw triangle (3 vertices, 1 instance, hardcoded in shader)
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    if (show_triangle_) {
+        triangle_pipeline_.Bind(cmd);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
 
     RenderSkinnedMeshes(cmd);
 
-    if (skeleton_renderer_initialized_) {
+    if (skeleton_renderer_initialized_ && show_skeleton_lines_) {
         skeleton_renderer_.Render(cmd, camera_.GetViewProjectionMatrix());
     }
+
+    RenderDebugPrimitives(cmd);
+}
+
+void VulkanRenderer::PopulateSkeletonDebugShapes() {
+    if (!debug_renderer_initialized_ || !show_debug_overlay_ || !skeleton_loaded_) {
+        return;
+    }
+
+    const size_t bone_count = skeleton_rest_models_.size();
+    if (bone_count == 0) {
+        return;
+    }
+
+    const ozz::math::Float4 bone_color{0.95f, 0.85f, 0.25f, 1.0f};
+    const ozz::math::Float4 root_color{0.55f, 0.75f, 1.0f, 1.0f};
+    const ozz::math::Float4 joint_color{0.92f, 0.35f, 0.35f, 1.0f};
+
+    auto compute_rest_length = [&](int bone_index) -> float {
+        float result = 0.0f;
+        if (bone_index < 0 || static_cast<size_t>(bone_index) >= bone_count) {
+            return result;
+        }
+
+        const int parent = (bone_index < static_cast<int>(skeleton_parents_.size())) ? skeleton_parents_[bone_index] : -1;
+        if (parent >= 0 && static_cast<size_t>(parent) < bone_count) {
+            result = DistanceBetween(skeleton_rest_models_[bone_index], skeleton_rest_models_[parent]);
+        }
+
+        if (result > kSkeletonDebugEpsilon) {
+            return result;
+        }
+
+        for (size_t child = 0; child < skeleton_parents_.size(); ++child) {
+            if (skeleton_parents_[child] == bone_index) {
+                result = std::max(result, DistanceBetween(skeleton_rest_models_[bone_index], skeleton_rest_models_[child]));
+            }
+        }
+
+        return result;
+    };
+
+    for (size_t bone = 0; bone < bone_count; ++bone) {
+        const ozz::math::Float4x4& transform = skeleton_rest_models_[bone];
+
+        XRay::Animation::ExtendedBoneMetadata metadata_entry;
+        if (bone < bone_metadata_.size()) {
+            metadata_entry = bone_metadata_[bone];
+        }
+
+        if (metadata_entry.rest_length <= kSkeletonDebugEpsilon) {
+            metadata_entry.rest_length = compute_rest_length(static_cast<int>(bone));
+        }
+
+        if (metadata_entry.rest_length <= kSkeletonDebugEpsilon) {
+            metadata_entry.rest_length = kSkeletonDefaultRadius;
+        }
+
+        const ozz::math::Float3 bone_position = ExtractTranslation(transform);
+        const float joint_radius = std::clamp(metadata_entry.rest_length * 0.18f,
+            kSkeletonDefaultRadius * 0.4f, metadata_entry.rest_length * 0.45f);
+
+        switch (metadata_entry.shape.type) {
+        case SBoneShape::stSphere:
+            metadata_entry.shape.sphere.R = std::max(metadata_entry.shape.sphere.R,
+                std::max(metadata_entry.rest_length * 0.25f, kSkeletonDefaultRadius));
+            break;
+        case SBoneShape::stCylinder:
+            metadata_entry.shape.cylinder.m_radius = std::max(metadata_entry.shape.cylinder.m_radius,
+                std::max(metadata_entry.rest_length * 0.15f, kSkeletonDefaultRadius * 0.8f));
+            metadata_entry.shape.cylinder.m_height = std::max(metadata_entry.shape.cylinder.m_height,
+                metadata_entry.rest_length);
+            break;
+        case SBoneShape::stBox:
+            metadata_entry.shape.box.m_halfsize.x = std::max(metadata_entry.shape.box.m_halfsize.x,
+                metadata_entry.rest_length * 0.35f);
+            metadata_entry.shape.box.m_halfsize.y = std::max(metadata_entry.shape.box.m_halfsize.y,
+                metadata_entry.rest_length * 0.15f);
+            metadata_entry.shape.box.m_halfsize.z = std::max(metadata_entry.shape.box.m_halfsize.z,
+                metadata_entry.rest_length * 0.15f);
+            break;
+        default:
+            break;
+        }
+
+        const ozz::math::Float4 draw_color = (bone == 0) ? root_color : bone_color;
+        debug_renderer_.DrawBoneShape(metadata_entry, transform, draw_color, 24);
+        debug_renderer_.DrawSphere(bone_position, joint_radius, joint_color, 24);
+        if (bone == 0) {
+            debug_renderer_.DrawAxes(transform, metadata_entry.rest_length * 0.2f,
+                ozz::math::Float4{1.0f, 0.3f, 0.3f, 1.0f},
+                ozz::math::Float4{0.3f, 1.0f, 0.3f, 1.0f},
+                ozz::math::Float4{0.3f, 0.6f, 1.0f, 1.0f});
+        }
+    }
+}
+
+void VulkanRenderer::RenderDebugPrimitives(VkCommandBuffer cmd) {
+    if (!debug_renderer_initialized_ || !show_debug_overlay_ || !skeleton_loaded_) {
+        return;
+    }
+
+    PopulateSkeletonDebugShapes();
+    debug_renderer_.EndFrame();
+    debug_renderer_.Render(cmd, camera_.GetViewProjectionMatrix());
 }
 
 void VulkanRenderer::SetClearColor(float r, float g, float b) {
     clear_color_[0] = r;
     clear_color_[1] = g;
     clear_color_[2] = b;
+}
+
+void VulkanRenderer::GetClearColor(float& r, float& g, float& b) const {
+    r = clear_color_[0];
+    g = clear_color_[1];
+    b = clear_color_[2];
+}
+
+void VulkanRenderer::SetShowTriangle(bool show) {
+    show_triangle_ = show;
+}
+
+void VulkanRenderer::SetShowSkeletonLines(bool show) {
+    show_skeleton_lines_ = show;
+}
+
+void VulkanRenderer::SetShowSkinnedMesh(bool show) {
+    show_skinned_mesh_ = show;
+}
+
+void VulkanRenderer::SetShowDebugOverlay(bool show) {
+    show_debug_overlay_ = show;
+}
+
+void VulkanRenderer::SetMeshRotationSpeed(float radians_per_second) {
+    mesh_rotation_speed_ = radians_per_second;
+    if (mesh_renderer_initialized_ && mesh_loaded_) {
+        UpdateMeshAnimation(0.0f);
+    }
+}
+
+void VulkanRenderer::SetAnimateMesh(bool enabled) {
+    animate_mesh_ = enabled;
+}
+
+void VulkanRenderer::SetMeshAnimationTime(float time_seconds) {
+    mesh_animation_time_ = std::max(0.0f, time_seconds);
+    if (mesh_renderer_initialized_ && mesh_loaded_) {
+        UpdateMeshAnimation(0.0f);
+    }
 }
 
 } // namespace renderer

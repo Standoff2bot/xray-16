@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Common/Common.hpp"
+#include "xrCore/xrCore.h"
 
 #include "VulkanBuffer.h"
 #include "VulkanPipeline.h"
@@ -10,6 +11,17 @@
 #include "ozz/base/maths/vec_float.h"
 #include "ozz/base/maths/simd_math.h"
 #include "xrCommon/xr_vector.h"
+#include "xrCore/_vector3d.h"
+
+struct Fobb;
+struct Fcylinder;
+struct Fsphere;
+
+namespace XRay {
+namespace Animation {
+struct ExtendedBoneMetadata;
+} // namespace Animation
+} // namespace XRay
 
 namespace xray {
 namespace animation {
@@ -32,6 +44,9 @@ public:
         const ozz::math::Float4& color_y, const ozz::math::Float4& color_z);
     void DrawPoint(const ozz::math::Float3& position, float radius, const ozz::math::Float4& color, int segments = 8);
     void DrawSphere(const ozz::math::Float3& center, float radius, const ozz::math::Float4& color, int segments = 12);
+    void DrawBoneShape(const XRay::Animation::ExtendedBoneMetadata& metadata,
+        const ozz::math::Float4x4& local_to_world, const ozz::math::Float4& color,
+        int segments = 12);
     void EndFrame();
     void Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_proj);
 
@@ -47,6 +62,11 @@ private:
     bool CreateDescriptorSetLayout();
     bool CreateDescriptorPool();
     bool CreateUniformBuffer();
+    void DrawOrientedBox(const ozz::math::Float4x4& transform, const Fobb& obb, const ozz::math::Float4& color);
+    void DrawCapsuleShape(const ozz::math::Float4x4& transform, const Fcylinder& cylinder,
+        const ozz::math::Float4& color, int segments);
+    void DrawSphereShape(const ozz::math::Float4x4& transform, const Fsphere& sphere,
+        const ozz::math::Float4& color, int segments);
     void UpdateUniforms(const ozz::math::Float4x4& view_proj);
     void UpdateDescriptorSet();
 
