@@ -2,6 +2,11 @@
 #include "script_lua_helper.hpp"
 #include "script_debugger.hpp"
 
+// Lua 5.1 compatibility: LUA_OK doesn't exist in Lua 5.1, it was added in 5.2
+#ifndef LUA_OK
+#define LUA_OK 0
+#endif
+
 CDbgLuaHelper* CDbgLuaHelper::m_pThis = nullptr;
 lua_State* CDbgLuaHelper::L = nullptr;
 

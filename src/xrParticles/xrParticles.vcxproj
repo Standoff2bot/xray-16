@@ -27,11 +27,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="ecs\Components.h" />
+    <ClInclude Include="ecs\ECSParticleEffect.h" />
     <ClInclude Include="ecs\Systems\IParticleSystem.h" />
+    <ClInclude Include="ecs\Systems\MovementSystem.h" />
+    <ClInclude Include="ecs\Systems\LifetimeSystem.h" />
+    <ClInclude Include="ecs\Systems\DeathSystem.h" />
     <ClInclude Include="noise.h" />
     <ClInclude Include="particle_actions.h" />
     <ClInclude Include="particle_actions_collection.h" />
-    <ClInclude Include="particle_console.h" />
     <ClInclude Include="particle_core.h" />
     <ClInclude Include="particle_effect.h" />
     <ClInclude Include="particle_manager.h" />
@@ -39,11 +42,14 @@
     <ClInclude Include="stdafx.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="ecs\ECSParticleEffect.cpp" />
+    <ClCompile Include="ecs\Systems\MovementSystem.cpp" />
+    <ClCompile Include="ecs\Systems\LifetimeSystem.cpp" />
+    <ClCompile Include="ecs\Systems\DeathSystem.cpp" />
     <ClCompile Include="noise.cpp" />
     <ClCompile Include="particle_actions.cpp" />
     <ClCompile Include="particle_actions_collection.cpp" />
     <ClCompile Include="particle_actions_collection_io.cpp" />
-    <ClCompile Include="particle_console.cpp" />
     <ClCompile Include="particle_core.cpp" />
     <ClCompile Include="particle_effect.cpp" />
     <ClCompile Include="particle_manager.cpp" />

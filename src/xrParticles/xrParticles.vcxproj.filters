@@ -39,13 +39,22 @@
     <ClInclude Include="particle_manager.h">
       <Filter>PAPI</Filter>
     </ClInclude>
-    <ClInclude Include="particle_console.h">
-      <Filter>PAPI</Filter>
-    </ClInclude>
     <ClInclude Include="ecs\Components.h">
       <Filter>ECS</Filter>
     </ClInclude>
+    <ClInclude Include="ecs\ECSParticleEffect.h">
+      <Filter>ECS</Filter>
+    </ClInclude>
     <ClInclude Include="ecs\Systems\IParticleSystem.h">
+      <Filter>ECS\Systems</Filter>
+    </ClInclude>
+    <ClInclude Include="ecs\Systems\MovementSystem.h">
+      <Filter>ECS\Systems</Filter>
+    </ClInclude>
+    <ClInclude Include="ecs\Systems\LifetimeSystem.h">
+      <Filter>ECS\Systems</Filter>
+    </ClInclude>
+    <ClInclude Include="ecs\Systems\DeathSystem.h">
       <Filter>ECS\Systems</Filter>
     </ClInclude>
   </ItemGroup>
@@ -74,8 +83,17 @@
     <ClCompile Include="particle_manager.cpp">
       <Filter>PAPI</Filter>
     </ClCompile>
-    <ClCompile Include="particle_console.cpp">
-      <Filter>PAPI</Filter>
+    <ClCompile Include="ecs\ECSParticleEffect.cpp">
+      <Filter>ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="ecs\Systems\MovementSystem.cpp">
+      <Filter>ECS\Systems</Filter>
+    </ClCompile>
+    <ClCompile Include="ecs\Systems\LifetimeSystem.cpp">
+      <Filter>ECS\Systems</Filter>
+    </ClCompile>
+    <ClCompile Include="ecs\Systems\DeathSystem.cpp">
+      <Filter>ECS\Systems</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

@@ -27,10 +27,10 @@ struct VelocityComponent
 struct VisualComponent
 {
     PAPI::pVector size;     // Particle size (can be per-axis for non-uniform)
-    Rotation rot;           // Current rotation
+    PAPI::Rotation rot;     // Current rotation
     u32 color;              // ARGB color
     u16 frame;              // Current animation frame
-    Flags16 flags;          // Visual flags (ANIMATE_CCW, etc.)
+    ::Flags16 flags;        // Visual flags (ANIMATE_CCW, etc.)
 };
 
 // Lifetime and age tracking
@@ -234,10 +234,11 @@ struct ActiveParticle {};
 
 // Domain storage for actions that need spatial queries
 // This will be stored per-action, not per-particle
-struct ActionDomain
-{
-    PAPI::pDomain domain;
-};
+// Forward declare pDomain from particle_core.h
+// struct ActionDomain
+// {
+//     PAPI::pDomain domain;
+// };
 
 // Rendering batch data - for grouping particles by effect for rendering
 struct RenderBatchComponent

@@ -3,7 +3,6 @@
 #include "particle_manager.h"
 #include "particle_effect.h"
 #include "particle_actions_collection.h"
-#include "particle_console.h"
 
 using namespace PAPI;
 
@@ -13,13 +12,8 @@ PARTICLES_API IParticleManager* PAPI::ParticleManager() { return &PM; }
 //
 CParticleManager::CParticleManager()
 {
-    // Initialize console commands on first manager creation
-    static bool console_initialized = false;
-    if (!console_initialized)
-    {
-        xrParticles_initconsole();
-        console_initialized = true;
-    }
+    // Console integration should be done in xrEngine
+    // TODO: Add ps_particle_implementation console variable in xrEngine
 }
 
 CParticleManager::~CParticleManager() {}

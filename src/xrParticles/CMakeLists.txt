@@ -20,8 +20,6 @@ target_sources_grouped(
     "particle_actions_collection.cpp"
     "particle_actions_collection.h"
     "particle_actions_collection_io.cpp"
-    "particle_console.cpp"
-    "particle_console.h"
     "particle_core.cpp"
     "particle_core.h"
     "particle_effect.cpp"
@@ -35,6 +33,8 @@ target_sources_grouped(
     NAME "ECS"
     FILES
     "ecs/Components.h"
+    "ecs/ECSParticleEffect.cpp"
+    "ecs/ECSParticleEffect.h"
 )
 
 target_sources_grouped(
@@ -42,6 +42,12 @@ target_sources_grouped(
     NAME "ECS\\Systems"
     FILES
     "ecs/Systems/IParticleSystem.h"
+    "ecs/Systems/MovementSystem.cpp"
+    "ecs/Systems/MovementSystem.h"
+    "ecs/Systems/LifetimeSystem.cpp"
+    "ecs/Systems/LifetimeSystem.h"
+    "ecs/Systems/DeathSystem.cpp"
+    "ecs/Systems/DeathSystem.h"
 )
 
 target_include_directories(xrParticles
