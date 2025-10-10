@@ -2,6 +2,7 @@
 
 #include "AnimationECS_Components.h"
 #include "AnimationECS_Systems.h"
+#include "AnimationECS_IK.h"
 #include "AnimationECS_Performance.h"
 #include "entt/entt.hpp"
 #include "xrCore/Threading/ParallelForEach.hpp"
@@ -18,6 +19,8 @@ public:
     // Process all animation systems in parallel
     static void UpdateParallel(entt::registry& registry, float dt)
     {
+        Msg("[ParallelAnimationProcessor::UpdateParallel] Called with dt=%.4f", dt);
+
         auto& profiler = GetPerformanceProfiler();
         PerformanceTimer total_timer;
 
@@ -180,7 +183,21 @@ public:
             profiler.GetStats().local_to_model_time += ltm_timer.ElapsedMs();
         }
 
-        // Phase 4: Callbacks (MUST run on main thread sequentially)
+        // Phase 4: IK Solving (after LocalToModel, before callbacks)
+        // IK works in model space, so must run after local-to-model conversion
+        // Can potentially be parallelized per-entity, but sequential for now
+        PerformanceTimer ik_timer;
+
+        Msg("[ParallelAnimationProcessor::UpdateParallel] Calling IKSolverSystem::Update");
+        IKSolverSystem::Update(registry);
+        Msg("[ParallelAnimationProcessor::UpdateParallel] IKSolverSystem::Update completed");
+
+        if (profiler.IsEnabled())
+        {
+            profiler.GetStats().local_to_model_time += ik_timer.ElapsedMs(); // IK time added to LTM for now
+        }
+
+        // Phase 5: Callbacks (MUST run on main thread sequentially)
         // This is intentionally NOT parallelized due to potential side effects
         PerformanceTimer callback_timer;
 

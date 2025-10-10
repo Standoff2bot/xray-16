@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AnimationECS_Components.h"
+#include "AnimationECS_IK.h"
 #include "entt/entt.hpp"
 #include "ozz/animation/runtime/sampling_job.h"
 #include "ozz/animation/runtime/blending_job.h"
@@ -190,7 +191,10 @@ public:
         // Phase 3: Convert to model space (parallel-friendly)
         LocalToModelSystem::Update(registry);
 
-        // Phase 4: Process callbacks (main thread only)
+        // Phase 4: Apply IK (requires model space, parallel-friendly)
+        IKSolverSystem::Update(registry);
+
+        // Phase 5: Process callbacks (main thread only)
         AnimationCallbackSystem::Update(registry);
     }
 };

@@ -12,6 +12,7 @@
 #include "xrEngine/device.h"
 
 #include "ozz/animation/runtime/skeleton_utils.h"
+#include "ozz/animation/runtime/local_to_model_job.h"
 #include "ozz/base/io/archive.h"
 #include "ozz/base/io/stream.h"
 
@@ -401,6 +402,42 @@ void OzzKinematicsAnimated::OnSkeletonLoaded()
         if (controller)
         {
             controller->SetSkeleton(&core.Skeleton(), shared_str("ozz_skeleton"));
+        }
+
+        // Initialize IK configuration
+        // Compute bind pose models from rest pose
+        const int num_joints = core.Skeleton().num_joints();
+        const int num_soa_joints = core.Skeleton().num_soa_joints();
+
+        ozz::vector<ozz::math::SoaTransform> bind_locals;
+        bind_locals.resize(num_soa_joints);
+        for (int i = 0; i < num_soa_joints; ++i)
+        {
+            bind_locals[i] = core.Skeleton().joint_rest_poses()[i];
+        }
+
+        ozz::vector<ozz::math::Float4x4> bind_models;
+        bind_models.resize(num_joints);
+
+        ozz::animation::LocalToModelJob ltm_job;
+        ltm_job.skeleton = &core.Skeleton();
+        ltm_job.input = ozz::make_span(bind_locals);
+        ltm_job.output = ozz::make_span(bind_models);
+        if (ltm_job.Run())
+        {
+            // Auto-detect IK chains (legs/arms) based on bone names
+            AnimationECS::IKInitializationSystem::Initialize(
+                registry.GetRegistry(),
+                m_ecs_entity,
+                core.Skeleton().joint_names(),
+                ozz::make_span(bind_models)
+            );
+
+            Msg("[OzzKinematicsAnimated] ECS components initialized for skeleton with IK");
+        }
+        else
+        {
+            Msg("! [OzzKinematicsAnimated] Failed to compute bind pose models for IK initialization");
         }
     }
 }

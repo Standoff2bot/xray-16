@@ -49,6 +49,7 @@ set(SOURCES
     AnimationECS_IK.h
     AnimationECS_IK.cpp
     ../../Externals/ozz-animation/samples/framework/mesh.cc
+    ../../Externals/ozz-animation/samples/framework/utils.cc
 )
 
 # Create static library
@@ -56,6 +57,7 @@ add_library(xrAnimation STATIC ${SOURCES})
 
 set_source_files_properties(
     ../../Externals/ozz-animation/samples/framework/mesh.cc
+    ../../Externals/ozz-animation/samples/framework/utils.cc
     PROPERTIES
         SKIP_PRECOMPILE_HEADERS ON
 )

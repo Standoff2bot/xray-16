@@ -318,6 +318,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="AnimationECS_Components.h" />
+    <ClInclude Include="AnimationECS_IK.h" />
     <ClInclude Include="AnimationECS_Registry.h" />
     <ClInclude Include="AnimationECS_Systems.h" />
     <ClInclude Include="AnimationECS_ParallelSystems.h" />
@@ -334,6 +335,7 @@
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="xrAnimation.h" />
   </ItemGroup>  <ItemGroup>
+    <ClCompile Include="AnimationECS_IK.cpp" />
     <ClCompile Include="LegacyOgfConverter.cpp" />
     <ClCompile Include="LegacyOmfConverter.cpp" />
     <ClCompile Include="OzzBundle.cpp" />
@@ -343,6 +345,9 @@
     <ClCompile Include="OzzSharedMotions.cpp" />
     <ClCompile Include="StartupConversionInventory.cpp" />
     <ClCompile Include="..\..\Externals\ozz-animation\samples\framework\mesh.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\..\Externals\ozz-animation\samples\framework\utils.cc">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="stdafx.cpp">

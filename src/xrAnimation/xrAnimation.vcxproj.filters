@@ -60,6 +60,9 @@
     <ClInclude Include="AnimationECS_Components.h">
       <Filter>Animation System</Filter>
     </ClInclude>
+    <ClInclude Include="AnimationECS_IK.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
     <ClInclude Include="AnimationECS_Registry.h">
       <Filter>Animation System</Filter>
     </ClInclude>
@@ -109,6 +112,12 @@
     </ClCompile>
     <ClCompile Include="..\..\Externals\ozz-animation\samples\framework\mesh.cc">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Externals\ozz-animation\samples\framework\utils.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AnimationECS_IK.cpp">
+      <Filter>Animation System</Filter>
     </ClCompile>
     <ClCompile Include="OzzKinematics.cpp">
       <Filter>Animation System</Filter>

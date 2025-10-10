@@ -133,10 +133,17 @@ public:
     void Update(float dt)
     {
         if (!m_initialized)
+        {
+            Msg("[AnimationRegistry::Update] Not initialized - skipping");
             return;
+        }
+
+        Msg("[AnimationRegistry::Update] Called with dt=%.4f", dt);
 
         // Run all animation systems with automatic parallel/sequential selection
         ParallelAnimationOrchestrator::Update(m_registry, dt);
+
+        Msg("[AnimationRegistry::Update] Completed");
     }
 
     //-------------------------------------------------------------------------

@@ -8,6 +8,10 @@
 #include <algorithm>
 #include <cstring>
 
+// NOTE: Debug visualization removed from this low-level library to avoid dependencies on xrGame.
+// Debug drawing should be implemented at the application level (e.g., in xrGame or viewer tools)
+// where DBG_Draw functions are available. See IK_CURRENT_LIMITATIONS.md for details.
+
 namespace AnimationECS {
 
 //=============================================================================
@@ -149,11 +153,12 @@ void IKInitializationSystem::Initialize(
     ik_config.leg_ik_available = ik_config.left_leg.Valid() || ik_config.right_leg.Valid();
     ik_config.arm_ik_available = ik_config.left_arm.Valid() || ik_config.right_arm.Valid();
 
-    // Enable chains by default if valid
-    ik_config.left_leg.enabled = ik_config.left_leg.Valid();
-    ik_config.right_leg.enabled = ik_config.right_leg.Valid();
-    ik_config.left_arm.enabled = ik_config.left_arm.Valid();
-    ik_config.right_arm.enabled = ik_config.right_arm.Valid();
+    // Disable chains by default - application must explicitly enable them
+    // Enabling by default causes numerical instability when solving to trivial targets
+    ik_config.left_leg.enabled = false;
+    ik_config.right_leg.enabled = false;
+    ik_config.left_arm.enabled = false;
+    ik_config.right_arm.enabled = false;
 
     // Set default parameters
     ik_config.leg_params.weight = 1.0f;
@@ -209,6 +214,10 @@ bool IKSolverSystem::SolveLimbIK(
         chain.debug_target_valid = false;
         return false;
     }
+
+    // Store debug info for external visualization
+    chain.debug_target = target_model;
+    chain.debug_target_valid = true;
 
     const ozz::math::SimdFloat4 target_ms = ozz::math::simd_float4::Load3PtrU(&target_model.x);
 
@@ -299,8 +308,33 @@ void IKSolverSystem::ApplyDraggedTarget(
 
 void IKSolverSystem::Update(entt::registry& registry)
 {
+    Msg("[IKSolverSystem::Update] Called");
+
+    // NOTE: Currently this IK system does NOT calculate ground collision targets like the legacy IKLimb system!
+    // The legacy system (see xrGame/ik/IKLimb.cpp):
+    //   - Uses m_foot.Collide() to raycast for ground surfaces
+    //   - Calculates proper foot placement on terrain/geometry
+    //   - Blends between animation and IK based on foot contact state
+    //
+    // This new system currently just uses animated positions + user offsets as targets.
+    // To get visible foot IK like the legacy system, we need to:
+    //   1. Implement ground collision detection (raycasting)
+    //   2. Calculate proper foot placement matrices
+    //   3. Handle blending and state transitions
+    //
+    // For now, this serves as a foundation and can be extended with proper target calculation.
+
     // Process all entities with IK configuration
     auto view = registry.view<IKConfiguration, AnimationBuffers>();
+
+    const size_t entity_count = view.size_hint();
+    Msg("[IKSolverSystem::Update] Found %zu entities with IKConfiguration + AnimationBuffers", entity_count);
+
+    if (entity_count == 0)
+    {
+        Msg("[IKSolverSystem::Update] No entities to process - returning early");
+        return;
+    }
 
     for (auto entity : view)
     {
@@ -376,8 +410,28 @@ void IKSolverSystem::Update(entt::registry& registry)
             solve_arm(ik_config.right_arm);
         }
 
-        // TODO: Rebuild model transforms for affected joints
-        // LocalToModelSystem should be re-run from min_dirty_joint onwards
+        // Rebuild model transforms after IK modified locals
+        // IK solver modifies local-space transforms, so we must rebuild model-space matrices
+        // from the affected joints onwards
+        if (min_dirty_joint < static_cast<int>(buffers.models.size()))
+        {
+            // Get controller for skeleton access
+            auto* controller = registry.try_get<AnimationController>(entity);
+            if (controller && controller->skeleton && buffers.IsInitialized())
+            {
+                // Rebuild local-to-model from the first affected joint onwards
+                ozz::animation::LocalToModelJob ltm_job;
+                ltm_job.skeleton = controller->skeleton;
+                ltm_job.from = min_dirty_joint;  // Start from first IK-modified joint
+                ltm_job.input = ozz::make_span(buffers.locals);
+                ltm_job.output = ozz::make_span(buffers.models);
+
+                if (!ltm_job.Run())
+                {
+                    Msg("! [IKSolverSystem] Failed to rebuild model transforms after IK for entity %u", static_cast<u32>(entity));
+                }
+            }
+        }
     }
 }
 

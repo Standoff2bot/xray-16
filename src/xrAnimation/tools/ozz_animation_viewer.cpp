@@ -83,6 +83,8 @@
 
 #include "../OzzBundle.h"
 #include "../AnimationECS_IK.h"
+#include "../AnimationECS_Registry.h"
+#include "../AnimationECS_Components.h"
 #include "entt/entt.hpp"
 
 // Skeleton archive can be specified as an option.
@@ -854,6 +856,8 @@ protected:
         float crouch_spine_pitch_deg = 15.f;
         bool crouch_affects_arms = true;
         std::vector<uint8_t> mesh_visibility;
+        int instance_count = 1;          // Number of model instances to render
+        float instance_grid_spacing = 2.0f;  // Space between instances in grid
     };
 
     bool HasAnimationSelected() const
@@ -1274,70 +1278,129 @@ protected:
             mouse_left_was_down_ = mouse_down;
         }
 
-        if (HasAnimationSelected() && animations_[ui_state_.current_animation].duration() > 0.0f)
+        // Check if instance count changed - reinitialize if needed
+        if (ui_state_.instance_count != current_instance_count_)
         {
-            controller_.Update(animations_[ui_state_.current_animation], _dt);
+            InitializeECSInstances();
+        }
 
-            ozz::animation::SamplingJob sampling_job;
-            sampling_job.animation = &animations_[ui_state_.current_animation];
-            sampling_job.context = &context_;
-            sampling_job.ratio = controller_.time_ratio();
-            sampling_job.output = make_span(locals_);
-            if (!sampling_job.Run())
+        // Use ECS animation path for multiple instances
+        if (ui_state_.instance_count > 1 && ecs_animation_registry_)
+        {
+            // Update all ECS entities' animation state
+            for (size_t i = 0; i < instance_entities_.size(); ++i)
             {
-                return false;
+                auto entity = instance_entities_[i];
+                auto* state = ecs_animation_registry_->GetComponent<AnimationECS::AnimationState>(entity);
+                auto* controller = ecs_animation_registry_->GetComponent<AnimationECS::AnimationController>(entity);
+
+                if (state && controller)
+                {
+                    // Sync playback state from main controller
+                    state->is_playing = HasAnimationSelected() && controller_.playback_speed() != 0.0f;
+
+                    // Update animation if it changed
+                    if (HasAnimationSelected())
+                    {
+                        controller->animation = &animations_[ui_state_.current_animation];
+                        controller->playback_speed = controller_.playback_speed();
+                    }
+                }
             }
+
+            // Run ECS animation systems for all instances (uses ParallelAnimationOrchestrator)
+            ecs_animation_registry_->Update(_dt);
+
+            // Copy first instance's results to legacy locals_/models_ for single-view display
+            if (!instance_entities_.empty())
+            {
+                auto* buffers = ecs_animation_registry_->GetComponent<AnimationECS::AnimationBuffers>(instance_entities_[0]);
+                if (buffers && buffers->IsInitialized())
+                {
+                    // Copy locals and models from first instance
+                    const size_t num_soa = std::min(locals_.size(), buffers->locals.size());
+                    for (size_t i = 0; i < num_soa; ++i)
+                    {
+                        locals_[i] = buffers->locals[i];
+                    }
+                    const size_t num_joints = std::min(models_.size(), buffers->models.size());
+                    for (size_t i = 0; i < num_joints; ++i)
+                    {
+                        models_[i] = buffers->models[i];
+                    }
+                }
+            }
+
+            // Skip legacy procedural effects when using ECS
         }
         else
         {
-            for (int i = 0; i < skeleton_.num_soa_joints(); ++i)
+            // Legacy single-instance path
+            if (HasAnimationSelected() && animations_[ui_state_.current_animation].duration() > 0.0f)
             {
-                locals_[i] = skeleton_.joint_rest_poses()[i];
+                controller_.Update(animations_[ui_state_.current_animation], _dt);
+
+                ozz::animation::SamplingJob sampling_job;
+                sampling_job.animation = &animations_[ui_state_.current_animation];
+                sampling_job.context = &context_;
+                sampling_job.ratio = controller_.time_ratio();
+                sampling_job.output = make_span(locals_);
+                if (!sampling_job.Run())
+                {
+                    return false;
+                }
             }
-        }
-
-        ApplyProceduralCrouch();
-
-        const bool ragdoll_enabled = ui_state_.ragdoll_enabled;
-        if (ragdoll_enabled)
-        {
-            EnsureRagdollState();
-
-            if (ragdoll_reset_requested_ || !ragdoll_was_enabled_)
+            else
             {
-                ResetRagdollStateFromLocals();
-                ragdoll_reset_requested_ = false;
+                for (int i = 0; i < skeleton_.num_soa_joints(); ++i)
+                {
+                    locals_[i] = skeleton_.joint_rest_poses()[i];
+                }
             }
 
-            ragdoll_target_locals_ = locals_;
-            UpdateActiveRagdoll(std::max(_dt, 0.f));
-        }
-        else if (ragdoll_was_enabled_)
-        {
-            ragdoll_was_enabled_ = false;
-            ragdoll_target_locals_.clear();
-            for (RagdollJointState& state : ragdoll_state_)
+            ApplyProceduralCrouch();
+
+            const bool ragdoll_enabled = ui_state_.ragdoll_enabled;
+            if (ragdoll_enabled)
             {
-                state.initialized = false;
-                state.velocity = { 0.f, 0.f, 0.f };
+                EnsureRagdollState();
+
+                if (ragdoll_reset_requested_ || !ragdoll_was_enabled_)
+                {
+                    ResetRagdollStateFromLocals();
+                    ragdoll_reset_requested_ = false;
+                }
+
+                ragdoll_target_locals_ = locals_;
+                UpdateActiveRagdoll(std::max(_dt, 0.f));
             }
-        }
+            else if (ragdoll_was_enabled_)
+            {
+                ragdoll_was_enabled_ = false;
+                ragdoll_target_locals_.clear();
+                for (RagdollJointState& state : ragdoll_state_)
+                {
+                    state.initialized = false;
+                    state.velocity = { 0.f, 0.f, 0.f };
+                }
+            }
 
-        ozz::animation::LocalToModelJob ltm_job;
-        ltm_job.skeleton = &skeleton_;
-        ltm_job.input = make_span(locals_);
-        ltm_job.output = make_span(models_);
-        if (!ltm_job.Run())
-        {
-            return false;
-        }
+            ozz::animation::LocalToModelJob ltm_job;
+            ltm_job.skeleton = &skeleton_;
+            ltm_job.input = make_span(locals_);
+            ltm_job.output = make_span(models_);
+            if (!ltm_job.Run())
+            {
+                return false;
+            }
 
-        if (!ApplyLimbIKAfterLocal())
-        {
-            return false;
-        }
+            if (!ApplyLimbIKAfterLocal())
+            {
+                return false;
+            }
+            ragdoll_was_enabled_ = ragdoll_enabled;
+        }  // End of legacy path
 
-        ragdoll_was_enabled_ = ragdoll_enabled;
         return true;
     }
 
@@ -1366,8 +1429,61 @@ protected:
 
         imgui_frame_ready_ = false;
 
-        if (ui_state_.draw_skeleton)
+        // Draw all instances in a grid
+        if (ui_state_.instance_count > 1 && ecs_animation_registry_)
         {
+            // Calculate grid dimensions (square grid)
+            const int grid_size = static_cast<int>(std::ceil(std::sqrt(ui_state_.instance_count)));
+            const float spacing = ui_state_.instance_grid_spacing;
+
+            for (int i = 0; i < ui_state_.instance_count && i < static_cast<int>(instance_entities_.size()); ++i)
+            {
+                // Calculate grid position
+                const int grid_x = i % grid_size;
+                const int grid_z = i / grid_size;
+                const float world_x = (grid_x - grid_size / 2.0f) * spacing;
+                const float world_z = (grid_z - grid_size / 2.0f) * spacing;
+
+                // Create instance transform
+                ozz::math::Float4x4 instance_transform = ozz::math::Float4x4::Translation(
+                    ozz::math::simd_float4::Load(world_x, 0.f, world_z, 1.f)
+                );
+
+                // Get buffers for this instance
+                auto* buffers = ecs_animation_registry_->GetComponent<AnimationECS::AnimationBuffers>(instance_entities_[i]);
+                if (buffers && buffers->IsInitialized())
+                {
+                    if (ui_state_.draw_skeleton)
+                    {
+                        success &= _renderer->DrawPosture(skeleton_, ozz::make_span(buffers->models), instance_transform);
+                    }
+
+                    // Draw mesh for this instance (if available)
+                    if (ui_state_.draw_mesh && !meshes_.empty())
+                    {
+                        for (size_t mesh_index = 0; mesh_index < meshes_.size(); ++mesh_index)
+                        {
+                            const bool visibility_missing = ui_state_.mesh_visibility.size() != meshes_.size();
+                            if (!visibility_missing && ui_state_.mesh_visibility[mesh_index] == 0)
+                                continue;
+
+                            // Compute skinning matrices for this instance
+                            ozz::vector<ozz::math::Float4x4> instance_skinning;
+                            instance_skinning.resize(skinning_matrices_.size());
+                            for (size_t j = 0; j < meshes_[mesh_index].joint_remaps.size() && j < instance_skinning.size(); ++j)
+                            {
+                                instance_skinning[j] = buffers->models[meshes_[mesh_index].joint_remaps[j]] * meshes_[mesh_index].inverse_bind_poses[j];
+                            }
+
+                            success &= _renderer->DrawSkinnedMesh(meshes_[mesh_index], ozz::make_span(instance_skinning), instance_transform, ui_state_.renderer_options);
+                        }
+                    }
+                }
+            }
+        }
+        else if (ui_state_.draw_skeleton)
+        {
+            // Single instance - use legacy rendering
             success &= _renderer->DrawPosture(skeleton_, make_span(models_), transform);
         }
 
@@ -1935,6 +2051,14 @@ protected:
 
     virtual bool OnInitialize()
     {
+        // Initialize TaskScheduler for parallel animation processing
+        if (!TaskScheduler)
+        {
+            TaskScheduler = xr_make_unique<TaskManager>();
+            TaskScheduler->SpawnThreads();
+            Msg("[ozz_animation_viewer] TaskScheduler initialized with %zu workers", TaskScheduler->GetWorkersCount());
+        }
+
         SetUseSampleGui(false);
 
         if (!imgui_layer_)
@@ -2213,6 +2337,7 @@ protected:
         }
 
         InitializeLimbIkChains();
+        InitializeECSInstances();  // Initialize multi-instance ECS system
 
         ui_state_.bone_display_limit = std::min(num_joints, 16);
 
@@ -2260,6 +2385,13 @@ protected:
             imgui_layer_.reset();
         }
         ReleaseMeshTextures();
+
+        // Shutdown TaskScheduler
+        if (TaskScheduler)
+        {
+            Msg("[ozz_animation_viewer] Shutting down TaskScheduler");
+            TaskScheduler = nullptr;
+        }
     }
 
     virtual bool OnGui(ozz::sample::ImGui*)
@@ -2469,6 +2601,13 @@ private:
     // IK and dynamic control state - now using ECS
     entt::registry ik_registry_;           // Local ECS registry for IK
     entt::entity ik_entity_{entt::null};   // Entity holding IK configuration
+
+    // Multi-instance ECS system
+    AnimationECS::AnimationRegistry* ecs_animation_registry_ = nullptr;
+    std::vector<entt::entity> instance_entities_;  // ECS entities for each instance
+    std::vector<ozz::vector<ozz::math::SoaTransform>> instance_locals_;  // Per-instance local transforms
+    std::vector<ozz::vector<ozz::math::Float4x4>> instance_models_;      // Per-instance model transforms
+    int current_instance_count_ = 0;  // Track when we need to recreate entities
 
     // Helper accessors for IK chains (backward compatibility)
     IKConfiguration* GetIKConfig()
@@ -3088,6 +3227,27 @@ private:
                     }
                 }
             }
+        }
+
+        ImGui::Separator();
+        ImGui::SeparatorText("Multi-Instance Rendering (ECS Test)");
+
+        int prev_instance_count = ui_state_.instance_count;
+        ui_state_.instance_count = std::clamp(ui_state_.instance_count, 1, 100);
+        if (ImGui::SliderInt("Instance count", &ui_state_.instance_count, 1, 100))
+        {
+            if (ui_state_.instance_count != prev_instance_count)
+            {
+                // Instance count changed - will need to recreate ECS entities
+                Msg("[ozz_animation_viewer] Instance count changed: %d -> %d", prev_instance_count, ui_state_.instance_count);
+            }
+        }
+        ImGui::SliderFloat("Grid spacing", &ui_state_.instance_grid_spacing, 0.5f, 10.0f);
+
+        ImGui::Text("Total animated entities: %d", ui_state_.instance_count);
+        if (ui_state_.instance_count > 1)
+        {
+            ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "Using ECS animation system");
         }
 
         ImGui::End();
@@ -3870,6 +4030,89 @@ private:
 
         ik_handle_dragging_ = false;
         active_ik_handle_ = IkHandleId::None;
+    }
+
+    void InitializeECSInstances()
+    {
+        // Get or create the global ECS animation registry
+        if (!ecs_animation_registry_)
+        {
+            ecs_animation_registry_ = &AnimationECS::GetAnimationRegistry();
+            ecs_animation_registry_->Initialize();
+        }
+
+        // Clear existing entities
+        for (auto entity : instance_entities_)
+        {
+            if (ecs_animation_registry_->IsValidEntity(entity))
+            {
+                ecs_animation_registry_->DestroyAnimatedEntity(entity);
+            }
+        }
+        instance_entities_.clear();
+        instance_locals_.clear();
+        instance_models_.clear();
+
+        // Log registry state before creating new entities
+        auto& registry = ecs_animation_registry_->GetRegistry();
+        auto view = registry.view<AnimationECS::IKConfiguration, AnimationECS::AnimationBuffers>();
+
+        // Create new entities for each instance
+        const int num_soa_joints = skeleton_.num_soa_joints();
+        const int num_joints = skeleton_.num_joints();
+
+        for (int i = 0; i < ui_state_.instance_count; ++i)
+        {
+            // Create ECS entity
+            entt::entity entity = ecs_animation_registry_->CreateAnimatedEntity();
+            instance_entities_.push_back(entity);
+
+            // Initialize AnimationBuffers
+            auto* buffers = ecs_animation_registry_->GetComponent<AnimationECS::AnimationBuffers>(entity);
+            if (buffers)
+            {
+                buffers->Initialize(&skeleton_);
+
+                // CRITICAL: Initialize locals with rest pose to ensure valid normalized quaternions
+                // Without this, LocalToModelJob will fail with "quaternion not normalized" assertion
+                const int num_soa = skeleton_.num_soa_joints();
+                for (int j = 0; j < num_soa; ++j)
+                {
+                    buffers->locals[j] = skeleton_.joint_rest_poses()[j];
+                }
+            }
+
+            // Set up AnimationController
+            auto* controller = ecs_animation_registry_->GetComponent<AnimationECS::AnimationController>(entity);
+            if (controller)
+            {
+                controller->skeleton = &skeleton_;
+                if (!animations_.empty() && ui_state_.current_animation >= 0 && ui_state_.current_animation < static_cast<int>(animations_.size()))
+                {
+                    controller->animation = &animations_[ui_state_.current_animation];
+                }
+            }
+
+            // Set up AnimationState
+            auto* state = ecs_animation_registry_->GetComponent<AnimationECS::AnimationState>(entity);
+            if (state)
+            {
+                state->is_playing = HasAnimationSelected();
+                state->is_looping = true;
+                state->current_time = 0.0f;
+                state->time_ratio = 0.0f;
+            }
+
+            // Initialize IK for this entity
+            AnimationECS::IKInitializationSystem::Initialize(
+                ecs_animation_registry_->GetRegistry(),
+                entity,
+                skeleton_.joint_names(),
+                ozz::make_span(bind_pose_models_)
+            );
+        }
+
+        current_instance_count_ = ui_state_.instance_count;
     }
 
     bool ApplyLimbIKAfterLocal()
