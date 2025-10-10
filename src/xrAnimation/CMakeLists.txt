@@ -55,6 +55,21 @@ set(SOURCES
 # Create static library
 add_library(xrAnimation STATIC ${SOURCES})
 
+target_include_directories(xrAnimation
+    PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../xrCore
+    ${CMAKE_CURRENT_SOURCE_DIR}/../xrEngine
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Common
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Externals/ozz-animation/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Externals/ozz-animation/samples
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Externals/imgui
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Externals/imgui-proj
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Externals/entt/single_include
+)
+
 set_source_files_properties(
     ../../Externals/ozz-animation/samples/framework/mesh.cc
     ../../Externals/ozz-animation/samples/framework/utils.cc
