@@ -1,26 +1,42 @@
-add_library(DiscordGameSDK STATIC
+add_library(DiscordGameSDK STATIC)
+
+target_sources_grouped(
+    TARGET DiscordGameSDK
+    NAME "Managers"
+    FILES
     activity_manager.cpp
-    core.cpp
+    activity_manager.h
     overlay_manager.cpp
+    overlay_manager.h
     relationship_manager.cpp
-    types.cpp
+    relationship_manager.h
     user_manager.cpp
+    user_manager.h
+)
+
+target_sources_grouped(
+    TARGET DiscordGameSDK
+    NAME "Core"
+    FILES
+    core.cpp
+    core.h
+    discord.h
+    event.h
+    ffi.h
+    #pch.hpp
+    types.cpp
+    types.h
 )
 
 target_include_directories(DiscordGameSDK
     PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_SOURCE_DIR}/Externals"
 )
 
-if (WIN32)
-    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set(_discord_sdk_lib "${CMAKE_SOURCE_DIR}/sdk/libraries/x64/discord_game_sdk.dll.lib")
-    else()
-        set(_discord_sdk_lib "${CMAKE_SOURCE_DIR}/sdk/libraries/x86/discord_game_sdk.dll.lib")
-    endif()
-
-    target_link_libraries(DiscordGameSDK PUBLIC "${_discord_sdk_lib}")
-endif()
+target_link_libraries(DiscordGameSDK
+    PUBLIC
+    ${XRAY_SDK_LIBRARY_DIR}/discord_game_sdk.dll.lib
+)
 
 set_target_properties(DiscordGameSDK PROPERTIES
     PREFIX ""

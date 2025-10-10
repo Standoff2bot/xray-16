@@ -3,18 +3,25 @@ find_path(BUGTRAP_INCLUDE_DIR
     PATH_SUFFIXES include
 )
 
-find_library(BUGTRAP_LIBRARY
+find_library(BUGTRAP_LIB
     NAMES BugTrap
+)
+
+find_file(BUGTRAP_DLL
+    NAMES BugTrap.dll
+    PATHS "${XRAY_SDK_BINARY_DIR}"
 )
 
 mark_as_advanced(
     BUGTRAP_INCLUDE_DIR
-    BUGTRAP_LIBRARY
+    BUGTRAP_LIB
+    BUGTRAP_DLL
 )
 
-add_library(BugTrap STATIC IMPORTED GLOBAL)
+add_library(BugTrap SHARED IMPORTED GLOBAL)
 
 set_target_properties(BugTrap PROPERTIES
-    IMPORTED_LOCATION "${BUGTRAP_LIBRARY}"
+    IMPORTED_LOCATION "${BUGTRAP_DLL}"
+    IMPORTED_IMPLIB   "${BUGTRAP_LIB}"
     INTERFACE_INCLUDE_DIRECTORIES "${BUGTRAP_INCLUDE_DIR}"
 )

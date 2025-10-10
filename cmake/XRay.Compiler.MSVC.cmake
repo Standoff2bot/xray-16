@@ -81,15 +81,13 @@ else()
     string(REPLACE "AMD64" "x64" XRAY_PLATFORM ${XRAY_PLATFORM})
 endif()
 
-mark_as_advanced(XRAY_PLATFORM)
-
-list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/sdk")
-list(APPEND CMAKE_LIBRARY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/sdk/libraries/${XRAY_PLATFORM}")
-
 set(XRAY_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sdk" CACHE PATH "Path to the bundled Windows OpenXRay dependencies")
 set(XRAY_SDK_INCLUDE_DIR "${XRAY_SDK_DIR}/include")
 set(XRAY_SDK_LIBRARY_DIR "${XRAY_SDK_DIR}/libraries/${XRAY_PLATFORM}")
 set(XRAY_SDK_BINARY_DIR "${XRAY_SDK_DIR}/binaries/${XRAY_PLATFORM}")
+
+list(APPEND CMAKE_PREFIX_PATH "${XRAY_SDK_DIR}")
+list(APPEND CMAKE_LIBRARY_PATH "${XRAY_SDK_LIBRARY_DIR}")
 
 foreach(_xray_required_dir XRAY_SDK_DIR XRAY_SDK_INCLUDE_DIR XRAY_SDK_LIBRARY_DIR)
     if (NOT EXISTS "${${_xray_required_dir}}")

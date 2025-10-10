@@ -444,22 +444,6 @@ target_link_libraries(xrEngine
     $<$<PLATFORM_ID:Windows>:Vfw32>
 )
 
-if (WIN32)
-    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set(_discord_sdk_dll "${CMAKE_SOURCE_DIR}/sdk/binaries/x64/discord_game_sdk.dll")
-    else()
-        set(_discord_sdk_dll "${CMAKE_SOURCE_DIR}/sdk/binaries/x86/discord_game_sdk.dll")
-    endif()
-
-    add_custom_command(TARGET xrEngine POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_discord_sdk_dll}"
-            "$<TARGET_FILE_DIR:xrEngine>/discord_game_sdk.dll"
-        COMMENT "Copying Discord Game SDK runtime"
-        VERBATIM
-    )
-endif()
-
 target_compile_definitions(xrEngine
     PRIVATE
     ENGINE_BUILD
