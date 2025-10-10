@@ -442,14 +442,18 @@ bool InstancedMeshRenderer::CreatePipeline() {
     };
 
     config.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    config.cull_mode = VK_CULL_MODE_NONE;
-    config.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    config.depth_test_enable = true;
-    config.depth_write_enable = true;
+    config.cull_mode = VK_CULL_MODE_BACK_BIT;  // Enable backface culling
+    config.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;  // Coordinate reflection reverses winding
+    config.depth_test_enable = true;   // ENABLE depth testing
+    config.depth_write_enable = true;  // ENABLE depth writes
+    config.depth_compare_op = VK_COMPARE_OP_LESS;  // Standard depth test
     config.blend_enable = false;
     config.render_pass = device_->GetRenderPass();
     config.subpass = 0;
     config.descriptor_set_layouts = {descriptor_set_layout_};
+
+    Msg("* InstancedMeshRenderer pipeline config: depth_test=%d, depth_write=%d, depth_compare=%d",
+        config.depth_test_enable, config.depth_write_enable, config.depth_compare_op);
 
     if (!pipeline_.Create(device_->GetDevice(), config)) {
         return false;

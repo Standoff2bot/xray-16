@@ -1038,6 +1038,15 @@ void DrawAnimationPanel(ViewerState& state, VulkanRenderer& renderer) {
     }
     ImGui::Separator();
 
+    // Bind Pose / Play Animation toggle
+    bool show_bind_pose = renderer.GetShowBindPose();
+    const char* button_label = show_bind_pose ? "Play Animation" : "Show Bind Pose";
+    if (ImGui::Button(button_label, ImVec2(140, 0))) {
+        renderer.SetShowBindPose(!show_bind_pose);
+    }
+
+    ImGui::Separator();
+
     bool animate_mesh = renderer.GetAnimateMesh();
     if (ImGui::Checkbox("Auto-rotate mesh", &animate_mesh)) {
         renderer.SetAnimateMesh(animate_mesh);

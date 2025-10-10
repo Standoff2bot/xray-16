@@ -91,6 +91,10 @@ public:
     void SetMeshAnimationTime(float time_seconds);
     float GetMeshAnimationTime() const { return mesh_animation_time_; }
     void SetActiveAnimation(const ozz::animation::Animation* animation);
+
+    // Bind pose mode
+    bool GetShowBindPose() const { return show_bind_pose_; }
+    void SetShowBindPose(bool show_bind_pose) { show_bind_pose_ = show_bind_pose; }
     const ozz::animation::Animation* GetActiveAnimation() const { return active_animation_; }
     bool HasActiveAnimation() const { return active_animation_ != nullptr; }
 
@@ -181,6 +185,7 @@ private:
     float mesh_rotation_speed_ = 0.75f;
     bool animate_mesh_ = true;
     float mesh_animation_time_ = 0.0f;
+    bool show_bind_pose_ = false;
 };
 
 } // namespace renderer

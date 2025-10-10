@@ -17,12 +17,6 @@ struct Fobb;
 struct Fcylinder;
 struct Fsphere;
 
-namespace XRay {
-namespace Animation {
-struct ExtendedBoneMetadata;
-} // namespace Animation
-} // namespace XRay
-
 namespace xray {
 namespace animation {
 namespace renderer {
@@ -44,9 +38,8 @@ public:
         const ozz::math::Float4& color_y, const ozz::math::Float4& color_z);
     void DrawPoint(const ozz::math::Float3& position, float radius, const ozz::math::Float4& color, int segments = 8);
     void DrawSphere(const ozz::math::Float3& center, float radius, const ozz::math::Float4& color, int segments = 12);
-    void DrawBoneShape(const XRay::Animation::ExtendedBoneMetadata& metadata,
-        const ozz::math::Float4x4& local_to_world, const ozz::math::Float4& color,
-        int segments = 12);
+    void DrawBoneShape(const ozz::math::Float3& head, const ozz::math::Float3& tail,
+        float radius, const ozz::math::Float4& color);
     void EndFrame();
     void Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_proj);
 
@@ -58,6 +51,7 @@ private:
 
     struct SolidVertex {
         float position[3];
+        float normal[3];
         float color[4];
     };
 
@@ -74,6 +68,9 @@ private:
         const ozz::math::Float4& color, int segments);
     void DrawSphereShape(const ozz::math::Float4x4& transform, const Fsphere& sphere,
         const ozz::math::Float4& color, int segments);
+    void DrawSolidSphere(const ozz::math::Float3& center, float radius, const ozz::math::Float4& color, int segments);
+    void DrawOctahedronBone(const ozz::math::Float3& head, const ozz::math::Float3& tail,
+        float radius, const ozz::math::Float4& color);
     void UpdateUniforms(const ozz::math::Float4x4& view_proj);
     void UpdateDescriptorSet();
 

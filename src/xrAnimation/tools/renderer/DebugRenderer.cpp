@@ -12,8 +12,6 @@
 #include <cstring>
 #include <filesystem>
 
-#include "../../ExtendedBoneMetadata.h"
-
 namespace xray {
 namespace animation {
 namespace renderer {
@@ -253,6 +251,182 @@ void DebugRenderer::DrawSphere(const ozz::math::Float3& center, float radius, co
     });
 }
 
+void DebugRenderer::DrawSolidSphere(const ozz::math::Float3& center, float radius, const ozz::math::Float4& color, int segments) {
+    // Generate UV sphere with proper normals
+    segments = std::max(segments, 8);
+    const int rings = segments / 2;
+    const float pi = 3.14159265359f;
+
+    auto push_triangle_with_normal = [&](const ozz::math::Float3& p0, const ozz::math::Float3& p1, const ozz::math::Float3& p2) {
+        // Compute normal from vertex positions (pointing outward from sphere center)
+        ozz::math::Float3 n0 = NormalizeSafe(Sub(p0, center), ozz::math::Float3::y_axis());
+        ozz::math::Float3 n1 = NormalizeSafe(Sub(p1, center), ozz::math::Float3::y_axis());
+        ozz::math::Float3 n2 = NormalizeSafe(Sub(p2, center), ozz::math::Float3::y_axis());
+
+        SolidVertex v0{};
+        v0.position[0] = p0.x;
+        v0.position[1] = p0.y;
+        v0.position[2] = p0.z;
+        v0.normal[0] = n0.x;
+        v0.normal[1] = n0.y;
+        v0.normal[2] = n0.z;
+        v0.color[0] = color.x;
+        v0.color[1] = color.y;
+        v0.color[2] = color.z;
+        v0.color[3] = color.w;
+
+        SolidVertex v1 = v0;
+        v1.position[0] = p1.x;
+        v1.position[1] = p1.y;
+        v1.position[2] = p1.z;
+        v1.normal[0] = n1.x;
+        v1.normal[1] = n1.y;
+        v1.normal[2] = n1.z;
+
+        SolidVertex v2 = v0;
+        v2.position[0] = p2.x;
+        v2.position[1] = p2.y;
+        v2.position[2] = p2.z;
+        v2.normal[0] = n2.x;
+        v2.normal[1] = n2.y;
+        v2.normal[2] = n2.z;
+
+        solid_vertices_.push_back(v0);
+        solid_vertices_.push_back(v1);
+        solid_vertices_.push_back(v2);
+        solid_buffer_dirty_ = true;
+    };
+
+    // Generate sphere vertices
+    for (int ring = 0; ring < rings; ++ring) {
+        const float phi0 = pi * static_cast<float>(ring) / static_cast<float>(rings);
+        const float phi1 = pi * static_cast<float>(ring + 1) / static_cast<float>(rings);
+
+        for (int seg = 0; seg < segments; ++seg) {
+            const float theta0 = kTwoPi * static_cast<float>(seg) / static_cast<float>(segments);
+            const float theta1 = kTwoPi * static_cast<float>(seg + 1) / static_cast<float>(segments);
+
+            // Compute sphere points
+            const float sin_phi0 = std::sin(phi0);
+            const float cos_phi0 = std::cos(phi0);
+            const float sin_phi1 = std::sin(phi1);
+            const float cos_phi1 = std::cos(phi1);
+
+            const ozz::math::Float3 p0{
+                center.x + radius * sin_phi0 * std::cos(theta0),
+                center.y + radius * cos_phi0,
+                center.z + radius * sin_phi0 * std::sin(theta0)
+            };
+
+            const ozz::math::Float3 p1{
+                center.x + radius * sin_phi0 * std::cos(theta1),
+                center.y + radius * cos_phi0,
+                center.z + radius * sin_phi0 * std::sin(theta1)
+            };
+
+            const ozz::math::Float3 p2{
+                center.x + radius * sin_phi1 * std::cos(theta0),
+                center.y + radius * cos_phi1,
+                center.z + radius * sin_phi1 * std::sin(theta0)
+            };
+
+            const ozz::math::Float3 p3{
+                center.x + radius * sin_phi1 * std::cos(theta1),
+                center.y + radius * cos_phi1,
+                center.z + radius * sin_phi1 * std::sin(theta1)
+            };
+
+            // Create two triangles for the quad - reversed winding for outward normals
+            push_triangle_with_normal(p0, p2, p1);
+            push_triangle_with_normal(p1, p2, p3);
+        }
+    }
+}
+
+void DebugRenderer::DrawOctahedronBone(const ozz::math::Float3& head, const ozz::math::Float3& tail,
+    float radius, const ozz::math::Float4& color) {
+    // Compute bone direction and length
+    const ozz::math::Float3 bone_vec = Sub(tail, head);
+    const float length = std::sqrt(bone_vec.x * bone_vec.x + bone_vec.y * bone_vec.y + bone_vec.z * bone_vec.z);
+
+    if (length <= kEpsilon) {
+        return; // Degenerate bone
+    }
+
+    const ozz::math::Float3 bone_dir = Scale(bone_vec, 1.0f / length);
+
+    // Create perpendicular vectors for octahedron
+    ozz::math::Float3 tangent = Cross(bone_dir, ozz::math::Float3::y_axis());
+    if (std::sqrt(tangent.x * tangent.x + tangent.y * tangent.y + tangent.z * tangent.z) <= kEpsilon) {
+        tangent = Cross(bone_dir, ozz::math::Float3::x_axis());
+    }
+    tangent = NormalizeSafe(tangent, ozz::math::Float3::x_axis());
+    const ozz::math::Float3 bitangent = NormalizeSafe(Cross(bone_dir, tangent), ozz::math::Float3::z_axis());
+
+    // Octahedron vertices: middle ring with 4 points
+    const float mid_offset = length * 0.5f;
+    const ozz::math::Float3 mid_center = Add(head, Scale(bone_dir, mid_offset));
+
+    const std::array<ozz::math::Float3, 6> vertices = {
+        head,  // 0: head
+        tail,  // 1: tail
+        Add(mid_center, Scale(tangent, radius)),      // 2: +X
+        Add(mid_center, Scale(tangent, -radius)),     // 3: -X
+        Add(mid_center, Scale(bitangent, radius)),    // 4: +Y
+        Add(mid_center, Scale(bitangent, -radius)),   // 5: -Y
+    };
+
+    auto push_triangle_with_normal = [&](int ia, int ib, int ic) {
+        const ozz::math::Float3& p0 = vertices[ia];
+        const ozz::math::Float3& p1 = vertices[ib];
+        const ozz::math::Float3& p2 = vertices[ic];
+
+        // Compute face normal
+        const ozz::math::Float3 edge1 = Sub(p1, p0);
+        const ozz::math::Float3 edge2 = Sub(p2, p0);
+        const ozz::math::Float3 normal = NormalizeSafe(Cross(edge1, edge2), bone_dir);
+
+        SolidVertex v0{};
+        v0.position[0] = p0.x;
+        v0.position[1] = p0.y;
+        v0.position[2] = p0.z;
+        v0.normal[0] = normal.x;
+        v0.normal[1] = normal.y;
+        v0.normal[2] = normal.z;
+        v0.color[0] = color.x;
+        v0.color[1] = color.y;
+        v0.color[2] = color.z;
+        v0.color[3] = color.w;
+
+        SolidVertex v1 = v0;
+        v1.position[0] = p1.x;
+        v1.position[1] = p1.y;
+        v1.position[2] = p1.z;
+
+        SolidVertex v2 = v0;
+        v2.position[0] = p2.x;
+        v2.position[1] = p2.y;
+        v2.position[2] = p2.z;
+
+        solid_vertices_.push_back(v0);
+        solid_vertices_.push_back(v1);
+        solid_vertices_.push_back(v2);
+        solid_buffer_dirty_ = true;
+    };
+
+    // Head pyramid (4 triangles) - reversed winding for outward normals
+    push_triangle_with_normal(0, 4, 2);
+    push_triangle_with_normal(0, 3, 4);
+    push_triangle_with_normal(0, 5, 3);
+    push_triangle_with_normal(0, 2, 5);
+
+    // Tail pyramid (4 triangles) - reversed winding for outward normals
+    push_triangle_with_normal(1, 2, 4);
+    push_triangle_with_normal(1, 4, 3);
+    push_triangle_with_normal(1, 3, 5);
+    push_triangle_with_normal(1, 5, 2);
+}
+
 void DebugRenderer::DrawOrientedBox(const ozz::math::Float4x4& transform, const Fobb& obb, const ozz::math::Float4& color) {
     const ozz::math::Float3 center = ToFloat3(obb.m_translate);
     const ozz::math::Float3 axis_x = Scale(ToFloat3(obb.m_rotate.i), obb.m_halfsize.x);
@@ -358,102 +532,14 @@ void DebugRenderer::DrawCapsuleShape(const ozz::math::Float4x4& transform, const
     DrawLine(top_world, bottom_world, color);
 }
 
-void DebugRenderer::DrawBoneShape(const XRay::Animation::ExtendedBoneMetadata& metadata,
-    const ozz::math::Float4x4& local_to_world, const ozz::math::Float4& color, int segments) {
-    switch (metadata.shape.type) {
-    case SBoneShape::stBox:
-        DrawOrientedBox(local_to_world, metadata.shape.box, color);
-        break;
-    case SBoneShape::stSphere:
-        DrawSphereShape(local_to_world, metadata.shape.sphere, color, segments);
-        break;
-    case SBoneShape::stCylinder:
-        DrawCapsuleShape(local_to_world, metadata.shape.cylinder, color, segments);
-        break;
-    default:
-    {
-        float length = metadata.rest_length;
-        if (length <= kEpsilon) {
-            Fvector diag;
-            diag.sub(metadata.local_aabb_max, metadata.local_aabb_min);
-            length = diag.magnitude();
-        }
-        if (length <= kEpsilon) {
-            length = 0.1f;
-        }
+void DebugRenderer::DrawBoneShape(const ozz::math::Float3& head, const ozz::math::Float3& tail,
+    float radius, const ozz::math::Float4& color) {
+    const float final_radius = std::max(radius, 0.005f);
+    DrawOctahedronBone(head, tail, final_radius, color);
 
-        const float mid_radius = std::max(length * 0.18f, 0.015f);
-        const float mid_offset = length * 0.5f;
-
-        const std::array<ozz::math::Float3, 6> local_points = {
-            ozz::math::Float3{0.f, 0.f, 0.f},
-            ozz::math::Float3{length, 0.f, 0.f},
-            ozz::math::Float3{mid_offset, mid_radius, 0.f},
-            ozz::math::Float3{mid_offset, -mid_radius, 0.f},
-            ozz::math::Float3{mid_offset, 0.f, mid_radius},
-            ozz::math::Float3{mid_offset, 0.f, -mid_radius},
-        };
-
-        std::array<ozz::math::Float3, local_points.size()> world_points{};
-        for (size_t i = 0; i < local_points.size(); ++i) {
-            world_points[i] = TransformPoint(local_to_world, local_points[i]);
-        }
-
-        auto push_triangle = [&](int ia, int ib, int ic) {
-            SolidVertex va{};
-            va.position[0] = world_points[ia].x;
-            va.position[1] = world_points[ia].y;
-            va.position[2] = world_points[ia].z;
-            va.color[0] = color.x;
-            va.color[1] = color.y;
-            va.color[2] = color.z;
-            va.color[3] = color.w;
-
-            SolidVertex vb = va;
-            vb.position[0] = world_points[ib].x;
-            vb.position[1] = world_points[ib].y;
-            vb.position[2] = world_points[ib].z;
-
-            SolidVertex vc = va;
-            vc.position[0] = world_points[ic].x;
-            vc.position[1] = world_points[ic].y;
-            vc.position[2] = world_points[ic].z;
-
-            solid_vertices_.push_back(va);
-            solid_vertices_.push_back(vb);
-            solid_vertices_.push_back(vc);
-            solid_buffer_dirty_ = true;
-        };
-
-        // Root pyramid
-        push_triangle(0, 2, 4);
-        push_triangle(0, 4, 3);
-        push_triangle(0, 3, 5);
-        push_triangle(0, 5, 2);
-
-        // Tip pyramid
-        push_triangle(1, 4, 2);
-        push_triangle(1, 3, 4);
-        push_triangle(1, 5, 3);
-        push_triangle(1, 2, 5);
-
-        constexpr int ring_edges[][2] = {
-            {2, 4}, {4, 3}, {3, 5}, {5, 2},
-        };
-
-        for (const auto& edge : ring_edges) {
-            DrawLine(world_points[edge[0]], world_points[edge[1]], color);
-        }
-
-        for (int i = 2; i <= 5; ++i) {
-            DrawLine(world_points[0], world_points[i], color);
-            DrawLine(world_points[1], world_points[i], color);
-        }
-
-        DrawLine(world_points[0], world_points[1], color);
-        break;
-    }
-    }
+    const float joint_radius = final_radius * 0.7f;
+    DrawSolidSphere(head, joint_radius, color, 12);
+    DrawSolidSphere(tail, joint_radius, color, 12);
 }
 
 void DebugRenderer::EndFrame() {
@@ -642,11 +728,11 @@ bool DebugRenderer::CreateSolidPipeline() {
 
 #ifdef OZZ_SHADER_BINARY_DIR
     std::filesystem::path shader_root{ OZZ_SHADER_BINARY_DIR };
-    config.vertex_shader_path = (shader_root / "debug_lines.vert.spv").string();
-    config.fragment_shader_path = (shader_root / "debug_lines.frag.spv").string();
+    config.vertex_shader_path = (shader_root / "shaded_bone.vert.spv").string();
+    config.fragment_shader_path = (shader_root / "shaded_bone.frag.spv").string();
 #else
-    config.vertex_shader_path = "src/xrAnimation/tools/renderer/shaders/debug_lines.vert.spv";
-    config.fragment_shader_path = "src/xrAnimation/tools/renderer/shaders/debug_lines.frag.spv";
+    config.vertex_shader_path = "src/xrAnimation/tools/renderer/shaders/shaded_bone.vert.spv";
+    config.fragment_shader_path = "src/xrAnimation/tools/renderer/shaders/shaded_bone.frag.spv";
 #endif
 
     config.vertex_bindings.resize(1);
@@ -654,7 +740,7 @@ bool DebugRenderer::CreateSolidPipeline() {
     config.vertex_bindings[0].stride = sizeof(SolidVertex);
     config.vertex_bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    config.vertex_attributes.resize(2);
+    config.vertex_attributes.resize(3);
     config.vertex_attributes[0].location = 0;
     config.vertex_attributes[0].binding = 0;
     config.vertex_attributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -662,8 +748,13 @@ bool DebugRenderer::CreateSolidPipeline() {
 
     config.vertex_attributes[1].location = 1;
     config.vertex_attributes[1].binding = 0;
-    config.vertex_attributes[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    config.vertex_attributes[1].offset = offsetof(SolidVertex, color);
+    config.vertex_attributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    config.vertex_attributes[1].offset = offsetof(SolidVertex, normal);
+
+    config.vertex_attributes[2].location = 2;
+    config.vertex_attributes[2].binding = 0;
+    config.vertex_attributes[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    config.vertex_attributes[2].offset = offsetof(SolidVertex, color);
 
     config.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     config.polygon_mode = VK_POLYGON_MODE_FILL;

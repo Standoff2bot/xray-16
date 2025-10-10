@@ -61,7 +61,7 @@ void main() {
     mat4 skin_matrix = accumulate_skinning(base_index);
 
     vec4 local_position = skin_matrix * vec4(in_position, 1.0);
-    vec3 local_normal = (mat3(skin_matrix) * in_normal);
+    vec3 local_normal = mat3(skin_matrix) * in_normal;
 
     vec4 world_position = instance_transform * local_position;
     gl_Position = camera.view_proj * world_position;

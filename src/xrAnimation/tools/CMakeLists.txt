@@ -171,7 +171,17 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
         add_shader(ozz_animation_viewer skeleton_instanced.vert)
         add_shader(ozz_animation_viewer skeleton_instanced.frag)
 
+        # Debug line shaders
+        add_shader(ozz_animation_viewer debug_lines.vert)
+        add_shader(ozz_animation_viewer debug_lines.frag)
+
+        # Shaded bone shaders
+        add_shader(ozz_animation_viewer shaded_bone.vert)
+        add_shader(ozz_animation_viewer shaded_bone.frag)
+
         # Skinned mesh instanced shaders
+        add_shader(ozz_animation_viewer skinned_mesh_instanced.vert)
+        add_shader(ozz_animation_viewer skinned_mesh_instanced.frag)
     endif()
     # Set properties
     set_target_properties(ozz_animation_viewer PROPERTIES

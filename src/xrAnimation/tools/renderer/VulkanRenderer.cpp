@@ -73,7 +73,7 @@ VulkanRenderer::~VulkanRenderer() {
 bool VulkanRenderer::Initialize(GLFWwindow* window) {
     Msg("* Initializing Vulkan Renderer...");
 
-    // Initialize Vulkan device (disable validation layers for WSL2 compatibility)
+    // Initialize Vulkan device (validation layers disabled for wider compatibility)
     if (!device_.Initialize(window, false)) {
         Msg("! Failed to initialize Vulkan device");
         return false;
@@ -772,6 +772,13 @@ void VulkanRenderer::UpdateMeshAnimation(float delta_time_seconds) {
     }
 
     bool sampled_pose = false;
+    // If bind pose mode is active, skip animation sampling and use rest pose
+    if (show_bind_pose_) {
+        skeleton_pose_models_ = skeleton_rest_models_;
+        ApplyPaletteToInstances(mesh_bind_pose_palette_);
+        return;
+    }
+
     if (active_animation_ && skeleton_source_) {
         const int joint_count = skeleton_source_->num_joints();
         const int track_count = active_animation_->num_tracks();
@@ -925,9 +932,6 @@ void VulkanRenderer::PopulateSkeletonDebugShapes() {
         }
 
         const ozz::math::Float3 bone_position = ExtractTranslation(world_transform);
-        const float joint_radius = std::clamp(metadata_entry.rest_length * 0.18f,
-            kSkeletonDefaultRadius * 0.4f, metadata_entry.rest_length * 0.45f);
-        const ozz::math::Float3 tip_position = TransformPoint(world_transform, ozz::math::Float3{metadata_entry.rest_length, 0.f, 0.f});
 
         const int parent_index = (bone < skeleton_parents_.size()) ? skeleton_parents_[bone] : -1;
         if (parent_index >= 0 && static_cast<size_t>(parent_index) < pose_models.size()) {
@@ -936,33 +940,51 @@ void VulkanRenderer::PopulateSkeletonDebugShapes() {
             debug_renderer_.DrawLine(parent_position, bone_position, link_color);
         }
 
-        switch (metadata_entry.shape.type) {
-        case SBoneShape::stSphere:
-            metadata_entry.shape.sphere.R = std::max(metadata_entry.shape.sphere.R,
-                std::max(metadata_entry.rest_length * 0.25f, kSkeletonDefaultRadius));
-            break;
-        case SBoneShape::stCylinder:
-            metadata_entry.shape.cylinder.m_radius = std::max(metadata_entry.shape.cylinder.m_radius,
-                std::max(metadata_entry.rest_length * 0.15f, kSkeletonDefaultRadius * 0.8f));
-            metadata_entry.shape.cylinder.m_height = std::max(metadata_entry.shape.cylinder.m_height,
-                metadata_entry.rest_length);
-            break;
-        case SBoneShape::stBox:
-            metadata_entry.shape.box.m_halfsize.x = std::max(metadata_entry.shape.box.m_halfsize.x,
-                metadata_entry.rest_length * 0.35f);
-            metadata_entry.shape.box.m_halfsize.y = std::max(metadata_entry.shape.box.m_halfsize.y,
-                metadata_entry.rest_length * 0.15f);
-            metadata_entry.shape.box.m_halfsize.z = std::max(metadata_entry.shape.box.m_halfsize.z,
-                metadata_entry.rest_length * 0.15f);
-            break;
-        default:
-            break;
+        ozz::math::Float3 tail_position = bone_position;
+        bool has_child = false;
+        for (size_t child = 0; child < skeleton_parents_.size(); ++child) {
+            if (skeleton_parents_[child] == static_cast<int>(bone) && child < pose_models.size()) {
+                const ozz::math::Float4x4 child_world = skeleton_world_transform_ * pose_models[child];
+                tail_position = ExtractTranslation(child_world);
+                has_child = true;
+                break;
+            }
         }
 
+        if (!has_child) {
+            ozz::math::Float3 axis;
+            ozz::math::Store3PtrU(world_transform.cols[0], &axis.x);
+            float axis_len = std::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+            if (axis_len <= kSkeletonDebugEpsilon) {
+                axis = ozz::math::Float3::x_axis();
+                axis_len = 1.0f;
+            }
+            const float target_length = (metadata_entry.rest_length > kSkeletonDebugEpsilon)
+                ? metadata_entry.rest_length
+                : kSkeletonDefaultRadius;
+            axis = ozz::math::Float3{axis.x / axis_len, axis.y / axis_len, axis.z / axis_len};
+            tail_position = ozz::math::Float3{
+                bone_position.x + axis.x * target_length,
+                bone_position.y + axis.y * target_length,
+                bone_position.z + axis.z * target_length
+            };
+        }
+
+        const float dx = tail_position.x - bone_position.x;
+        const float dy = tail_position.y - bone_position.y;
+        const float dz = tail_position.z - bone_position.z;
+        float bone_length = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (bone_length <= kSkeletonDebugEpsilon) {
+            bone_length = std::max(metadata_entry.rest_length, kSkeletonDefaultRadius);
+        }
+
+        const float joint_radius = std::clamp(bone_length * 0.18f,
+            kSkeletonDefaultRadius * 0.4f, bone_length * 0.45f);
+
         const ozz::math::Float4 draw_color = (bone == 0) ? root_color : bone_color;
-        debug_renderer_.DrawBoneShape(metadata_entry, world_transform, draw_color, 24);
+        debug_renderer_.DrawBoneShape(bone_position, tail_position, joint_radius, draw_color);
         debug_renderer_.DrawSphere(bone_position, joint_radius, joint_color, 24);
-        debug_renderer_.DrawSphere(tip_position, joint_radius * 0.6f, joint_color, 24);
+        debug_renderer_.DrawSphere(tail_position, joint_radius * 0.6f, joint_color, 24);
         if (bone == 0) {
             debug_renderer_.DrawAxes(world_transform, metadata_entry.rest_length * 0.2f,
                 ozz::math::Float4{1.0f, 0.3f, 0.3f, 1.0f},
