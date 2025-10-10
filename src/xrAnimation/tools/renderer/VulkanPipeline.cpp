@@ -175,16 +175,19 @@ bool VulkanPipeline::Create(VkDevice device, const PipelineConfig& config) {
 }
 
 void VulkanPipeline::Destroy() {
-    if (device_ != VK_NULL_HANDLE) {
+    const VkDevice device = device_;
+    if (device != VK_NULL_HANDLE) {
         if (pipeline_ != VK_NULL_HANDLE) {
-            vkDestroyPipeline(device_, pipeline_, nullptr);
-            pipeline_ = VK_NULL_HANDLE;
+            vkDestroyPipeline(device, pipeline_, nullptr);
         }
         if (pipeline_layout_ != VK_NULL_HANDLE) {
-            vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
-            pipeline_layout_ = VK_NULL_HANDLE;
+            vkDestroyPipelineLayout(device, pipeline_layout_, nullptr);
         }
     }
+
+    pipeline_ = VK_NULL_HANDLE;
+    pipeline_layout_ = VK_NULL_HANDLE;
+    device_ = VK_NULL_HANDLE;
 }
 
 void VulkanPipeline::Bind(VkCommandBuffer cmd_buffer) {

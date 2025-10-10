@@ -29,12 +29,12 @@ This module hosts the ongoing effort to move the OpenXRay animation toolchain an
 ## Building & Running Tools
 
 ```bash
-cmake -S xray-16 -B xray-16/ozz_utils -DCMAKE_BUILD_TYPE=Debug
-cmake --build xray-16/ozz_utils -j$(nproc)
+cmake -S xray-16 -B ozz_utils -DCMAKE_BUILD_TYPE=Debug
+cmake --build ozz_utils -j$(nproc)
 ```
 
-- **Converters**: `xray-16/ozz_utils/bin/<cfg>/xray_to_ozz_converter`
-- **Viewer**: `xray-16/ozz_utils/bin/<cfg>/ozz_animation_viewer --bundle=<path>.ozzx` (disabled when generating Visual Studio solutions)
+- **Converters**: `ozz_utils/bin/<cfg>/xray_to_ozz_converter`
+- **Viewer**: `ozz_utils/bin/<cfg>/ozz_animation_viewer --bundle=<path>.ozzx` (disabled when generating Visual Studio solutions)
 
 Helper scripts in the repository root (e.g. `run_stalker_hero_conversion.sh`) regenerate sample assets under `src/xrAnimation/tests/testdata/` and launch the viewer in verification modes.
 

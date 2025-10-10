@@ -11,8 +11,12 @@
 
 #include "../../ExtendedBoneMetadata.h"
 
-#include <ozz/base/maths/simd_math.h>
+#include <ozz/animation/runtime/animation.h>
+#include <ozz/animation/runtime/sampling_job.h>
 #include <ozz/animation/runtime/skeleton.h>
+#include <ozz/base/containers/vector.h>
+#include <ozz/base/maths/simd_math.h>
+#include <ozz/base/maths/soa_transform.h>
 #include <vector>
 
 namespace ozz {
@@ -86,6 +90,9 @@ public:
     bool GetAnimateMesh() const { return animate_mesh_; }
     void SetMeshAnimationTime(float time_seconds);
     float GetMeshAnimationTime() const { return mesh_animation_time_; }
+    void SetActiveAnimation(const ozz::animation::Animation* animation);
+    const ozz::animation::Animation* GetActiveAnimation() const { return active_animation_; }
+    bool HasActiveAnimation() const { return active_animation_ != nullptr; }
 
 private:
     bool InitializeTrianglePipeline();
@@ -106,6 +113,7 @@ private:
     void HandleWindowFocus(int focused);
     void PopulateSkeletonDebugShapes();
     void RenderDebugPrimitives(VkCommandBuffer cmd);
+    void ApplyPaletteToInstances(const std::vector<ozz::math::Float4x4>& palette);
 
     static void GlfwKeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
     static void GlfwCharCallback(GLFWwindow* window, unsigned int c);
@@ -142,10 +150,19 @@ private:
     std::vector<MeshInstanceData> mesh_instances_;
     std::vector<ozz::math::Float4x4> mesh_bone_matrices_;
     std::vector<ozz::math::Float4x4> mesh_bind_pose_palette_;
+    std::vector<ozz::math::Float4x4> sampled_palette_;
     std::vector<ozz::math::Float4x4> skeleton_rest_models_;
+    std::vector<ozz::math::Float4x4> skeleton_pose_models_;
     std::vector<int> skeleton_parents_;
     XRay::Animation::ExtendedBoneMetadataCollection bone_metadata_;
-    const ozz::animation::Skeleton* skeleton_data_ = nullptr;
+    ozz::math::Float4x4 skeleton_world_transform_{ ozz::math::Float4x4::identity() };
+    const ozz::animation::Skeleton* skeleton_source_ = nullptr;
+    const ozz::animation::Animation* active_animation_ = nullptr;
+    ozz::animation::SamplingJob::Context sampling_context_;
+    ozz::vector<ozz::math::SoaTransform> local_transforms_;
+    ozz::vector<ozz::math::Float4x4> model_transforms_;
+    std::vector<uint16_t> mesh_joint_remaps_;
+    std::vector<ozz::math::Float4x4> mesh_inverse_bind_poses_;
 
     // ImGui integration
     ImGuiContext* imgui_context_ = nullptr;

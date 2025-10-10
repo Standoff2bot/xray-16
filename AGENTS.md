@@ -18,10 +18,10 @@
 - Keep responses concise, factual, and professional; update documentation immediately when behaviour changes.
 
 ## Build & Test Quickstart
-- Configure (if needed): `cmake -S xray-16 -B xray-16/ozz_utils -DCMAKE_BUILD_TYPE=Debug`
-- Build animation targets: `cmake --build xray-16/ozz_utils --target ozz_kinematics_tests xrAnimation_converter_tests -j`
-- Run suites: `ctest --test-dir xray-16/ozz_utils --output-on-failure`
-- Focused test loop: `xray-16/ozz_utils/bin/Debug/ozz_kinematics_tests --gtest_filter=OzzKinematicsParity.*`
+- Configure (if needed): `cmake -S xray-16 -B ozz_utils -DCMAKE_BUILD_TYPE=Debug`
+- Build animation targets: `cmake --build ozz_utils --target ozz_kinematics_tests xrAnimation_converter_tests -j`
+- Run suites: `ctest --test-dir ozz_utils --output-on-failure`
+- Focused test loop: `ozz_utils/bin/Debug/ozz_kinematics_tests --gtest_filter=OzzKinematicsParity.*`
 
 ## Handy Tools & Scripts
 - `convert_assets.sh` (repo root) -> regenerates sample `.ozz` skeletons/animations.

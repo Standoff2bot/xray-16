@@ -11,7 +11,6 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
-#include <limits>
 
 #include "../../ExtendedBoneMetadata.h"
 
@@ -91,11 +90,19 @@ bool DebugRenderer::Initialize(VulkanDevice* device) {
         return false;
     }
 
-    if (!EnsureVertexCapacity(kDefaultVertexCapacity)) {
+    if (!EnsureLineCapacity(kDefaultVertexCapacity)) {
         return false;
     }
 
-    if (!CreatePipeline()) {
+    if (!EnsureSolidCapacity(kDefaultVertexCapacity)) {
+        return false;
+    }
+
+    if (!CreateLinePipeline()) {
+        return false;
+    }
+
+    if (!CreateSolidPipeline()) {
         return false;
     }
 
@@ -105,13 +112,14 @@ bool DebugRenderer::Initialize(VulkanDevice* device) {
 }
 
 void DebugRenderer::Shutdown() {
-    if (!device_) {
+    if (!device_ || device_->GetDevice() == VK_NULL_HANDLE) {
         return;
     }
 
     VkDevice vk_device = device_->GetDevice();
 
-    pipeline_.Destroy();
+    line_pipeline_.Destroy();
+    solid_pipeline_.Destroy();
 
     if (descriptor_pool_) {
         vkDestroyDescriptorPool(vk_device, descriptor_pool_, nullptr);
@@ -124,17 +132,23 @@ void DebugRenderer::Shutdown() {
     }
 
     uniform_buffer_.Destroy();
-    vertex_buffer_.Destroy();
+    line_vertex_buffer_.Destroy();
+    solid_vertex_buffer_.Destroy();
 
-    vertices_.clear();
-    vertex_capacity_ = 0;
-    buffers_dirty_ = false;
+    line_vertices_.clear();
+    solid_vertices_.clear();
+    line_vertex_capacity_ = 0;
+    solid_vertex_capacity_ = 0;
+    line_buffer_dirty_ = false;
+    solid_buffer_dirty_ = false;
     initialized_ = false;
 }
 
 void DebugRenderer::BeginFrame() {
-    vertices_.clear();
-    buffers_dirty_ = false;
+    line_vertices_.clear();
+    solid_vertices_.clear();
+    line_buffer_dirty_ = false;
+    solid_buffer_dirty_ = false;
 }
 
 void DebugRenderer::DrawLine(const ozz::math::Float3& start, const ozz::math::Float3& end, const ozz::math::Float4& color) {
@@ -156,9 +170,9 @@ void DebugRenderer::DrawLine(const ozz::math::Float3& start, const ozz::math::Fl
     v1.color[2] = color.z;
     v1.color[3] = color.w;
 
-    vertices_.push_back(v0);
-    vertices_.push_back(v1);
-    buffers_dirty_ = true;
+    line_vertices_.push_back(v0);
+    line_vertices_.push_back(v1);
+    line_buffer_dirty_ = true;
 }
 
 void DebugRenderer::DrawAxes(const ozz::math::Float4x4& transform, float scale, const ozz::math::Float4& color_x,
@@ -368,16 +382,16 @@ void DebugRenderer::DrawBoneShape(const XRay::Animation::ExtendedBoneMetadata& m
             length = 0.1f;
         }
 
-        const float radius = std::max(length * 0.12f, 0.015f);
-        const float inter = std::min(length * 0.35f, length * 0.85f);
+        const float mid_radius = std::max(length * 0.18f, 0.015f);
+        const float mid_offset = length * 0.5f;
 
-        std::array<ozz::math::Float3, 6> local_points = {
-            ozz::math::Float3{length, 0.f, 0.f},
-            ozz::math::Float3{inter, radius, radius},
-            ozz::math::Float3{inter, radius, -radius},
-            ozz::math::Float3{inter, -radius, -radius},
-            ozz::math::Float3{inter, -radius, radius},
+        const std::array<ozz::math::Float3, 6> local_points = {
             ozz::math::Float3{0.f, 0.f, 0.f},
+            ozz::math::Float3{length, 0.f, 0.f},
+            ozz::math::Float3{mid_offset, mid_radius, 0.f},
+            ozz::math::Float3{mid_offset, -mid_radius, 0.f},
+            ozz::math::Float3{mid_offset, 0.f, mid_radius},
+            ozz::math::Float3{mid_offset, 0.f, -mid_radius},
         };
 
         std::array<ozz::math::Float3, local_points.size()> world_points{};
@@ -385,80 +399,150 @@ void DebugRenderer::DrawBoneShape(const XRay::Animation::ExtendedBoneMetadata& m
             world_points[i] = TransformPoint(local_to_world, local_points[i]);
         }
 
+        auto push_triangle = [&](int ia, int ib, int ic) {
+            SolidVertex va{};
+            va.position[0] = world_points[ia].x;
+            va.position[1] = world_points[ia].y;
+            va.position[2] = world_points[ia].z;
+            va.color[0] = color.x;
+            va.color[1] = color.y;
+            va.color[2] = color.z;
+            va.color[3] = color.w;
+
+            SolidVertex vb = va;
+            vb.position[0] = world_points[ib].x;
+            vb.position[1] = world_points[ib].y;
+            vb.position[2] = world_points[ib].z;
+
+            SolidVertex vc = va;
+            vc.position[0] = world_points[ic].x;
+            vc.position[1] = world_points[ic].y;
+            vc.position[2] = world_points[ic].z;
+
+            solid_vertices_.push_back(va);
+            solid_vertices_.push_back(vb);
+            solid_vertices_.push_back(vc);
+            solid_buffer_dirty_ = true;
+        };
+
+        // Root pyramid
+        push_triangle(0, 2, 4);
+        push_triangle(0, 4, 3);
+        push_triangle(0, 3, 5);
+        push_triangle(0, 5, 2);
+
+        // Tip pyramid
+        push_triangle(1, 4, 2);
+        push_triangle(1, 3, 4);
+        push_triangle(1, 5, 3);
+        push_triangle(1, 2, 5);
+
         constexpr int ring_edges[][2] = {
-            {1, 2}, {2, 3}, {3, 4}, {4, 1}, {1, 3}, {2, 4},
+            {2, 4}, {4, 3}, {3, 5}, {5, 2},
         };
 
         for (const auto& edge : ring_edges) {
             DrawLine(world_points[edge[0]], world_points[edge[1]], color);
         }
 
-        for (int i = 1; i <= 4; ++i) {
+        for (int i = 2; i <= 5; ++i) {
             DrawLine(world_points[0], world_points[i], color);
-            DrawLine(world_points[5], world_points[i], color);
+            DrawLine(world_points[1], world_points[i], color);
         }
 
-        DrawLine(world_points[5], world_points[0], color);
-        DrawSphere(world_points[5], radius * 0.5f, color, segments);
+        DrawLine(world_points[0], world_points[1], color);
         break;
     }
     }
 }
 
 void DebugRenderer::EndFrame() {
-    if (!buffers_dirty_) {
-        return;
+    if (line_buffer_dirty_) {
+        const size_t vertex_count = line_vertices_.size();
+        if (EnsureLineCapacity(vertex_count) && vertex_count > 0) {
+            line_vertex_buffer_.Upload(line_vertices_.data(), VertexBufferSize(vertex_count));
+        }
+        line_buffer_dirty_ = false;
     }
 
-    const size_t vertex_count = vertices_.size();
-    if (!EnsureVertexCapacity(vertex_count)) {
-        return;
+    if (solid_buffer_dirty_) {
+        const size_t vertex_count = solid_vertices_.size();
+        if (EnsureSolidCapacity(vertex_count) && vertex_count > 0) {
+            const VkDeviceSize upload_size = static_cast<VkDeviceSize>(vertex_count * sizeof(SolidVertex));
+            solid_vertex_buffer_.Upload(solid_vertices_.data(), upload_size);
+        }
+        solid_buffer_dirty_ = false;
     }
-
-    if (vertex_count == 0) {
-        buffers_dirty_ = false;
-        return;
-    }
-
-    vertex_buffer_.Upload(vertices_.data(), VertexBufferSize(vertex_count));
-    buffers_dirty_ = false;
 }
 
 void DebugRenderer::Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_proj) {
-    if (!initialized_ || vertices_.empty()) {
+    if (!initialized_) {
         return;
     }
 
     UpdateUniforms(view_proj);
 
-    pipeline_.Bind(cmd);
-    VkBuffer buffers[] = { vertex_buffer_.GetBuffer() };
-    VkDeviceSize offsets[] = { 0 };
-    vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.GetLayout(), 0, 1, &descriptor_set_, 0, nullptr);
-    vkCmdDraw(cmd, static_cast<uint32_t>(vertices_.size()), 1, 0, 0);
+    if (!line_vertices_.empty()) {
+        line_pipeline_.Bind(cmd);
+        VkBuffer buffers[] = { line_vertex_buffer_.GetBuffer() };
+        VkDeviceSize offsets[] = { 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, line_pipeline_.GetLayout(), 0, 1, &descriptor_set_, 0, nullptr);
+        vkCmdDraw(cmd, static_cast<uint32_t>(line_vertices_.size()), 1, 0, 0);
+    }
+
+    if (!solid_vertices_.empty()) {
+        solid_pipeline_.Bind(cmd);
+        VkBuffer buffers[] = { solid_vertex_buffer_.GetBuffer() };
+        VkDeviceSize offsets[] = { 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, solid_pipeline_.GetLayout(), 0, 1, &descriptor_set_, 0, nullptr);
+        vkCmdDraw(cmd, static_cast<uint32_t>(solid_vertices_.size()), 1, 0, 0);
+    }
 }
 
-bool DebugRenderer::EnsureVertexCapacity(size_t vertex_count) {
-    if (vertex_count <= vertex_capacity_) {
+bool DebugRenderer::EnsureLineCapacity(size_t vertex_count) {
+    if (vertex_count <= line_vertex_capacity_) {
         return true;
     }
 
-    size_t new_capacity = std::max(vertex_count, vertex_capacity_ * 2);
+    size_t new_capacity = std::max(vertex_count, line_vertex_capacity_ * 2);
     if (new_capacity == 0) {
         new_capacity = static_cast<size_t>(kDefaultVertexCapacity);
     }
 
-    vertex_buffer_.Destroy();
-    vertex_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), VertexBufferSize(new_capacity),
+    line_vertex_buffer_.Destroy();
+    line_vertex_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), VertexBufferSize(new_capacity),
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
 
-    if (vertex_buffer_.GetBuffer() == VK_NULL_HANDLE) {
+    if (line_vertex_buffer_.GetBuffer() == VK_NULL_HANDLE) {
         return false;
     }
 
-    vertex_capacity_ = new_capacity;
-    buffers_dirty_ = true;
+    line_vertex_capacity_ = new_capacity;
+    return true;
+}
+
+bool DebugRenderer::EnsureSolidCapacity(size_t vertex_count) {
+    if (vertex_count <= solid_vertex_capacity_) {
+        return true;
+    }
+
+    size_t new_capacity = std::max(vertex_count, solid_vertex_capacity_ * 2);
+    if (new_capacity == 0) {
+        new_capacity = static_cast<size_t>(kDefaultVertexCapacity);
+    }
+
+    solid_vertex_buffer_.Destroy();
+    const VkDeviceSize buffer_size = static_cast<VkDeviceSize>(new_capacity * sizeof(SolidVertex));
+    solid_vertex_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), buffer_size,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+    if (solid_vertex_buffer_.GetBuffer() == VK_NULL_HANDLE) {
+        return false;
+    }
+
+    solid_vertex_capacity_ = new_capacity;
     return true;
 }
 
@@ -510,7 +594,7 @@ bool DebugRenderer::CreateUniformBuffer() {
     return uniform_buffer_.GetBuffer() != VK_NULL_HANDLE;
 }
 
-bool DebugRenderer::CreatePipeline() {
+bool DebugRenderer::CreateLinePipeline() {
     PipelineConfig config{};
 
 #ifdef OZZ_SHADER_BINARY_DIR
@@ -550,7 +634,49 @@ bool DebugRenderer::CreatePipeline() {
     config.subpass = 0;
     config.descriptor_set_layouts.push_back(descriptor_set_layout_);
 
-    return pipeline_.Create(device_->GetDevice(), config);
+    return line_pipeline_.Create(device_->GetDevice(), config);
+}
+
+bool DebugRenderer::CreateSolidPipeline() {
+    PipelineConfig config{};
+
+#ifdef OZZ_SHADER_BINARY_DIR
+    std::filesystem::path shader_root{ OZZ_SHADER_BINARY_DIR };
+    config.vertex_shader_path = (shader_root / "debug_lines.vert.spv").string();
+    config.fragment_shader_path = (shader_root / "debug_lines.frag.spv").string();
+#else
+    config.vertex_shader_path = "src/xrAnimation/tools/renderer/shaders/debug_lines.vert.spv";
+    config.fragment_shader_path = "src/xrAnimation/tools/renderer/shaders/debug_lines.frag.spv";
+#endif
+
+    config.vertex_bindings.resize(1);
+    config.vertex_bindings[0].binding = 0;
+    config.vertex_bindings[0].stride = sizeof(SolidVertex);
+    config.vertex_bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    config.vertex_attributes.resize(2);
+    config.vertex_attributes[0].location = 0;
+    config.vertex_attributes[0].binding = 0;
+    config.vertex_attributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    config.vertex_attributes[0].offset = offsetof(SolidVertex, position);
+
+    config.vertex_attributes[1].location = 1;
+    config.vertex_attributes[1].binding = 0;
+    config.vertex_attributes[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    config.vertex_attributes[1].offset = offsetof(SolidVertex, color);
+
+    config.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    config.polygon_mode = VK_POLYGON_MODE_FILL;
+    config.cull_mode = VK_CULL_MODE_NONE;
+    config.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    config.depth_test_enable = true;
+    config.depth_write_enable = false;
+    config.blend_enable = true;
+    config.render_pass = device_->GetRenderPass();
+    config.subpass = 0;
+    config.descriptor_set_layouts.push_back(descriptor_set_layout_);
+
+    return solid_pipeline_.Create(device_->GetDevice(), config);
 }
 
 void DebugRenderer::UpdateDescriptorSet() {

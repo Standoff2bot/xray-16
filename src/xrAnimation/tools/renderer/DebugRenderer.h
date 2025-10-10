@@ -56,9 +56,16 @@ private:
         float color[4];
     };
 
+    struct SolidVertex {
+        float position[3];
+        float color[4];
+    };
+
     static VkDeviceSize VertexBufferSize(size_t vertex_count);
-    bool EnsureVertexCapacity(size_t vertex_count);
-    bool CreatePipeline();
+    bool EnsureLineCapacity(size_t vertex_count);
+    bool EnsureSolidCapacity(size_t vertex_count);
+    bool CreateLinePipeline();
+    bool CreateSolidPipeline();
     bool CreateDescriptorSetLayout();
     bool CreateDescriptorPool();
     bool CreateUniformBuffer();
@@ -72,17 +79,22 @@ private:
 
     VulkanDevice* device_ = nullptr;
 
-    VulkanBuffer vertex_buffer_;
+    VulkanBuffer line_vertex_buffer_;
+    VulkanBuffer solid_vertex_buffer_;
     VulkanBuffer uniform_buffer_;
 
-    VulkanPipeline pipeline_;
+    VulkanPipeline line_pipeline_;
+    VulkanPipeline solid_pipeline_;
     VkDescriptorSetLayout descriptor_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
 
-    xr_vector<LineVertex> vertices_;
-    size_t vertex_capacity_ = 0;
-    bool buffers_dirty_ = false;
+    xr_vector<LineVertex> line_vertices_;
+    xr_vector<SolidVertex> solid_vertices_;
+    size_t line_vertex_capacity_ = 0;
+    size_t solid_vertex_capacity_ = 0;
+    bool line_buffer_dirty_ = false;
+    bool solid_buffer_dirty_ = false;
     bool initialized_ = false;
 };
 

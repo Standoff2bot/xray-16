@@ -7,7 +7,9 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <ozz/animation/runtime/animation.h>
 #include <ozz/animation/runtime/local_to_model_job.h>
+#include <ozz/animation/runtime/sampling_job.h>
 #include <ozz/animation/runtime/skeleton.h>
 #include <ozz/base/containers/vector.h>
 #include <ozz/base/maths/vec_float.h>
@@ -45,6 +47,14 @@ inline float DistanceBetween(const ozz::math::Float4x4& a, const ozz::math::Floa
     const float dy = pa.y - pb.y;
     const float dz = pa.z - pb.z;
     return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+inline ozz::math::Float3 TransformPoint(const ozz::math::Float4x4& matrix, const ozz::math::Float3& point) {
+    const float data[4] = { point.x, point.y, point.z, 1.0f };
+    const ozz::math::SimdFloat4 simd_point = ozz::math::simd_float4::LoadPtrU(data);
+    ozz::math::Float3 result;
+    ozz::math::Store3PtrU(ozz::math::TransformPoint(matrix, simd_point), &result.x);
+    return result;
 }
 
 } // namespace
@@ -363,6 +373,11 @@ void VulkanRenderer::Shutdown() {
 
         ShutdownImGui();
 
+        if (triangle_pipeline_initialized_) {
+            triangle_pipeline_.Destroy();
+            triangle_pipeline_initialized_ = false;
+        }
+
         if (!command_buffers_.empty() && device_.GetCommandPool() != VK_NULL_HANDLE) {
             vkFreeCommandBuffers(device_.GetDevice(), device_.GetCommandPool(),
                 static_cast<uint32_t>(command_buffers_.size()), command_buffers_.data());
@@ -407,6 +422,12 @@ void VulkanRenderer::BeginFrame() {
 
     if (mesh_renderer_initialized_ && mesh_loaded_) {
         UpdateMeshAnimation(static_cast<float>(frame_delta_seconds_));
+    } else if (skeleton_loaded_) {
+        skeleton_world_transform_ = ozz::math::Float4x4::identity();
+        if (skeleton_renderer_initialized_) {
+            std::array<ozz::math::Float4x4, 1> transforms = { skeleton_world_transform_ };
+            skeleton_renderer_.SetInstanceTransforms(ozz::make_span(transforms));
+        }
     }
 
     // Get current frame info
@@ -542,6 +563,9 @@ bool VulkanRenderer::InitializeDebugMesh() {
         return false;
     }
 
+    mesh_joint_remaps_.assign(mesh.joint_remaps.begin(), mesh.joint_remaps.end());
+    mesh_inverse_bind_poses_.assign(mesh.inverse_bind_poses.begin(), mesh.inverse_bind_poses.end());
+
     mesh_instances_.clear();
     mesh_instances_.resize(1);
     mesh_instances_[0].transform = ozz::math::Float4x4::identity();
@@ -554,15 +578,18 @@ bool VulkanRenderer::InitializeDebugMesh() {
 
     mesh_bone_matrices_.resize(static_cast<size_t>(bones_per_instance) * mesh_instances_.size());
     mesh_bind_pose_palette_.resize(bones_per_instance);
+    sampled_palette_.assign(bones_per_instance, ozz::math::Float4x4::identity());
 
     for (size_t idx = 0; idx < mesh_bind_pose_palette_.size(); ++idx) {
         mesh_bind_pose_palette_[idx] = ozz::math::Float4x4::identity();
-        mesh_bone_matrices_[idx] = mesh_bind_pose_palette_[idx];
+        sampled_palette_[idx] = mesh_bind_pose_palette_[idx];
     }
 
     for (size_t i = 0; i < mesh_instances_.size(); ++i) {
         mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(i * bones_per_instance);
     }
+
+    ApplyPaletteToInstances(mesh_bind_pose_palette_);
 
     Msg("* Debug skinned mesh uploaded (%d vertices, %zu indices)",
         mesh.vertex_count(), mesh.triangle_indices.size());
@@ -581,6 +608,9 @@ bool VulkanRenderer::LoadBundleMesh(const ozz::sample::Mesh& mesh, const ozz::an
         return false;
     }
 
+    mesh_joint_remaps_.assign(mesh.joint_remaps.begin(), mesh.joint_remaps.end());
+    mesh_inverse_bind_poses_.assign(mesh.inverse_bind_poses.begin(), mesh.inverse_bind_poses.end());
+
     const uint32_t bones_per_instance = mesh_renderer_.BonesPerInstance();
     if (bones_per_instance == 0) {
         Msg("! Uploaded mesh reports zero bones; skipping mesh rendering");
@@ -593,6 +623,7 @@ bool VulkanRenderer::LoadBundleMesh(const ozz::sample::Mesh& mesh, const ozz::an
     mesh_instances_[0].bone_matrix_offset = 0;
 
     mesh_bind_pose_palette_.assign(bones_per_instance, ozz::math::Float4x4::identity());
+    sampled_palette_.assign(bones_per_instance, ozz::math::Float4x4::identity());
     mesh_bone_matrices_.assign(static_cast<size_t>(bones_per_instance) * mesh_instances_.size(), ozz::math::Float4x4::identity());
 
     if (skeleton.num_joints() == 0) {
@@ -618,9 +649,8 @@ bool VulkanRenderer::LoadBundleMesh(const ozz::sample::Mesh& mesh, const ozz::an
                 }
 
                 mesh_bind_pose_palette_[palette_index] = palette_matrix;
-                if (palette_index < mesh_bone_matrices_.size()) {
-                    mesh_bone_matrices_[palette_index] = palette_matrix;
-                }
+                sampled_palette_[palette_index] = palette_matrix;
+                mesh_bind_pose_palette_[palette_index] = palette_matrix;
             }
         }
     }
@@ -628,6 +658,8 @@ bool VulkanRenderer::LoadBundleMesh(const ozz::sample::Mesh& mesh, const ozz::an
     for (size_t i = 0; i < mesh_instances_.size(); ++i) {
         mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(i * bones_per_instance);
     }
+
+    ApplyPaletteToInstances(mesh_bind_pose_palette_);
 
     mesh_loaded_ = true;
     Msg("* Bundle mesh uploaded (%d vertices, %zu indices, bones=%u)",
@@ -642,14 +674,22 @@ bool VulkanRenderer::SetSkeletonDebugData(const ozz::animation::Skeleton& skelet
         return false;
     }
 
-    skeleton_data_ = &skeleton;
-
     const int joint_count = skeleton.num_joints();
     if (joint_count <= 0) {
         skeleton_rest_models_.clear();
+        skeleton_pose_models_.clear();
         skeleton_parents_.clear();
         bone_metadata_.clear();
+        skeleton_source_ = nullptr;
+        local_transforms_.clear();
+        model_transforms_.clear();
+        sampling_context_.Resize(0);
         skeleton_loaded_ = false;
+        skeleton_world_transform_ = ozz::math::Float4x4::identity();
+        if (skeleton_renderer_initialized_) {
+            std::array<ozz::math::Float4x4, 1> transforms = { ozz::math::Float4x4::identity() };
+            skeleton_renderer_.SetInstanceTransforms(ozz::make_span(transforms));
+        }
         return false;
     }
 
@@ -666,6 +706,17 @@ bool VulkanRenderer::SetSkeletonDebugData(const ozz::animation::Skeleton& skelet
     }
 
     skeleton_rest_models_.assign(models.begin(), models.end());
+    skeleton_pose_models_ = skeleton_rest_models_;
+    skeleton_source_ = &skeleton;
+
+    const ozz::span<const ozz::math::SoaTransform> rest_poses = skeleton.joint_rest_poses();
+    local_transforms_.resize(rest_poses.size());
+    for (size_t i = 0; i < rest_poses.size(); ++i) {
+        local_transforms_[i] = rest_poses[i];
+    }
+
+    model_transforms_.assign(skeleton_rest_models_.begin(), skeleton_rest_models_.end());
+    sampling_context_.Resize(joint_count);
 
     const auto parents = skeleton.joint_parents();
     skeleton_parents_.resize(parents.size());
@@ -676,6 +727,12 @@ bool VulkanRenderer::SetSkeletonDebugData(const ozz::animation::Skeleton& skelet
     bone_metadata_ = metadata;
     if (bone_metadata_.size() < skeleton_rest_models_.size()) {
         bone_metadata_.resize(skeleton_rest_models_.size());
+    }
+
+    skeleton_world_transform_ = ozz::math::Float4x4::identity();
+    if (skeleton_renderer_initialized_) {
+        std::array<ozz::math::Float4x4, 1> transforms = { skeleton_world_transform_ };
+        skeleton_renderer_.SetInstanceTransforms(ozz::make_span(transforms));
     }
 
     skeleton_loaded_ = true;
@@ -706,17 +763,84 @@ void VulkanRenderer::UpdateMeshAnimation(float delta_time_seconds) {
     const ozz::math::Float4x4 translation = ozz::math::Float4x4::Translation(ozz::math::Float3(0.0f, -0.5f, 0.0f));
     mesh_instances_[0].transform = translation * rotation;
 
-    if (!mesh_bind_pose_palette_.empty()) {
-        const size_t bones_per_instance = mesh_bind_pose_palette_.size();
-        for (size_t instance_index = 0; instance_index < mesh_instances_.size(); ++instance_index) {
-            const size_t offset = static_cast<size_t>(mesh_instances_[instance_index].bone_matrix_offset);
-            for (size_t bone = 0; bone < bones_per_instance; ++bone) {
-                const size_t dst_index = offset + bone;
-                if (dst_index < mesh_bone_matrices_.size()) {
-                    mesh_bone_matrices_[dst_index] = mesh_bind_pose_palette_[bone];
+    if (skeleton_renderer_initialized_ && skeleton_loaded_) {
+        std::array<ozz::math::Float4x4, 1> transforms = { mesh_instances_[0].transform };
+        skeleton_renderer_.SetInstanceTransforms(ozz::make_span(transforms));
+        skeleton_world_transform_ = transforms[0];
+    } else {
+        skeleton_world_transform_ = mesh_instances_[0].transform;
+    }
+
+    bool sampled_pose = false;
+    if (active_animation_ && skeleton_source_) {
+        const int joint_count = skeleton_source_->num_joints();
+        const int track_count = active_animation_->num_tracks();
+        if (joint_count > 0 && track_count == joint_count) {
+            const size_t soa_count = static_cast<size_t>(skeleton_source_->num_soa_joints());
+            if (local_transforms_.size() != soa_count) {
+                local_transforms_.resize(soa_count);
+            }
+
+            if (model_transforms_.size() != static_cast<size_t>(joint_count)) {
+                model_transforms_.resize(static_cast<size_t>(joint_count));
+            }
+
+            sampling_context_.Resize(track_count);
+
+            const float duration = active_animation_->duration();
+            float ratio = 0.0f;
+            if (duration > 0.0f) {
+                float sample_time = std::fmod(mesh_animation_time_, duration);
+                if (sample_time < 0.0f) {
+                    sample_time += duration;
                 }
+                ratio = sample_time / duration;
+            }
+
+            ozz::animation::SamplingJob sampling_job;
+            sampling_job.animation = active_animation_;
+            sampling_job.context = &sampling_context_;
+            sampling_job.ratio = ratio;
+            sampling_job.output = ozz::make_span(local_transforms_);
+
+            if (sampling_job.Run()) {
+                ozz::animation::LocalToModelJob ltm_job;
+                ltm_job.skeleton = skeleton_source_;
+                ltm_job.input = ozz::make_span(local_transforms_);
+                ltm_job.output = ozz::make_span(model_transforms_);
+                sampled_pose = ltm_job.Run();
+                if (!sampled_pose) {
+                    Msg("! LocalToModelJob failed while evaluating animation pose");
+                }
+            } else {
+                Msg("! SamplingJob failed while evaluating animation pose");
             }
         }
+    }
+
+    if (sampled_pose) {
+        skeleton_pose_models_.assign(model_transforms_.begin(), model_transforms_.end());
+
+        const size_t palette_size = mesh_bind_pose_palette_.size();
+        if (palette_size == mesh_inverse_bind_poses_.size() && palette_size > 0) {
+            sampled_palette_.resize(palette_size);
+            for (size_t palette_index = 0; palette_index < palette_size; ++palette_index) {
+                uint32_t joint_index = (palette_index < mesh_joint_remaps_.size())
+                    ? static_cast<uint32_t>(mesh_joint_remaps_[palette_index])
+                    : static_cast<uint32_t>(palette_index);
+                if (joint_index < model_transforms_.size()) {
+                    sampled_palette_[palette_index] = model_transforms_[joint_index] * mesh_inverse_bind_poses_[palette_index];
+                } else {
+                    sampled_palette_[palette_index] = mesh_bind_pose_palette_[palette_index];
+                }
+            }
+            ApplyPaletteToInstances(sampled_palette_);
+        } else {
+            ApplyPaletteToInstances(mesh_bind_pose_palette_);
+        }
+    } else {
+        skeleton_pose_models_ = skeleton_rest_models_;
+        ApplyPaletteToInstances(mesh_bind_pose_palette_);
     }
 }
 
@@ -747,23 +871,26 @@ void VulkanRenderer::PopulateSkeletonDebugShapes() {
         return;
     }
 
-    const size_t bone_count = skeleton_rest_models_.size();
-    if (bone_count == 0) {
+    const std::vector<ozz::math::Float4x4>& pose_models =
+        !skeleton_pose_models_.empty() ? skeleton_pose_models_ : skeleton_rest_models_;
+    const size_t pose_count = pose_models.size();
+    if (pose_count == 0) {
         return;
     }
 
-    const ozz::math::Float4 bone_color{0.95f, 0.85f, 0.25f, 1.0f};
-    const ozz::math::Float4 root_color{0.55f, 0.75f, 1.0f, 1.0f};
-    const ozz::math::Float4 joint_color{0.92f, 0.35f, 0.35f, 1.0f};
+    const ozz::math::Float4 bone_color{0.95f, 0.85f, 0.25f, 0.45f};
+    const ozz::math::Float4 root_color{0.55f, 0.75f, 1.0f, 0.55f};
+    const ozz::math::Float4 joint_color{0.92f, 0.35f, 0.35f, 0.65f};
+    const ozz::math::Float4 link_color{0.65f, 0.65f, 0.95f, 0.55f};
 
     auto compute_rest_length = [&](int bone_index) -> float {
         float result = 0.0f;
-        if (bone_index < 0 || static_cast<size_t>(bone_index) >= bone_count) {
+        if (bone_index < 0 || static_cast<size_t>(bone_index) >= skeleton_rest_models_.size()) {
             return result;
         }
 
         const int parent = (bone_index < static_cast<int>(skeleton_parents_.size())) ? skeleton_parents_[bone_index] : -1;
-        if (parent >= 0 && static_cast<size_t>(parent) < bone_count) {
+        if (parent >= 0 && static_cast<size_t>(parent) < skeleton_rest_models_.size()) {
             result = DistanceBetween(skeleton_rest_models_[bone_index], skeleton_rest_models_[parent]);
         }
 
@@ -780,8 +907,9 @@ void VulkanRenderer::PopulateSkeletonDebugShapes() {
         return result;
     };
 
-    for (size_t bone = 0; bone < bone_count; ++bone) {
-        const ozz::math::Float4x4& transform = skeleton_rest_models_[bone];
+    for (size_t bone = 0; bone < pose_count; ++bone) {
+        const ozz::math::Float4x4& pose_transform = pose_models[bone];
+        const ozz::math::Float4x4 world_transform = skeleton_world_transform_ * pose_transform;
 
         XRay::Animation::ExtendedBoneMetadata metadata_entry;
         if (bone < bone_metadata_.size()) {
@@ -796,9 +924,17 @@ void VulkanRenderer::PopulateSkeletonDebugShapes() {
             metadata_entry.rest_length = kSkeletonDefaultRadius;
         }
 
-        const ozz::math::Float3 bone_position = ExtractTranslation(transform);
+        const ozz::math::Float3 bone_position = ExtractTranslation(world_transform);
         const float joint_radius = std::clamp(metadata_entry.rest_length * 0.18f,
             kSkeletonDefaultRadius * 0.4f, metadata_entry.rest_length * 0.45f);
+        const ozz::math::Float3 tip_position = TransformPoint(world_transform, ozz::math::Float3{metadata_entry.rest_length, 0.f, 0.f});
+
+        const int parent_index = (bone < skeleton_parents_.size()) ? skeleton_parents_[bone] : -1;
+        if (parent_index >= 0 && static_cast<size_t>(parent_index) < pose_models.size()) {
+            const ozz::math::Float4x4 parent_world = skeleton_world_transform_ * pose_models[parent_index];
+            const ozz::math::Float3 parent_position = ExtractTranslation(parent_world);
+            debug_renderer_.DrawLine(parent_position, bone_position, link_color);
+        }
 
         switch (metadata_entry.shape.type) {
         case SBoneShape::stSphere:
@@ -824,10 +960,11 @@ void VulkanRenderer::PopulateSkeletonDebugShapes() {
         }
 
         const ozz::math::Float4 draw_color = (bone == 0) ? root_color : bone_color;
-        debug_renderer_.DrawBoneShape(metadata_entry, transform, draw_color, 24);
+        debug_renderer_.DrawBoneShape(metadata_entry, world_transform, draw_color, 24);
         debug_renderer_.DrawSphere(bone_position, joint_radius, joint_color, 24);
+        debug_renderer_.DrawSphere(tip_position, joint_radius * 0.6f, joint_color, 24);
         if (bone == 0) {
-            debug_renderer_.DrawAxes(transform, metadata_entry.rest_length * 0.2f,
+            debug_renderer_.DrawAxes(world_transform, metadata_entry.rest_length * 0.2f,
                 ozz::math::Float4{1.0f, 0.3f, 0.3f, 1.0f},
                 ozz::math::Float4{0.3f, 1.0f, 0.3f, 1.0f},
                 ozz::math::Float4{0.3f, 0.6f, 1.0f, 1.0f});
@@ -843,6 +980,23 @@ void VulkanRenderer::RenderDebugPrimitives(VkCommandBuffer cmd) {
     PopulateSkeletonDebugShapes();
     debug_renderer_.EndFrame();
     debug_renderer_.Render(cmd, camera_.GetViewProjectionMatrix());
+}
+
+void VulkanRenderer::ApplyPaletteToInstances(const std::vector<ozz::math::Float4x4>& palette) {
+    if (palette.empty() || mesh_instances_.empty()) {
+        return;
+    }
+
+    const size_t bones_per_instance = palette.size();
+    for (const MeshInstanceData& instance : mesh_instances_) {
+        const size_t offset = static_cast<size_t>(instance.bone_matrix_offset);
+        for (size_t bone = 0; bone < bones_per_instance; ++bone) {
+            const size_t dst_index = offset + bone;
+            if (dst_index < mesh_bone_matrices_.size()) {
+                mesh_bone_matrices_[dst_index] = palette[bone];
+            }
+        }
+    }
 }
 
 void VulkanRenderer::SetClearColor(float r, float g, float b) {
@@ -866,6 +1020,7 @@ void VulkanRenderer::SetShowSkeletonLines(bool show) {
 }
 
 void VulkanRenderer::SetShowSkinnedMesh(bool show) {
+    std::cout << "SetShowSkinnedMesh: " << show << std::endl;
     show_skinned_mesh_ = show;
 }
 
@@ -875,9 +1030,6 @@ void VulkanRenderer::SetShowDebugOverlay(bool show) {
 
 void VulkanRenderer::SetMeshRotationSpeed(float radians_per_second) {
     mesh_rotation_speed_ = radians_per_second;
-    if (mesh_renderer_initialized_ && mesh_loaded_) {
-        UpdateMeshAnimation(0.0f);
-    }
 }
 
 void VulkanRenderer::SetAnimateMesh(bool enabled) {
@@ -886,9 +1038,29 @@ void VulkanRenderer::SetAnimateMesh(bool enabled) {
 
 void VulkanRenderer::SetMeshAnimationTime(float time_seconds) {
     mesh_animation_time_ = std::max(0.0f, time_seconds);
-    if (mesh_renderer_initialized_ && mesh_loaded_) {
-        UpdateMeshAnimation(0.0f);
+}
+
+void VulkanRenderer::SetActiveAnimation(const ozz::animation::Animation* animation) {
+    active_animation_ = animation;
+    if (active_animation_ && skeleton_source_) {
+        if (active_animation_->num_tracks() != skeleton_source_->num_joints()) {
+            Msg("! Active animation tracks (%d) mismatch skeleton joints (%d); ignoring animation",
+                active_animation_->num_tracks(), skeleton_source_->num_joints());
+            active_animation_ = nullptr;
+            sampling_context_.Resize(0);
+            sampled_palette_ = mesh_bind_pose_palette_;
+            skeleton_pose_models_ = skeleton_rest_models_;
+            ApplyPaletteToInstances(mesh_bind_pose_palette_);
+            return;
+        }
+        sampling_context_.Resize(active_animation_->num_tracks());
+        mesh_animation_time_ = 0.0f;
+    } else {
+        sampling_context_.Resize(0);
+        skeleton_pose_models_ = skeleton_rest_models_;
+        ApplyPaletteToInstances(mesh_bind_pose_palette_);
     }
+    sampled_palette_ = mesh_bind_pose_palette_;
 }
 
 } // namespace renderer

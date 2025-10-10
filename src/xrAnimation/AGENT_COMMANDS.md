@@ -3,9 +3,9 @@
 ## Run Ozz Tests
 - Context: Keep parity checks green while iterating on the runtime façade/visual.
 - Workflow:
-  1. Build tests with the standard tools cache: `cmake --build xray-16/ozz_utils --target ozz_kinematics_tests xrAnimation_converter_tests -j`.
-  2. Run the full suite: `ctest --test-dir xray-16/ozz_utils --output-on-failure`.
-  3. Execute a single suite when iterating: `xray-16/ozz_utils/bin/Debug/ozz_kinematics_tests --gtest_filter=OzzKinematicsParity.*` (adjust path/config as needed).
+  1. Build tests with the standard tools cache: `cmake --build ozz_utils --target ozz_kinematics_tests xrAnimation_converter_tests -j`.
+  2. Run the full suite: `ctest --test-dir ozz_utils --output-on-failure`.
+  3. Execute a single suite when iterating: `ozz_utils/bin/Debug/ozz_kinematics_tests --gtest_filter=OzzKinematicsParity.*` (adjust path/config as needed).
 
 ## Enable Ozz Visual Bundles
 - Context: Smoke-test `.ozzx` bundles inside the engine without touching legacy assets.
@@ -89,18 +89,18 @@ for row in rows:
 ## Ozz Bind Pose Dump (ozz_animation_viewer)
 - Context: Need bind-pose translations and Euler rotations directly from ozz runtime without legacy debug binaries.
 - Workflow:
-  1. Reconfigure debug build if needed: `cmake -S xray-16 -B xray-16/ozz_utils -DCMAKE_BUILD_TYPE=Debug`.
-  2. Rebuild the viewer: `cmake --build xray-16/ozz_utils --target ozz_animation_viewer -j` (target skipped when using Visual Studio generators).
+  1. Reconfigure debug build if needed: `cmake -S xray-16 -B ozz_utils -DCMAKE_BUILD_TYPE=Debug`.
+  2. Rebuild the viewer: `cmake --build ozz_utils --target ozz_animation_viewer -j` (target skipped when using Visual Studio generators).
   3. Run the viewer headless (ensure `LD_LIBRARY_PATH` points at the build bin dir):
-     `LD_LIBRARY_PATH=xray-16/ozz_utils/bin/Debug xray-16/ozz_utils/bin/Debug/ozz_animation_viewer --bundle=asset_tests/stalker_hero.ozzx --render=false --max_idle_loops=1`.
+     `LD_LIBRARY_PATH=ozz_utils/bin/Debug ozz_utils/bin/Debug/ozz_animation_viewer --bundle=asset_tests/stalker_hero.ozzx --render=false --max_idle_loops=1`.
   4. Capture the `=== OZZ BIND POSE TABLE ===` output for comparisons.
 
 ## Animation JSON Dump (ozz_animation_viewer)
 - Context: Need frame-by-frame world transforms straight from ozz to diff against Blender exports.
 - Workflow:
-  1. Build the viewer (`cmake --build xray-16/ozz_utils --target ozz_animation_viewer -j`, not available with Visual Studio generators).
+  1. Build the viewer (`cmake --build ozz_utils --target ozz_animation_viewer -j`, not available with Visual Studio generators).
   2. Run with skeleton/animation arguments plus `--dump-animation-json=<path>`; for example:
-    `./xray-16/ozz_utils/bin/Debug/ozz_animation_viewer --bundle=asset_tests/stalker_hero.ozzx --animation=asset_tests/critical_hit_grup_1.ozz --render=false --max_idle_loops=1 --dump-animation-json=xray-16/res/testdata/npc/critical_hit_grup_1_world.json`.
+    `./ozz_utils/bin/Debug/ozz_animation_viewer --bundle=asset_tests/stalker_hero.ozzx --animation=asset_tests/critical_hit_grup_1.ozz --render=false --max_idle_loops=1 --dump-animation-json=xray-16/res/testdata/npc/critical_hit_grup_1_world.json`.
   3. The viewer samples every animation time point (including first/last frame) and writes a JSON blob with per-joint translation, rotation (quaternion), and scale, ready for diffing.
 
 ## Blender Bind Pose Dump (execute_blender_code)

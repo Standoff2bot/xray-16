@@ -78,7 +78,7 @@ The refactoring maintains full API compatibility while improving performance and
 
 ## Verification Status
 - 2025-09-21: `OzzKinematicsParity.AnimationPoseMatchesLegacySkeleton` passes using the converted `stalker_hero_1.ozz` / `critical_hit_grup_1.ozz` pair. Run
-  `ctest --output-on-failure --test-dir xray-16/ozz_utils/src/xrAnimation/tests -C Debug`
+  `ctest --output-on-failure --test-dir ozz_utils/src/xrAnimation/tests -C Debug`
   after rebuilding to confirm the regression suite remains green.
 - 2025-09-21: `COzzKinematicsVisual` can now hydrate `OzzKinematics` directly from `.ozzx` bundles; `OzzKinematicsBootstrap.InitializesFromOzzxBundleSkeleton`
   guards the loader by comparing bundle output against the existing `.ozz` reference skeleton.

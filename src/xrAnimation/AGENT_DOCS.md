@@ -35,8 +35,8 @@
 ## Build Systems & Quick Start
 - Always prefer Debug or Mixed builds for iterative work.
 - OpenXRay build (from repo root):
-  - `cmake -S xray-16 -B xray-16/ozz_utils -DCMAKE_BUILD_TYPE=Debug`
-  - `cmake --build xray-16/ozz_utils -j$(nproc)`
+  - `cmake -S xray-16 -B ozz_utils -DCMAKE_BUILD_TYPE=Debug`
+  - `cmake --build ozz_utils -j$(nproc)`
 - Notable CMake options: `MEMORY_ALLOCATOR` (`mimalloc` default), `XRAY_USE_LUAJIT` (ON by default).
 - Reference engine (`omp-engine/`) builds via Visual Studio 2019+ solution `src/engine.sln` (v142 toolset).
 
