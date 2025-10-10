@@ -13,6 +13,7 @@
 #include "ozz/base/span.h"
 
 #include "AnimationECS_Registry.h"
+#include "AnimationECS_IK.h"
 #include "entt/entt.hpp"
 
 #include <filesystem>
