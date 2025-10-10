@@ -24,7 +24,7 @@
 
 #include "xrCore/FMesh.hpp"
 #include "xrCore/FS.h"
-#include "xrCore/Log.h"
+#include "xrCore/log.h"
 #include "xrCore/_std_extensions.h"
 #include "xrCore/xr_ini.h"
 
