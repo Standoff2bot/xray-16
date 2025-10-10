@@ -1,8 +1,12 @@
 #include "VulkanRenderer.h"
 
+#include "framework/mesh.h"
 #include <GLFW/glfw3.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <ozz/base/maths/vec_float.h>
 
 // Simple logging replacement
 #define Msg(...) printf(__VA_ARGS__), printf("\n")
@@ -27,6 +31,10 @@ bool VulkanRenderer::Initialize(GLFWwindow* window) {
         return false;
     }
 
+    window_ = window;
+    VkExtent2D extent = device_.GetSwapchainExtent();
+    camera_.Initialize(static_cast<float>(extent.width), static_cast<float>(extent.height));
+
     // Create command buffers (one per swapchain image)
     uint32_t image_count = device_.GetSwapchainImageCount();
     command_buffers_.resize(image_count);
@@ -47,6 +55,21 @@ bool VulkanRenderer::Initialize(GLFWwindow* window) {
     if (!InitializeTrianglePipeline()) {
         Msg("! Failed to initialize triangle pipeline");
         return false;
+    }
+
+    skeleton_renderer_initialized_ = skeleton_renderer_.Initialize(&device_);
+    if (!skeleton_renderer_initialized_) {
+        Msg("! Failed to initialize skeleton renderer");
+    }
+
+    mesh_renderer_initialized_ = mesh_renderer_.Initialize(&device_);
+    if (!mesh_renderer_initialized_) {
+        Msg("! Failed to initialize mesh renderer");
+    } else {
+        mesh_debug_loaded_ = InitializeDebugMesh();
+        if (!mesh_debug_loaded_) {
+            Msg("! Failed to upload debug skinned mesh");
+        }
     }
 
     Msg("* Vulkan Renderer initialized successfully");
@@ -101,6 +124,20 @@ bool VulkanRenderer::InitializeTrianglePipeline() {
 }
 
 void VulkanRenderer::Shutdown() {
+    if (mesh_renderer_initialized_) {
+        mesh_renderer_.Shutdown();
+        mesh_renderer_initialized_ = false;
+        mesh_debug_loaded_ = false;
+        mesh_instances_.clear();
+        mesh_bone_matrices_.clear();
+    }
+
+    if (skeleton_renderer_initialized_) {
+        skeleton_renderer_.Shutdown();
+        skeleton_renderer_initialized_ = false;
+    }
+    window_ = nullptr;
+
     if (device_.GetDevice() != VK_NULL_HANDLE) {
         device_.WaitIdle();
 
@@ -115,6 +152,14 @@ void VulkanRenderer::Shutdown() {
 }
 
 void VulkanRenderer::BeginFrame() {
+    if (window_) {
+        camera_.Update(window_, 0.0f);
+    }
+
+    if (mesh_renderer_initialized_ && mesh_debug_loaded_) {
+        UpdateMeshAnimation(static_cast<float>(glfwGetTime()));
+    }
+
     device_.BeginFrame();
 
     // Get current frame info
@@ -203,6 +248,101 @@ void VulkanRenderer::EndFrame() {
     device_.EndFrame();
 }
 
+bool VulkanRenderer::InitializeDebugMesh() {
+    if (!mesh_renderer_initialized_) {
+        return false;
+    }
+
+    ozz::sample::Mesh mesh;
+    mesh.parts.resize(1);
+    ozz::sample::Mesh::Part& part = mesh.parts.back();
+
+    constexpr int kVertexCount = 3;
+    part.positions.resize(static_cast<size_t>(kVertexCount * ozz::sample::Mesh::Part::kPositionsCpnts));
+    part.normals.resize(static_cast<size_t>(kVertexCount * ozz::sample::Mesh::Part::kNormalsCpnts));
+    part.uvs.resize(static_cast<size_t>(kVertexCount * ozz::sample::Mesh::Part::kUVsCpnts));
+
+    // Simple upright triangle
+    part.positions[0] = -0.5f; part.positions[1] = 0.0f; part.positions[2] = 0.0f;
+    part.positions[3] = 0.5f;  part.positions[4] = 0.0f; part.positions[5] = 0.0f;
+    part.positions[6] = 0.0f;  part.positions[7] = 1.0f; part.positions[8] = 0.0f;
+
+    // Normals pointing forward
+    part.normals[0] = 0.0f; part.normals[1] = 0.0f; part.normals[2] = 1.0f;
+    part.normals[3] = 0.0f; part.normals[4] = 0.0f; part.normals[5] = 1.0f;
+    part.normals[6] = 0.0f; part.normals[7] = 0.0f; part.normals[8] = 1.0f;
+
+    // Basic UVs
+    part.uvs[0] = 0.0f; part.uvs[1] = 0.0f;
+    part.uvs[2] = 1.0f; part.uvs[3] = 0.0f;
+    part.uvs[4] = 0.5f; part.uvs[5] = 1.0f;
+
+    // One influence per vertex
+    part.joint_indices.resize(kVertexCount);
+    std::fill(part.joint_indices.begin(), part.joint_indices.end(), static_cast<uint16_t>(0));
+    part.joint_weights.clear(); // Automatically infers final weight
+
+    mesh.triangle_indices.push_back(0);
+    mesh.triangle_indices.push_back(1);
+    mesh.triangle_indices.push_back(2);
+
+    mesh.inverse_bind_poses.push_back(ozz::math::Float4x4::identity());
+    mesh.joint_remaps.push_back(0);
+
+    if (!mesh_renderer_.UploadMesh(mesh)) {
+        return false;
+    }
+
+    mesh_instances_.clear();
+    mesh_instances_.resize(1);
+    mesh_instances_[0].transform = ozz::math::Float4x4::identity();
+    mesh_instances_[0].bone_matrix_offset = 0;
+
+    const uint32_t bones_per_instance = mesh_renderer_.BonesPerInstance();
+    if (bones_per_instance == 0) {
+        return false;
+    }
+
+    mesh_bone_matrices_.resize(static_cast<size_t>(bones_per_instance) * mesh_instances_.size());
+    for (auto& matrix : mesh_bone_matrices_) {
+        matrix = ozz::math::Float4x4::identity();
+    }
+
+    for (size_t i = 0; i < mesh_instances_.size(); ++i) {
+        mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(i * bones_per_instance);
+    }
+
+    Msg("* Debug skinned mesh uploaded (%d vertices, %zu indices)",
+        mesh.vertex_count(), mesh.triangle_indices.size());
+
+    return true;
+}
+
+void VulkanRenderer::RenderSkinnedMeshes(VkCommandBuffer cmd) {
+    if (!mesh_renderer_initialized_ || !mesh_debug_loaded_) {
+        return;
+    }
+
+    mesh_renderer_.Render(cmd, camera_.GetViewProjectionMatrix(), mesh_instances_, mesh_bone_matrices_);
+}
+
+void VulkanRenderer::UpdateMeshAnimation(float time_seconds) {
+    if (mesh_instances_.empty()) {
+        return;
+    }
+
+    const float rotation_speed = 0.75f;
+    const float angle = time_seconds * rotation_speed;
+
+    const ozz::math::Float4x4 rotation = ozz::math::Float4x4::FromAxisAngle(ozz::math::Float3::y_axis(), angle);
+    const ozz::math::Float4x4 translation = ozz::math::Float4x4::Translation(ozz::math::Float3(0.0f, -0.5f, 0.0f));
+    mesh_instances_[0].transform = translation * rotation;
+
+    if (!mesh_bone_matrices_.empty()) {
+        mesh_bone_matrices_[0] = ozz::math::Float4x4::identity();
+    }
+}
+
 void VulkanRenderer::RenderTriangle() {
     if (!triangle_pipeline_initialized_) {
         return;
@@ -216,6 +356,12 @@ void VulkanRenderer::RenderTriangle() {
 
     // Draw triangle (3 vertices, 1 instance, hardcoded in shader)
     vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    RenderSkinnedMeshes(cmd);
+
+    if (skeleton_renderer_initialized_) {
+        skeleton_renderer_.Render(cmd, camera_.GetViewProjectionMatrix());
+    }
 }
 
 void VulkanRenderer::SetClearColor(float r, float g, float b) {

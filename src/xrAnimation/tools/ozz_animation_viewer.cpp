@@ -35,10 +35,140 @@
 #include "stdafx.h"
 #include <GLFW/glfw3.h>
 #include "renderer/VulkanRenderer.h"
+
+#include <array>
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include "../OzzBundle.h"
+#include "ozz/animation/runtime/local_to_model_job.h"
+#include "ozz/animation/runtime/skeleton.h"
+#include "ozz/base/containers/vector.h"
+#include "ozz/base/io/archive.h"
+#include "ozz/base/io/stream.h"
+#include "ozz/base/maths/soa_transform.h"
+#include "ozz/base/maths/simd_math.h"
+#include "ozz/base/maths/vec_float.h"
+#include "ozz/base/span.h"
 
 // Simple logging replacement
 #define Msg(...) printf(__VA_ARGS__), printf("\n")
+
+namespace {
+
+std::string ParseBundleArgument(int argc, const char** argv) {
+    const std::string prefix = "--bundle=";
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg.rfind(prefix, 0) == 0) {
+            return arg.substr(prefix.size());
+        }
+        if (arg == "--bundle" && i + 1 < argc) {
+            return argv[i + 1];
+        }
+    }
+    return {};
+}
+
+bool LoadSkeletonFromBytes(const std::vector<std::uint8_t>& bytes, ozz::animation::Skeleton* skeleton) {
+    if (!skeleton) {
+        return false;
+    }
+
+    ozz::io::MemoryStream stream;
+    if (!bytes.empty() && !stream.Write(bytes.data(), bytes.size())) {
+        return false;
+    }
+    stream.Seek(0, ozz::io::Stream::kSet);
+
+    ozz::io::IArchive archive(&stream);
+    if (!archive.TestTag<ozz::animation::Skeleton>()) {
+        return false;
+    }
+    archive >> *skeleton;
+    return skeleton->num_joints() > 0;
+}
+
+std::vector<xray::animation::renderer::SkeletonLinePoint> BuildSkeletonLinePoints(const ozz::animation::Skeleton& skeleton) {
+    std::vector<xray::animation::renderer::SkeletonLinePoint> points;
+    const int joint_count = skeleton.num_joints();
+    if (joint_count <= 0) {
+        return points;
+    }
+
+    ozz::vector<ozz::math::Float4x4> models(joint_count);
+    ozz::animation::LocalToModelJob job;
+    job.skeleton = &skeleton;
+    job.input = skeleton.joint_rest_poses();
+    job.output = ozz::make_span(models);
+    if (!job.Run()) {
+        return {};
+    }
+
+    auto parents = skeleton.joint_parents();
+    for (int joint = 0; joint < joint_count; ++joint) {
+        const int parent = parents[joint];
+        if (parent < 0) {
+            continue;
+        }
+
+        xray::animation::renderer::SkeletonLinePoint parent_point{};
+        xray::animation::renderer::SkeletonLinePoint child_point{};
+        ozz::math::Store3PtrU(models[parent].cols[3], &parent_point.x);
+        ozz::math::Store3PtrU(models[joint].cols[3], &child_point.x);
+        points.push_back(parent_point);
+        points.push_back(child_point);
+    }
+
+    return points;
+}
+
+void InitializeSkeletonFromBundle(const std::string& bundle_arg, xray::animation::renderer::VulkanRenderer& renderer) {
+    if (bundle_arg.empty()) {
+        return;
+    }
+
+    if (!renderer.GetSkeletonRenderer().IsInitialized()) {
+        Msg("! Skeleton renderer not initialized; bundle '%s' ignored", bundle_arg.c_str());
+        return;
+    }
+
+    std::filesystem::path bundle_path = std::filesystem::absolute(std::filesystem::path(bundle_arg));
+    XRay::Animation::OzzxBundle bundle;
+    if (!XRay::Animation::ReadOzzxBundle(bundle_path, bundle)) {
+        Msg("! Failed to read bundle: %s", bundle_path.string().c_str());
+        return;
+    }
+
+    ozz::animation::Skeleton skeleton;
+    if (!LoadSkeletonFromBytes(bundle.skeleton, &skeleton)) {
+        Msg("! Failed to load skeleton archive from bundle: %s", bundle_path.string().c_str());
+        return;
+    }
+
+    auto line_points = BuildSkeletonLinePoints(skeleton);
+    if (line_points.empty()) {
+        Msg("! No skeleton line data generated for bundle: %s", bundle_path.string().c_str());
+        return;
+    }
+
+    if (!renderer.GetSkeletonRenderer().SetSkeletonLines(ozz::make_span(line_points))) {
+        Msg("! Failed to upload skeleton line data to renderer");
+        return;
+    }
+
+    std::array<ozz::math::Float4x4, 1> transforms = {ozz::math::Float4x4::identity()};
+    renderer.GetSkeletonRenderer().SetInstanceTransforms(ozz::make_span(transforms));
+
+    Msg("* Loaded skeleton bundle: %s (joints=%d, line segments=%zu)",
+        bundle_path.string().c_str(), skeleton.num_joints(), line_points.size() / 2);
+}
+
+} // namespace
+
 
 int main(int argc, const char** argv) {
     Msg("* Starting Vulkan Minimal Test...");
@@ -68,6 +198,9 @@ int main(int argc, const char** argv) {
         glfwTerminate();
         return -1;
     }
+
+    const std::string bundle_arg = ParseBundleArgument(argc, argv);
+    InitializeSkeletonFromBundle(bundle_arg, renderer);
 
     Msg("* Vulkan renderer initialized successfully!");
     Msg("* Rendering loop started - you should see a dark blue window");

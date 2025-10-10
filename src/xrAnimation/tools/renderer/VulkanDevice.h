@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 #include <vector>
 #include <cstdint>
 
@@ -39,6 +40,7 @@ public:
     VkSwapchainKHR GetSwapchain() const { return swapchain_; }
     VkRenderPass GetRenderPass() const { return render_pass_; }
     VkCommandPool GetCommandPool() const { return command_pool_; }
+    VmaAllocator GetAllocator() const { return allocator_; }
 
     // Current frame data
     VkFramebuffer GetCurrentFramebuffer() const;
@@ -83,6 +85,7 @@ private:
     bool CreateFramebuffers();
     bool CreateSyncObjects();
     bool CreateCommandPool();
+    bool CreateAllocator();
 
     // Helper functions
     QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device);
@@ -136,6 +139,9 @@ private:
 
     // Command pool
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
+
+    // Memory allocator
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
 
     // Synchronization (in-flight frames)
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;

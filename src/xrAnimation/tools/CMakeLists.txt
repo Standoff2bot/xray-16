@@ -109,6 +109,7 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
         renderer/VulkanCommandBuffer.cpp
         renderer/VulkanDescriptors.cpp
         renderer/VulkanPipeline.cpp
+        renderer/MeshData.cpp
         renderer/InstancedSkeletonRenderer.cpp
         renderer/InstancedMeshRenderer.cpp
         renderer/DebugRenderer.cpp
@@ -166,13 +167,11 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
         add_shader(ozz_animation_viewer triangle.vert)
         add_shader(ozz_animation_viewer triangle.frag)
 
-        # TODO: Add more shaders as they are implemented
-        # add_shader(ozz_animation_viewer skeleton_instanced.vert)
-        # add_shader(ozz_animation_viewer skeleton_instanced.frag)
-        # add_shader(ozz_animation_viewer skinned_mesh_instanced.vert)
-        # add_shader(ozz_animation_viewer skinned_mesh_instanced.frag)
-        # add_shader(ozz_animation_viewer debug_lines.vert)
-        # add_shader(ozz_animation_viewer debug_lines.frag)
+        # Skeleton visualization shaders
+        add_shader(ozz_animation_viewer skeleton_instanced.vert)
+        add_shader(ozz_animation_viewer skeleton_instanced.frag)
+
+        # Skinned mesh instanced shaders
     endif()
     # Set properties
     set_target_properties(ozz_animation_viewer PROPERTIES

@@ -53,9 +53,12 @@ void VulkanBuffer::Destroy() {
         }
 
         vmaDestroyBuffer(allocator_, buffer_, allocation_);
-        buffer_ = VK_NULL_HANDLE;
-        allocation_ = VK_NULL_HANDLE;
     }
+
+    buffer_ = VK_NULL_HANDLE;
+    allocation_ = VK_NULL_HANDLE;
+    allocator_ = VK_NULL_HANDLE;
+    size_ = 0;
 }
 
 void* VulkanBuffer::Map() {

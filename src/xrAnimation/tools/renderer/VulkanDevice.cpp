@@ -51,6 +51,7 @@ bool VulkanDevice::Initialize(GLFWwindow* window, bool enable_validation) {
     if (!CreateDepthResources()) return false;
     if (!CreateFramebuffers()) return false;
     if (!CreateCommandPool()) return false;
+    if (!CreateAllocator()) return false;
     if (!CreateSyncObjects()) return false;
 
     Msg("* Vulkan device initialized successfully");
@@ -71,6 +72,11 @@ void VulkanDevice::Shutdown() {
         if (command_pool_) vkDestroyCommandPool(device_, command_pool_, nullptr);
 
         CleanupSwapchain();
+
+        if (allocator_) {
+            vmaDestroyAllocator(allocator_);
+            allocator_ = VK_NULL_HANDLE;
+        }
 
         if (device_) vkDestroyDevice(device_, nullptr);
     }
@@ -601,6 +607,50 @@ bool VulkanDevice::CreateCommandPool() {
     VkResult result = vkCreateCommandPool(device_, &pool_info, nullptr, &command_pool_);
     if (result != VK_SUCCESS) {
         Msg("! Failed to create command pool");
+        return false;
+    }
+
+    return true;
+}
+
+bool VulkanDevice::CreateAllocator() {
+    if (allocator_ != VK_NULL_HANDLE) {
+        vmaDestroyAllocator(allocator_);
+        allocator_ = VK_NULL_HANDLE;
+    }
+
+    VmaVulkanFunctions functions = {};
+    functions.vkGetInstanceProcAddr = &vkGetInstanceProcAddr;
+    functions.vkGetDeviceProcAddr = &vkGetDeviceProcAddr;
+    functions.vkGetPhysicalDeviceProperties = vkGetPhysicalDeviceProperties;
+    functions.vkGetPhysicalDeviceMemoryProperties = vkGetPhysicalDeviceMemoryProperties;
+    functions.vkAllocateMemory = vkAllocateMemory;
+    functions.vkFreeMemory = vkFreeMemory;
+    functions.vkMapMemory = vkMapMemory;
+    functions.vkUnmapMemory = vkUnmapMemory;
+    functions.vkFlushMappedMemoryRanges = vkFlushMappedMemoryRanges;
+    functions.vkInvalidateMappedMemoryRanges = vkInvalidateMappedMemoryRanges;
+    functions.vkBindBufferMemory = vkBindBufferMemory;
+    functions.vkBindImageMemory = vkBindImageMemory;
+    functions.vkGetBufferMemoryRequirements = vkGetBufferMemoryRequirements;
+    functions.vkGetImageMemoryRequirements = vkGetImageMemoryRequirements;
+    functions.vkCreateBuffer = vkCreateBuffer;
+    functions.vkDestroyBuffer = vkDestroyBuffer;
+    functions.vkCreateImage = vkCreateImage;
+    functions.vkDestroyImage = vkDestroyImage;
+    functions.vkCmdCopyBuffer = vkCmdCopyBuffer;
+
+    VmaAllocatorCreateInfo allocator_info = {};
+    allocator_info.instance = instance_;
+    allocator_info.physicalDevice = physical_device_;
+    allocator_info.device = device_;
+    allocator_info.pVulkanFunctions = &functions;
+    allocator_info.vulkanApiVersion = VK_API_VERSION_1_2;
+
+    VkResult result = vmaCreateAllocator(&allocator_info, &allocator_);
+    if (result != VK_SUCCESS) {
+        Msg("! Failed to create VMA allocator (error: %d)", result);
+        allocator_ = VK_NULL_HANDLE;
         return false;
     }
 
