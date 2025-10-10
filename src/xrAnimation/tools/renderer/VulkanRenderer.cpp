@@ -42,7 +42,54 @@ bool VulkanRenderer::Initialize(GLFWwindow* window) {
         return false;
     }
 
+    // Initialize triangle pipeline for testing
+    if (!InitializeTrianglePipeline()) {
+        Msg("! Failed to initialize triangle pipeline");
+        return false;
+    }
+
     Msg("* Vulkan Renderer initialized successfully");
+    return true;
+}
+
+bool VulkanRenderer::InitializeTrianglePipeline() {
+    PipelineConfig config;
+
+    // Shader paths (relative to build directory)
+    config.vertex_shader_path = "src/xrAnimation/tools/shaders/triangle.vert.spv";
+    config.fragment_shader_path = "src/xrAnimation/tools/shaders/triangle.frag.spv";
+
+    // No vertex input (triangle vertices are hardcoded in shader)
+    config.vertex_bindings.clear();
+    config.vertex_attributes.clear();
+
+    // Triangle topology
+    config.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    config.polygon_mode = VK_POLYGON_MODE_FILL;
+    config.cull_mode = VK_CULL_MODE_NONE;  // No culling for simple triangle
+    config.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+    // Depth test enabled
+    config.depth_test_enable = true;
+    config.depth_write_enable = true;
+    config.depth_compare_op = VK_COMPARE_OP_LESS;
+
+    // No blending
+    config.blend_enable = false;
+
+    // Use device render pass
+    config.render_pass = device_.GetRenderPass();
+    config.subpass = 0;
+
+    // No descriptor sets for simple triangle
+    config.descriptor_set_layouts.clear();
+
+    // Create pipeline
+    if (!triangle_pipeline_.Create(device_.GetDevice(), config)) {
+        return false;
+    }
+
+    triangle_pipeline_initialized_ = true;
     return true;
 }
 
@@ -93,7 +140,20 @@ void VulkanRenderer::BeginFrame() {
 
     vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
 
-    // TODO: Actual rendering commands go here
+    // Set dynamic viewport and scissor
+    VkViewport viewport = {};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(device_.GetSwapchainExtent().width);
+    viewport.height = static_cast<float>(device_.GetSwapchainExtent().height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor = {};
+    scissor.offset = {0, 0};
+    scissor.extent = device_.GetSwapchainExtent();
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
 
 void VulkanRenderer::EndFrame() {
@@ -136,9 +196,24 @@ void VulkanRenderer::EndFrame() {
     device_.EndFrame();
 }
 
+void VulkanRenderer::RenderTriangle() {
+    if (!triangle_pipeline_initialized_) {
+        return;
+    }
+
+    uint32_t image_index = device_.GetCurrentImageIndex();
+    VkCommandBuffer cmd = command_buffers_[image_index];
+
+    // Bind triangle pipeline
+    triangle_pipeline_.Bind(cmd);
+
+    // Draw triangle (3 vertices, 1 instance, hardcoded in shader)
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+}
+
 void VulkanRenderer::SetClearColor(float r, float g, float b) {
     clear_color_[0] = r;
-    clear_color_[1] = r;
+    clear_color_[1] = g;
     clear_color_[2] = b;
 }
 

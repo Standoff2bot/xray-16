@@ -78,7 +78,8 @@ int main(int argc, const char** argv) {
 
         // Render frame
         renderer.BeginFrame();
-        // Clear screen happens in BeginFrame
+        // Render triangle test
+        renderer.RenderTriangle();
         renderer.EndFrame();
     }
 

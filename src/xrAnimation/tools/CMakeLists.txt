@@ -157,10 +157,19 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
 
     # Add shaders if compiler is available
     if(GLSLC)
+        # Triangle test shaders (validation)
+        add_shader(ozz_animation_viewer triangle.vert)
+        add_shader(ozz_animation_viewer triangle.frag)
+
+        # Skeleton rendering shaders
         add_shader(ozz_animation_viewer skeleton_instanced.vert)
         add_shader(ozz_animation_viewer skeleton_instanced.frag)
+
+        # Skinned mesh shaders
         add_shader(ozz_animation_viewer skinned_mesh_instanced.vert)
         add_shader(ozz_animation_viewer skinned_mesh_instanced.frag)
+
+        # Debug visualization shaders
         add_shader(ozz_animation_viewer debug_lines.vert)
         add_shader(ozz_animation_viewer debug_lines.frag)
     endif()
