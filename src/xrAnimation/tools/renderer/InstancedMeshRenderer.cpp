@@ -24,7 +24,7 @@ struct CameraUBO {
 };
 
 struct Influence {
-    uint32_t joint = 0;
+    uint32_t palette = 0;
     float weight = 0.0f;
 };
 
@@ -122,6 +122,13 @@ bool InstancedMeshRenderer::UploadMesh(const ozz::sample::Mesh& mesh) {
 
     std::vector<Influence> influences_buffer;
     influences_buffer.reserve(8);
+    size_t max_palette_index = 0;
+    size_t max_requested_palette_index = 0;
+    bool reported_invalid_joint_index = false;
+
+    const size_t palette_capacity = !mesh.inverse_bind_poses.empty()
+        ? mesh.inverse_bind_poses.size()
+        : mesh.joint_remaps.size();
 
     for (const auto& part : mesh.parts) {
         const int vertex_count = part.vertex_count();
@@ -179,10 +186,24 @@ bool InstancedMeshRenderer::UploadMesh(const ozz::sample::Mesh& mesh) {
                 float accum_weight = 0.0f;
                 for (int i = 0; i < influences_per_vertex; ++i) {
                     const uint16_t raw_joint_index = part.joint_indices[v * influences_per_vertex + i];
-                    uint32_t joint_index = raw_joint_index;
+                    uint32_t palette_index = 0;
+                    max_requested_palette_index = std::max<size_t>(max_requested_palette_index, raw_joint_index);
 
-                    if (!mesh.joint_remaps.empty() && raw_joint_index < mesh.joint_remaps.size()) {
-                        joint_index = mesh.joint_remaps[raw_joint_index];
+                    if (palette_capacity > 0) {
+                        if (raw_joint_index >= palette_capacity) {
+                            palette_index = static_cast<uint32_t>(palette_capacity - 1);
+                            if (!reported_invalid_joint_index) {
+                                Msg("! Mesh joint index %u exceeds palette size %zu; clamping to %u",
+                                    static_cast<unsigned>(raw_joint_index),
+                                    palette_capacity,
+                                    palette_index);
+                                reported_invalid_joint_index = true;
+                            }
+                        } else {
+                            palette_index = raw_joint_index;
+                        }
+                    } else {
+                        palette_index = 0;
                     }
 
                     float weight = 0.0f;
@@ -194,7 +215,8 @@ bool InstancedMeshRenderer::UploadMesh(const ozz::sample::Mesh& mesh) {
                     }
 
                     if (weight > 0.0f) {
-                        influences_buffer.push_back({joint_index, weight});
+                        influences_buffer.push_back({palette_index, weight});
+                        max_palette_index = std::max<size_t>(max_palette_index, palette_index);
                     }
                 }
 
@@ -208,7 +230,7 @@ bool InstancedMeshRenderer::UploadMesh(const ozz::sample::Mesh& mesh) {
                     float total_weight = 0.0f;
 
                     for (size_t i = 0; i < copy_count; ++i) {
-                        dst.bone_indices[i] = influences_buffer[i].joint;
+                        dst.bone_indices[i] = influences_buffer[i].palette;
                         dst.bone_weights[i] = influences_buffer[i].weight;
                         total_weight += influences_buffer[i].weight;
                     }
@@ -228,6 +250,10 @@ bool InstancedMeshRenderer::UploadMesh(const ozz::sample::Mesh& mesh) {
                 dst.bone_weights[0] = 1.0f;
             }
         }
+    }
+
+    if (palette_capacity > 0 && max_requested_palette_index >= palette_capacity) {
+        Msg("! Mesh requested palette index %zu but capacity is %zu", max_requested_palette_index, palette_capacity);
     }
 
     if (vertex_cursor != vertices.size()) {

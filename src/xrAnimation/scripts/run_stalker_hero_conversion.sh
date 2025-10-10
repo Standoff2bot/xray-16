@@ -22,6 +22,7 @@ Options:
   --build-dir PATH        Directory containing xray_to_ozz_converter (default: auto-detected).
   --output-dir PATH       Destination for generated assets (default: tests/testdata/<category>).
   --texture-root PATH     Texture root passed to ozz_animation_viewer.
+  --fsltx PATH            Override fsgame.ltx used for filesystem mounting.
   --viewer / --no-viewer  Force enable/disable viewer launch (default: auto if viewer exists).
   --help                  Show this help message.
 USAGE

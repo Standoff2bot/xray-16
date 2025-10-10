@@ -575,9 +575,61 @@ void convert_bundle(const BundleConfig& config)
 
 int main(int argc, char** argv)
 {
+    std::string command_line;
+    command_line.reserve(256);
+    for (int i = 0; i < argc; ++i)
+    {
+        if (i > 0)
+            command_line.push_back(' ');
+        if (argv[i])
+            command_line += argv[i];
+    }
+
+    xrDebug::Initialize(command_line.c_str());
+
+    bool core_initialized = false;
+
     try
     {
-        if (argc < 2)
+        std::string fs_ltx_override;
+        int command_start = 1;
+        while (command_start < argc) {
+            std::string_view opt(argv[command_start] ? argv[command_start] : "");
+            if (opt == "-fsltx" || opt == "--fsltx") {
+                if (command_start + 1 >= argc) {
+                    throw std::runtime_error("-fsltx requires a path argument");
+                }
+                fs_ltx_override = argv[command_start + 1];
+                command_start += 2;
+                continue;
+            }
+            break;
+        }
+
+        std::vector<char*> forwarded_args;
+        forwarded_args.reserve(static_cast<size_t>(argc - command_start + 1));
+        forwarded_args.push_back(argv[0]);
+        for (int i = command_start; i < argc; ++i) {
+            forwarded_args.push_back(argv[i]);
+        }
+
+        int forwarded_argc = static_cast<int>(forwarded_args.size());
+        char** forwarded_argv = forwarded_args.data();
+
+        Core.Initialize("xray_to_ozz_converter", command_line.c_str(), true,
+            fs_ltx_override.empty() ? nullptr : fs_ltx_override.c_str());
+        core_initialized = true;
+
+        struct CoreShutdownGuard
+        {
+            ~CoreShutdownGuard()
+            {
+                Core._destroy();
+                xrDebug::Finalize();
+            }
+        } core_shutdown_guard;
+
+        if (forwarded_argc < 2)
             throw std::runtime_error("usage: xray_to_ozz_converter <command> ...\n"
                                      "Commands:\n"
                                      "  skeleton <input.ogf> <output.ozz> [--dump-bind <csv>]\n"
@@ -585,22 +637,22 @@ int main(int argc, char** argv)
                                      "  mesh <input.ogf> <output.ozz>\n"
                                      "  bundle <input.ogf> <output.ozzx>");
 
-        const std::string command = argv[1];
+        const std::string command = forwarded_argv[1];
         if (command == "skeleton")
         {
-            convert_skeleton(parse_skeleton_arguments(argc, argv));
+            convert_skeleton(parse_skeleton_arguments(forwarded_argc, forwarded_argv));
         }
         else if (command == "animation")
         {
-            convert_animation(parse_animation_arguments(argc, argv));
+            convert_animation(parse_animation_arguments(forwarded_argc, forwarded_argv));
         }
         else if (command == "mesh")
         {
-            convert_mesh(parse_mesh_arguments(argc, argv));
+            convert_mesh(parse_mesh_arguments(forwarded_argc, forwarded_argv));
         }
         else if (command == "bundle")
         {
-            convert_bundle(parse_bundle_arguments(argc, argv));
+            convert_bundle(parse_bundle_arguments(forwarded_argc, forwarded_argv));
         }
         else
         {
@@ -612,11 +664,15 @@ int main(int argc, char** argv)
     catch (const std::exception& ex)
     {
         std::cerr << "ERROR: " << ex.what() << std::endl;
+        if (!core_initialized)
+            xrDebug::Finalize();
         return EXIT_FAILURE;
     }
     catch (...)
     {
         std::cerr << "ERROR: unknown failure" << std::endl;
+        if (!core_initialized)
+            xrDebug::Finalize();
         return EXIT_FAILURE;
     }
 }

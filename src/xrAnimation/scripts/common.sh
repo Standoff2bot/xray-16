@@ -19,6 +19,40 @@ TEXTURE_ROOT="${TEXTURE_ROOT:-${XR_TEXTURE_ROOT:-}}"
 RUN_VIEWER=${RUN_VIEWER:-1}
 COMMON_SHOW_HELP=0
 COMMON_ARGS_REMAINING=()
+FSLTX_PATH="${FSLTX_PATH:-${XR_FSLTX_PATH:-}}"
+COMMON_CONVERTER_PREFIX=()
+
+update_converter_prefix() {
+    COMMON_CONVERTER_PREFIX=()
+    local resolved_fsltx="$FSLTX_PATH"
+
+    if [[ -z "$resolved_fsltx" ]]; then
+        local -a default_candidates=()
+        if [[ -n "${XR_FSLTX_DEFAULTS:-}" ]]; then
+            local saved_ifs="$IFS"
+            IFS=':'
+            read -r -a default_candidates <<< "${XR_FSLTX_DEFAULTS}"
+            IFS="$saved_ifs"
+        fi
+        default_candidates+=("/mnt/c/games/scop/fsgame.ltx")
+
+        for candidate in "${default_candidates[@]}"; do
+            if [[ -n "$candidate" && -f "$candidate" ]]; then
+                resolved_fsltx="$candidate"
+                break
+            fi
+        done
+        FSLTX_PATH="$resolved_fsltx"
+    fi
+
+    if [[ -n "$resolved_fsltx" ]]; then
+        if [[ -f "$resolved_fsltx" ]]; then
+            COMMON_CONVERTER_PREFIX=(-fsltx "$resolved_fsltx")
+        else
+            echo "[ozz] warning: specified --fsltx path '$resolved_fsltx' not found; continuing without filesystem override" >&2
+        fi
+    fi
+}
 
 parse_common_args() {
     COMMON_ARGS_REMAINING=()
@@ -48,6 +82,14 @@ parse_common_args() {
                 TEXTURE_ROOT="$2"
                 shift 2
                 ;;
+            --fsltx)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: --fsltx requires a path" >&2
+                    exit 1
+                fi
+                FSLTX_PATH="$2"
+                shift 2
+                ;;
             --viewer)
                 RUN_VIEWER=1
                 shift
@@ -74,6 +116,7 @@ parse_common_args() {
                 ;;
         esac
     done
+    update_converter_prefix
 }
 
 resolve_build_dir() {
@@ -163,8 +206,13 @@ viewer_path() {
 run_converter() {
     local converter="$1"
     shift
-    echo "[ozz] running: $(basename "$converter") $*" >&2
-    "$converter" "$@"
+    local args=()
+    if [[ ${#COMMON_CONVERTER_PREFIX[@]} -gt 0 ]]; then
+        args+=("${COMMON_CONVERTER_PREFIX[@]}")
+    fi
+    args+=("$@")
+    echo "[ozz] running: $(basename "$converter") ${args[*]}" >&2
+    "$converter" "${args[@]}"
 }
 
 maybe_run_viewer() {
