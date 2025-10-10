@@ -2,6 +2,7 @@
 
 #include "xrCore/xrCore.h"
 #include "xrCore/Animation/SkeletonMotions.hpp"
+#include "Include/xrRender/animation_motion.h"
 #include "ozz/animation/runtime/animation.h"
 #include "ozz/animation/runtime/skeleton.h"
 #include "ozz/animation/runtime/sampling_job.h"

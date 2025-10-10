@@ -82,6 +82,8 @@
 #include "ozz/base/span.h"
 
 #include "../OzzBundle.h"
+#include "../AnimationECS_IK.h"
+#include "entt/entt.hpp"
 
 // Skeleton archive can be specified as an option.
 OZZ_OPTIONS_DECLARE_STRING(bundle, "Path to a combined skeleton/mesh bundle (.ozzx).", "", false)
@@ -2284,35 +2286,9 @@ private:
     // Metadata per animation loaded from converter archives.
     std::vector<MotionMetadataData> animation_metadata_;
 
-    struct LimbIkChain
-    {
-        enum class Role
-        {
-            Leg,
-            Arm,
-        };
-
-        std::string label;
-        Role role = Role::Leg;
-        int start = -1;
-        int mid = -1;
-        int end = -1;
-        ozz::math::SimdFloat4 mid_axis;
-        ozz::math::SimdFloat4 pole_vector;  // Stable pole vector from bind pose
-        ozz::math::Float3 target_offset = { 0.f, 0.f, 0.f };
-        bool enabled = true;
-        bool reached = false;
-        std::string start_name;
-        std::string mid_name;
-        std::string end_name;
-        ozz::math::Float3 debug_target = { 0.f, 0.f, 0.f };
-        bool debug_target_valid = false;
-
-        bool Valid() const
-        {
-            return start >= 0 && mid >= 0 && end >= 0;
-        }
-    };
+    // Use ECS IK types from AnimationECS_IK.h
+    using LimbIkChain = AnimationECS::LimbIKChain;
+    using IKConfiguration = AnimationECS::IKConfiguration;
 
     // UI state shared between rendering and presentation layers.
     ViewerUiState ui_state_{};
@@ -2490,30 +2466,44 @@ private:
     int pelvis_joint_ = -1;
     int spine_joint_ = -1;
 
-    // IK and dynamic control state.
-    bool limb_ik_initialized_ = false;
-    bool leg_ik_available_ = false;
-    bool arm_ik_available_ = false;
-    LimbIkChain left_leg_chain_{};
-    LimbIkChain right_leg_chain_{};
-    LimbIkChain left_arm_chain_{};
-    LimbIkChain right_arm_chain_{};
+    // IK and dynamic control state - now using ECS
+    entt::registry ik_registry_;           // Local ECS registry for IK
+    entt::entity ik_entity_{entt::null};   // Entity holding IK configuration
+
+    // Helper accessors for IK chains (backward compatibility)
+    IKConfiguration* GetIKConfig()
+    {
+        if (ik_entity_ == entt::null || !ik_registry_.valid(ik_entity_))
+            return nullptr;
+        return ik_registry_.try_get<IKConfiguration>(ik_entity_);
+    }
+
+    const IKConfiguration* GetIKConfig() const
+    {
+        if (ik_entity_ == entt::null || !ik_registry_.valid(ik_entity_))
+            return nullptr;
+        return ik_registry_.try_get<IKConfiguration>(ik_entity_);
+    }
 
     void BuildTriangleDebugMeshes();
     void UpdateTriangleDebugMesh(const std::vector<ozz::math::Float3>& world_positions, TriangleDebugMesh& debug_mesh);
 
     LimbIkChain* GetChainForHandle(IkHandleId handle)
     {
+        auto* ik_config = GetIKConfig();
+        if (!ik_config)
+            return nullptr;
+
         switch (handle)
         {
         case IkHandleId::LeftLeg:
-            return &left_leg_chain_;
+            return &ik_config->left_leg;
         case IkHandleId::RightLeg:
-            return &right_leg_chain_;
+            return &ik_config->right_leg;
         case IkHandleId::LeftArm:
-            return &left_arm_chain_;
+            return &ik_config->left_arm;
         case IkHandleId::RightArm:
-            return &right_arm_chain_;
+            return &ik_config->right_arm;
         default:
             return nullptr;
         }
@@ -3111,14 +3101,15 @@ private:
             return;
         }
 
-        if (!limb_ik_initialized_)
+        auto* ik_config = GetIKConfig();
+        if (!ik_config || !ik_config->IsInitialized())
         {
             ImGui::TextUnformatted("IK chains initialize after a skeleton loads.");
         }
         else
         {
             ImGui::SeparatorText("Leg IK");
-            if (!leg_ik_available_)
+            if (!ik_config->HasLegIK())
             {
                 ImGui::TextUnformatted("No leg chains detected for this skeleton.");
             }
@@ -3138,17 +3129,17 @@ private:
 
                     if (ImGui::CollapsingHeader("Left leg", ImGuiTreeNodeFlags_DefaultOpen))
                     {
-                        DrawLimbIkChainPanel(left_leg_chain_, -1);
+                        DrawLimbIkChainPanel(ik_config->left_leg, -1);
                     }
                     if (ImGui::CollapsingHeader("Right leg", ImGuiTreeNodeFlags_DefaultOpen))
                     {
-                        DrawLimbIkChainPanel(right_leg_chain_, -1);
+                        DrawLimbIkChainPanel(ik_config->right_leg, -1);
                     }
                 }
             }
 
             ImGui::SeparatorText("Arm IK");
-            if (!arm_ik_available_)
+            if (!ik_config->HasArmIK())
             {
                 ImGui::TextUnformatted("No arm chains detected for this skeleton.");
             }
@@ -3167,11 +3158,11 @@ private:
 
                     if (ImGui::CollapsingHeader("Left arm", ImGuiTreeNodeFlags_DefaultOpen))
                     {
-                        DrawLimbIkChainPanel(left_arm_chain_, 0);
+                        DrawLimbIkChainPanel(ik_config->left_arm, 0);
                     }
                     if (ImGui::CollapsingHeader("Right arm", ImGuiTreeNodeFlags_DefaultOpen))
                     {
-                        DrawLimbIkChainPanel(right_arm_chain_, 1);
+                        DrawLimbIkChainPanel(ik_config->right_arm, 1);
                     }
                 }
             }
@@ -3770,17 +3761,32 @@ private:
 
     void InitializeLimbIkChains()
     {
-        const bool previously_initialized = limb_ik_initialized_;
-        const bool previous_left_leg_enabled = left_leg_chain_.enabled;
-        const bool previous_right_leg_enabled = right_leg_chain_.enabled;
-        bool previous_left_arm_enabled = left_arm_chain_.enabled;
-        bool previous_right_arm_enabled = right_arm_chain_.enabled;
+        // Preserve previous state
+        bool previously_initialized = false;
+        bool previous_left_leg_enabled = true;
+        bool previous_right_leg_enabled = true;
+        bool previous_left_arm_enabled = true;
+        bool previous_right_arm_enabled = true;
 
-        left_leg_chain_ = LimbIkChain{};
-        right_leg_chain_ = LimbIkChain{};
-        left_arm_chain_ = LimbIkChain{};
-        right_arm_chain_ = LimbIkChain{};
+        if (auto* prev_config = GetIKConfig())
+        {
+            previously_initialized = prev_config->IsInitialized();
+            previous_left_leg_enabled = prev_config->left_leg.enabled;
+            previous_right_leg_enabled = prev_config->right_leg.enabled;
+            previous_left_arm_enabled = prev_config->left_arm.enabled;
+            previous_right_arm_enabled = prev_config->right_arm.enabled;
+        }
 
+        // Destroy old entity if it exists
+        if (ik_entity_ != entt::null && ik_registry_.valid(ik_entity_))
+        {
+            ik_registry_.destroy(ik_entity_);
+        }
+
+        // Create new ECS entity for IK
+        ik_entity_ = ik_registry_.create();
+
+        // Update joint name cache (still used by FindJointIndexByNames)
         joint_names_lower_.clear();
         const int joint_count = skeleton_.num_joints();
         joint_names_lower_.reserve(joint_count);
@@ -3793,95 +3799,29 @@ private:
         pelvis_joint_ = FindJointIndexByNames({ "bip01_pelvis", "pelvis", "hip", "hips" });
         spine_joint_ = FindJointIndexByNames({ "bip01_spine", "spine", "spine1" });
 
-        auto resolve_axis = [&](LimbIkChain& chain)
+        // Use ECS IK initialization system - handles all chain detection and axis calculation
+        AnimationECS::IKInitializationSystem::Initialize(
+            ik_registry_,
+            ik_entity_,
+            skeleton_.joint_names(),
+            ozz::make_span(bind_pose_models_)
+        );
+
+        // Get the initialized IK configuration
+        auto* ik_config = GetIKConfig();
+        if (!ik_config)
         {
-            chain.mid_axis = ozz::math::simd_float4::z_axis();
-            chain.pole_vector = ozz::math::simd_float4::y_axis();  // Default pole vector
-
-            if (chain.Valid() && chain.mid >= 0 && static_cast<size_t>(chain.mid) < bind_pose_models_.size())
-            {
-                // Calculate mid_axis (bend axis) from bind pose Z-axis
-                ozz::math::SimdFloat4 axis_candidate = bind_pose_models_[chain.mid].cols[2];
-                const ozz::math::SimdFloat4 axis_len_sq = ozz::math::Length3Sqr(axis_candidate);
-                const ozz::math::SimdFloat4 min_len = ozz::math::simd_float4::Load1(1e-6f);
-                if (ozz::math::AreAllTrue1(ozz::math::CmpGt(axis_len_sq, min_len)))
-                {
-                    chain.mid_axis = ozz::math::Normalize3(axis_candidate);
-                    // Legs bend backwards (knees bend opposite to elbows)
-                    // Negate the axis for leg chains
-                    if (chain.role == LimbIkChain::Role::Leg)
-                    {
-                        chain.mid_axis = -chain.mid_axis;
-                    }
-                }
-
-                // Calculate stable pole vector from bind pose Y-axis
-                ozz::math::SimdFloat4 pole_candidate = bind_pose_models_[chain.mid].cols[1];
-                const ozz::math::SimdFloat4 pole_len_sq = ozz::math::Length3Sqr(pole_candidate);
-                if (ozz::math::AreAllTrue1(ozz::math::CmpGt(pole_len_sq, min_len)))
-                {
-                    chain.pole_vector = ozz::math::Normalize3(pole_candidate);
-                }
-            }
-        };
-
-        auto populate_chain = [&](LimbIkChain& chain, LimbIkChain::Role role, std::initializer_list<const char*> start_candidates,
-                                   std::initializer_list<const char*> mid_candidates, std::initializer_list<const char*> end_candidates)
-        {
-            chain.role = role;
-            chain.start = FindJointIndexByNames(start_candidates);
-            chain.mid = FindJointIndexByNames(mid_candidates);
-            chain.end = FindJointIndexByNames(end_candidates);
-            chain.start_name = chain.start >= 0 ? joint_names[chain.start] : std::string();
-            chain.mid_name = chain.mid >= 0 ? joint_names[chain.mid] : std::string();
-            chain.end_name = chain.end >= 0 ? joint_names[chain.end] : std::string();
-            chain.target_offset = { 0.f, 0.f, 0.f };
-            chain.reached = false;
-            resolve_axis(chain);
-        };
-
-        populate_chain(left_leg_chain_, LimbIkChain::Role::Leg,
-            { "bip01_l_thigh", "l_thigh", "left_thigh" },
-            { "bip01_l_calf", "l_calf", "left_calf", "bip01_l_knee" },
-            { "bip01_l_foot", "l_foot", "left_foot", "bip01_l_ankle" });
-        populate_chain(right_leg_chain_, LimbIkChain::Role::Leg,
-            { "bip01_r_thigh", "r_thigh", "right_thigh" },
-            { "bip01_r_calf", "r_calf", "right_calf", "bip01_r_knee" },
-            { "bip01_r_foot", "r_foot", "right_foot", "bip01_r_ankle" });
-
-        populate_chain(left_arm_chain_, LimbIkChain::Role::Arm,
-            { "bip01_l_upperarm", "bip01_l_shoulder", "l_upperarm", "left_shoulder" },
-            { "bip01_l_forearm", "l_forearm", "left_forearm", "bip01_l_elbow" },
-            { "bip01_l_hand", "l_hand", "left_hand", "bip01_l_wrist" });
-        populate_chain(right_arm_chain_, LimbIkChain::Role::Arm,
-            { "bip01_r_upperarm", "bip01_r_shoulder", "r_upperarm", "right_shoulder" },
-            { "bip01_r_forearm", "r_forearm", "right_forearm", "bip01_r_elbow" },
-            { "bip01_r_hand", "r_hand", "right_hand", "bip01_r_wrist" });
-
-        if (left_arm_chain_.Valid() && right_arm_chain_.Valid() && !bind_pose_models_.empty())
-        {
-            const float left_x = ozz::math::GetX(bind_pose_models_[left_arm_chain_.end].cols[3]);
-            const float right_x = ozz::math::GetX(bind_pose_models_[right_arm_chain_.end].cols[3]);
-            if (left_x > right_x)
-            {
-                std::swap(left_arm_chain_, right_arm_chain_);
-                std::swap(previous_left_arm_enabled, previous_right_arm_enabled);
-                std::swap(ui_state_.arm_handles[0], ui_state_.arm_handles[1]);
-            }
+            std::cerr << "Failed to initialize IK configuration!" << std::endl;
+            return;
         }
 
-        leg_ik_available_ = left_leg_chain_.Valid() || right_leg_chain_.Valid();
-        arm_ik_available_ = left_arm_chain_.Valid() || right_arm_chain_.Valid();
+        // Restore previous enabled states
+        ik_config->left_leg.enabled = ik_config->left_leg.Valid() && (previously_initialized ? previous_left_leg_enabled : true);
+        ik_config->right_leg.enabled = ik_config->right_leg.Valid() && (previously_initialized ? previous_right_leg_enabled : true);
+        ik_config->left_arm.enabled = ik_config->left_arm.Valid() && (previously_initialized ? previous_left_arm_enabled : true);
+        ik_config->right_arm.enabled = ik_config->right_arm.Valid() && (previously_initialized ? previous_right_arm_enabled : true);
 
-        left_leg_chain_.label = "Left leg";
-        left_leg_chain_.role = LimbIkChain::Role::Leg;
-        right_leg_chain_.label = "Right leg";
-        right_leg_chain_.role = LimbIkChain::Role::Leg;
-        left_arm_chain_.label = "Left arm";
-        left_arm_chain_.role = LimbIkChain::Role::Arm;
-        right_arm_chain_.label = "Right arm";
-        right_arm_chain_.role = LimbIkChain::Role::Arm;
-
+        // Initialize UI state if first time
         if (!previously_initialized)
         {
             ui_state_.foot_ik_enabled = false;
@@ -3899,66 +3839,61 @@ private:
         }
         else
         {
-            if (!leg_ik_available_)
+            // Disable IK UI if no chains available
+            if (!ik_config->HasLegIK())
             {
                 ui_state_.foot_ik_enabled = false;
             }
-            if (!arm_ik_available_)
+            if (!ik_config->HasArmIK())
             {
                 ui_state_.arm_ik_enabled = false;
             }
         }
 
-        left_leg_chain_.enabled = left_leg_chain_.Valid() && (previously_initialized ? previous_left_leg_enabled : true);
-        right_leg_chain_.enabled = right_leg_chain_.Valid() && (previously_initialized ? previous_right_leg_enabled : true);
-        left_arm_chain_.enabled = left_arm_chain_.Valid() && (previously_initialized ? previous_left_arm_enabled : true);
-        right_arm_chain_.enabled = right_arm_chain_.Valid() && (previously_initialized ? previous_right_arm_enabled : true);
-
-        left_leg_chain_.reached = false;
-        right_leg_chain_.reached = false;
-        left_arm_chain_.reached = false;
-        right_arm_chain_.reached = false;
-
-        if (left_arm_chain_.Valid())
+        // Apply arm handle offsets
+        if (ik_config->left_arm.Valid())
         {
             IkOffsetUi offset{ ui_state_.arm_handles[0].forward_offset, ui_state_.arm_handles[0].lateral_offset, ui_state_.arm_handles[0].vertical_offset };
-            left_arm_chain_.target_offset = FromUiOffset(offset);
+            ik_config->left_arm.target_offset = FromUiOffset(offset);
         }
-        if (right_arm_chain_.Valid())
+        if (ik_config->right_arm.Valid())
         {
             IkOffsetUi offset{ ui_state_.arm_handles[1].forward_offset, ui_state_.arm_handles[1].lateral_offset, ui_state_.arm_handles[1].vertical_offset };
-            right_arm_chain_.target_offset = FromUiOffset(offset);
+            ik_config->right_arm.target_offset = FromUiOffset(offset);
         }
 
-        left_leg_chain_.debug_target_valid = false;
-        right_leg_chain_.debug_target_valid = false;
-        left_arm_chain_.debug_target_valid = false;
-        right_arm_chain_.debug_target_valid = false;
+        // Reset debug state
+        ik_config->left_leg.debug_target_valid = false;
+        ik_config->right_leg.debug_target_valid = false;
+        ik_config->left_arm.debug_target_valid = false;
+        ik_config->right_arm.debug_target_valid = false;
 
         ik_handle_dragging_ = false;
         active_ik_handle_ = IkHandleId::None;
-
-        limb_ik_initialized_ = true;
     }
 
     bool ApplyLimbIKAfterLocal()
     {
-        const bool leg_active = ui_state_.foot_ik_enabled && leg_ik_available_;
-        const bool arm_active = ui_state_.arm_ik_enabled && arm_ik_available_;
+        auto* ik_config = GetIKConfig();
+        if (!ik_config || !ik_config->IsInitialized())
+            return true;
+
+        const bool leg_active = ui_state_.foot_ik_enabled && ik_config->HasLegIK();
+        const bool arm_active = ui_state_.arm_ik_enabled && ik_config->HasArmIK();
 
         if (!leg_active)
         {
-            left_leg_chain_.reached = false;
-            right_leg_chain_.reached = false;
-            left_leg_chain_.debug_target_valid = false;
-            right_leg_chain_.debug_target_valid = false;
+            ik_config->left_leg.reached = false;
+            ik_config->right_leg.reached = false;
+            ik_config->left_leg.debug_target_valid = false;
+            ik_config->right_leg.debug_target_valid = false;
         }
         if (!arm_active)
         {
-            left_arm_chain_.reached = false;
-            right_arm_chain_.reached = false;
-            left_arm_chain_.debug_target_valid = false;
-            right_arm_chain_.debug_target_valid = false;
+            ik_config->left_arm.reached = false;
+            ik_config->right_arm.reached = false;
+            ik_config->left_arm.debug_target_valid = false;
+            ik_config->right_arm.debug_target_valid = false;
         }
 
         if (!leg_active && !arm_active)
@@ -3968,6 +3903,11 @@ private:
 
         bool applied = false;
         int min_dirty_joint = skeleton_.num_joints();
+
+        // Update IK configuration parameters from UI
+        ik_config->foot_ground_height = ui_state_.foot_ik_ground_height;
+        ik_config->crouch_offset = active_crouch_offset_;
+        ik_config->crouch_affects_arms = ui_state_.crouch_affects_arms;
 
         if (leg_active)
         {
@@ -3984,24 +3924,30 @@ private:
                     return;
                 }
 
-                if (static_cast<size_t>(chain.end) >= models_.size())
-                {
-                    chain.reached = false;
-                    chain.debug_target_valid = false;
-                    return;
-                }
+                // Use ECS IK solver
+                const ozz::math::Float3 target = AnimationECS::IKSolverSystem::ComputeChainTarget(
+                    chain,
+                    ozz::make_span(models_),
+                    ik_config->foot_ground_height,
+                    ik_config->crouch_offset,
+                    ik_config->crouch_affects_arms
+                );
 
-                const ozz::math::Float3 target = ComputeChainTarget(chain);
                 chain.debug_target = target;
                 chain.debug_target_valid = true;
-                if (SolveLimbIk(chain, target, weight, soften, twist, &min_dirty_joint))
+
+                if (AnimationECS::IKSolverSystem::SolveLimbIK(
+                    chain, target, weight, soften, twist,
+                    ozz::make_span(models_),
+                    ozz::make_span(locals_),
+                    &min_dirty_joint))
                 {
                     applied = true;
                 }
             };
 
-            solve_leg(left_leg_chain_);
-            solve_leg(right_leg_chain_);
+            solve_leg(ik_config->left_leg);
+            solve_leg(ik_config->right_leg);
         }
 
         if (arm_active)
@@ -4018,13 +3964,8 @@ private:
                     chain.debug_target_valid = false;
                     return;
                 }
-                if (static_cast<size_t>(chain.end) >= models_.size())
-                {
-                    chain.reached = false;
-                    chain.debug_target_valid = false;
-                    return;
-                }
 
+                // Update arm handle offset from UI
                 if (handle_index < 2)
                 {
                     const ViewerUiState::ArmHandle& handle = ui_state_.arm_handles[handle_index];
@@ -4032,17 +3973,30 @@ private:
                     chain.target_offset = FromUiOffset(offset);
                 }
 
-                ozz::math::Float3 target = ComputeChainTarget(chain);
+                // Use ECS IK solver
+                ozz::math::Float3 target = AnimationECS::IKSolverSystem::ComputeChainTarget(
+                    chain,
+                    ozz::make_span(models_),
+                    ik_config->foot_ground_height,
+                    ik_config->crouch_offset,
+                    ik_config->crouch_affects_arms
+                );
+
                 chain.debug_target = target;
                 chain.debug_target_valid = true;
-                if (SolveLimbIk(chain, target, weight, soften, twist, &min_dirty_joint))
+
+                if (AnimationECS::IKSolverSystem::SolveLimbIK(
+                    chain, target, weight, soften, twist,
+                    ozz::make_span(models_),
+                    ozz::make_span(locals_),
+                    &min_dirty_joint))
                 {
                     applied = true;
                 }
             };
 
-            solve_arm(left_arm_chain_, 0);
-            solve_arm(right_arm_chain_, 1);
+            solve_arm(ik_config->left_arm, 0);
+            solve_arm(ik_config->right_arm, 1);
         }
 
         if (applied)
@@ -4064,90 +4018,6 @@ private:
         return true;
     }
 
-    bool SolveLimbIk(LimbIkChain& chain, const ozz::math::Float3& target_model, float weight, float soften, float twist_angle, int* min_dirty_joint)
-    {
-        chain.reached = false;
-        if (!chain.Valid() || !chain.enabled)
-        {
-            chain.debug_target_valid = false;
-            return false;
-        }
-
-        const size_t model_count = models_.size();
-        if (chain.start < 0 || chain.mid < 0 || chain.end < 0 ||
-            static_cast<size_t>(chain.start) >= model_count ||
-            static_cast<size_t>(chain.mid) >= model_count ||
-            static_cast<size_t>(chain.end) >= model_count)
-        {
-            chain.debug_target_valid = false;
-            return false;
-        }
-
-        const ozz::math::SimdFloat4 target_ms = ozz::math::simd_float4::Load3PtrU(&target_model.x);
-
-        // Use the stable pole vector from bind pose instead of recalculating from current frame
-        // This prevents IK flipping/snapping issues, especially for first-person arm rigs
-        ozz::math::SimdFloat4 pole_vector_ms = chain.pole_vector;
-
-        ozz::animation::IKTwoBoneJob ik_job;
-        ik_job.target = target_ms;
-        ik_job.pole_vector = pole_vector_ms;
-        ik_job.mid_axis = chain.mid_axis;
-        ik_job.weight = std::clamp(weight, 0.f, 1.f);
-        ik_job.soften = std::clamp(soften, 0.f, 0.999f);
-        ik_job.twist_angle = twist_angle;
-        ik_job.start_joint = &models_[chain.start];
-        ik_job.mid_joint = &models_[chain.mid];
-        ik_job.end_joint = &models_[chain.end];
-        ozz::math::SimdQuaternion start_correction;
-        ozz::math::SimdQuaternion mid_correction;
-        ik_job.start_joint_correction = &start_correction;
-        ik_job.mid_joint_correction = &mid_correction;
-        ik_job.reached = &chain.reached;
-
-        if (!ik_job.Run())
-        {
-            chain.reached = false;
-            return false;
-        }
-
-        ozz::sample::MultiplySoATransformQuaternion(chain.start, start_correction, make_span(locals_));
-        ozz::sample::MultiplySoATransformQuaternion(chain.mid, mid_correction, make_span(locals_));
-
-        if (min_dirty_joint)
-        {
-            *min_dirty_joint = std::min(*min_dirty_joint, chain.start);
-        }
-
-        return true;
-    }
-
-    ozz::math::Float3 ComputeChainTarget(const LimbIkChain& chain) const
-    {
-        if (!chain.Valid() || static_cast<size_t>(chain.end) >= models_.size())
-        {
-            return { 0.f, 0.f, 0.f };
-        }
-
-        ozz::math::Float3 target = ExtractTranslation(models_[chain.end]);
-        if (chain.role == LimbIkChain::Role::Leg)
-        {
-            target.x += chain.target_offset.x;
-            target.z += chain.target_offset.z;
-            target.y = ui_state_.foot_ik_ground_height + chain.target_offset.y;
-        }
-        else
-        {
-            target.x += chain.target_offset.x;
-            target.y += chain.target_offset.y;
-            target.z += chain.target_offset.z;
-            if (ui_state_.crouch_enabled && ui_state_.crouch_affects_arms)
-            {
-                target.y -= active_crouch_offset_;
-            }
-        }
-        return target;
-    }
 
     void ApplyDraggedTarget(IkHandleId handle, const ozz::math::Float3& target_world)
     {
@@ -4189,8 +4059,9 @@ private:
     bool TrySelectIkHandle(const ozz::math::Float3& ray_origin, const ozz::math::Float3& ray_dir, const ozz::math::Float3& camera_pos,
         float pick_ndc_x, float pick_ndc_y, const ozz::math::Float4x4* view_projection)
     {
-        const bool legs_active = ui_state_.foot_ik_enabled && leg_ik_available_;
-        const bool arms_active = ui_state_.arm_ik_enabled && arm_ik_available_;
+        auto* ik_config = GetIKConfig();
+        const bool legs_active = ik_config && ui_state_.foot_ik_enabled && ik_config->HasLegIK();
+        const bool arms_active = ik_config && ui_state_.arm_ik_enabled && ik_config->HasArmIK();
         const bool use_screen_metric = (view_projection != nullptr);
 
         struct Candidate
@@ -4224,7 +4095,12 @@ private:
                 continue;
             }
 
-            const ozz::math::Float3 target = ComputeChainTarget(*chain);
+            auto* ik_config_temp = GetIKConfig();
+            const ozz::math::Float3 target = ik_config_temp ? AnimationECS::IKSolverSystem::ComputeChainTarget(
+                *chain, ozz::make_span(models_),
+                ik_config_temp->foot_ground_height,
+                ik_config_temp->crouch_offset,
+                ik_config_temp->crouch_affects_arms) : ozz::math::Float3{0.f, 0.f, 0.f};
             chain->debug_target = target;
             chain->debug_target_valid = true;
 

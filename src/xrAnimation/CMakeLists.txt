@@ -46,6 +46,8 @@ set(SOURCES
     AnimationECS_Registry.h
     AnimationECS_ParallelSystems.h
     AnimationECS_Performance.h
+    AnimationECS_IK.h
+    AnimationECS_IK.cpp
     ../../Externals/ozz-animation/samples/framework/mesh.cc
 )
 
