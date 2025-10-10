@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <limits>
 #include <numeric>
+#include <unordered_map>
 #include <system_error>
 #include <string>
 #include <string_view>
@@ -560,8 +561,33 @@ bool BuildCombinedMesh(const ozz::vector<ozz::sample::Mesh>& meshes,
         return false;
     }
 
+    if (meshes.empty() || visibility.empty()) {
+        return false;
+    }
+
+    std::unordered_map<uint16_t, uint16_t> joint_to_global;
+    ozz::vector<uint16_t> global_remap;
+    ozz::vector<ozz::math::Float4x4> global_inverse_bind;
+
     uint32_t vertex_offset = 0;
     bool any_visible = false;
+
+    auto ensure_global_index = [&](const ozz::sample::Mesh& mesh, uint16_t local_index) -> uint16_t {
+        uint16_t joint = local_index;
+        if (!mesh.joint_remaps.empty() && local_index < mesh.joint_remaps.size()) {
+            joint = mesh.joint_remaps[local_index];
+        }
+        auto [it, inserted] = joint_to_global.emplace(joint, static_cast<uint16_t>(global_remap.size()));
+        if (inserted) {
+            global_remap.push_back(joint);
+            ozz::math::Float4x4 inverse = ozz::math::Float4x4::identity();
+            if (!mesh.inverse_bind_poses.empty() && local_index < mesh.inverse_bind_poses.size()) {
+                inverse = mesh.inverse_bind_poses[local_index];
+            }
+            global_inverse_bind.push_back(inverse);
+        }
+        return it->second;
+    };
 
     for (size_t mesh_index = 0; mesh_index < meshes.size(); ++mesh_index) {
         if (mesh_index >= visibility.size() || !visibility[mesh_index]) {
@@ -569,16 +595,35 @@ bool BuildCombinedMesh(const ozz::vector<ozz::sample::Mesh>& meshes,
         }
 
         const ozz::sample::Mesh& mesh = meshes[mesh_index];
-        if (!any_visible) {
-            out_mesh.joint_remaps = mesh.joint_remaps;
-            out_mesh.inverse_bind_poses = mesh.inverse_bind_poses;
+
+        const size_t palette_count = !mesh.joint_remaps.empty()
+            ? mesh.joint_remaps.size()
+            : mesh.inverse_bind_poses.size();
+        for (size_t palette_index = 0; palette_index < palette_count; ++palette_index) {
+            ensure_global_index(mesh, static_cast<uint16_t>(palette_index));
         }
 
         const uint32_t mesh_vertex_offset = vertex_offset;
         uint32_t mesh_vertex_count = 0;
 
         for (const ozz::sample::Mesh::Part& part : mesh.parts) {
-            out_mesh.parts.push_back(part);
+            ozz::sample::Mesh::Part part_copy = part;
+            const int influences = part_copy.influences_count();
+            const int vertex_count = part_copy.vertex_count();
+            if (!part_copy.joint_indices.empty() && influences > 0 && vertex_count > 0) {
+                for (int vertex = 0; vertex < vertex_count; ++vertex) {
+                    for (int influence = 0; influence < influences; ++influence) {
+                        const size_t idx = static_cast<size_t>(vertex) * influences + influence;
+                        if (idx >= part_copy.joint_indices.size()) {
+                            break;
+                        }
+                        const uint16_t local_palette = part_copy.joint_indices[idx];
+                        const uint16_t global_index = ensure_global_index(mesh, local_palette);
+                        part_copy.joint_indices[idx] = global_index;
+                    }
+                }
+            }
+            out_mesh.parts.push_back(std::move(part_copy));
             mesh_vertex_count += static_cast<uint32_t>(part.vertex_count());
         }
 
@@ -587,11 +632,63 @@ bool BuildCombinedMesh(const ozz::vector<ozz::sample::Mesh>& meshes,
             out_mesh.triangle_indices.push_back(static_cast<uint16_t>(std::min<uint32_t>(adjusted, std::numeric_limits<uint16_t>::max())));
         }
 
+        if (!any_visible) {
+            out_mesh.xray_metadata = mesh.xray_metadata;
+        } else {
+            out_mesh.xray_metadata.original_vertex_count += mesh.xray_metadata.original_vertex_count;
+            out_mesh.xray_metadata.original_face_count += mesh.xray_metadata.original_face_count;
+            out_mesh.xray_metadata.progressive_collapse_count += mesh.xray_metadata.progressive_collapse_count;
+            out_mesh.xray_metadata.lod_visuals.insert(out_mesh.xray_metadata.lod_visuals.end(),
+                mesh.xray_metadata.lod_visuals.begin(), mesh.xray_metadata.lod_visuals.end());
+            out_mesh.xray_metadata.lod_data.insert(out_mesh.xray_metadata.lod_data.end(),
+                mesh.xray_metadata.lod_data.begin(), mesh.xray_metadata.lod_data.end());
+            out_mesh.xray_metadata.child_visual_links.insert(out_mesh.xray_metadata.child_visual_links.end(),
+                mesh.xray_metadata.child_visual_links.begin(), mesh.xray_metadata.child_visual_links.end());
+        }
+
         vertex_offset += mesh_vertex_count;
         any_visible = true;
     }
 
-    return any_visible;
+    if (!any_visible) {
+        return false;
+    }
+
+    if (!global_remap.empty()) {
+        std::vector<uint16_t> order(global_remap.size());
+        std::iota(order.begin(), order.end(), uint16_t(0));
+        std::sort(order.begin(), order.end(), [&](uint16_t a, uint16_t b) {
+            return global_remap[a] < global_remap[b];
+        });
+
+        std::vector<uint16_t> remap(order.size());
+        ozz::vector<uint16_t> sorted_remap;
+        sorted_remap.resize(order.size());
+        ozz::vector<ozz::math::Float4x4> sorted_inverse;
+        sorted_inverse.resize(order.size());
+        for (size_t new_index = 0; new_index < order.size(); ++new_index) {
+            const uint16_t old_index = order[new_index];
+            sorted_remap[new_index] = global_remap[old_index];
+            sorted_inverse[new_index] = global_inverse_bind[old_index];
+            remap[old_index] = static_cast<uint16_t>(new_index);
+        }
+
+        for (auto& part : out_mesh.parts) {
+            for (uint16_t& index_value : part.joint_indices) {
+                if (index_value < remap.size()) {
+                    index_value = remap[index_value];
+                }
+            }
+        }
+
+        out_mesh.joint_remaps = std::move(sorted_remap);
+        out_mesh.inverse_bind_poses = std::move(sorted_inverse);
+    } else {
+        out_mesh.joint_remaps.clear();
+        out_mesh.inverse_bind_poses.clear();
+    }
+
+    return true;
 }
 
 bool UploadVisibleMeshes(ViewerState& state, VulkanRenderer& renderer, std::string* error) {
