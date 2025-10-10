@@ -66,6 +66,12 @@ void main() {
     vec4 world_position = instance_transform * local_position;
     gl_Position = camera.view_proj * world_position;
 
+    // DIAGNOSTIC: Ensure gl_Position.w is positive (required for depth testing)
+    // Negative or zero W will cause depth testing to fail
+    if (gl_Position.w <= 0.0) {
+        gl_Position.w = 0.001; // Clamp to small positive value as fallback
+    }
+
     mat3 normal_matrix = mat3(instance_transform);
     out_world_normal = normalize(normal_matrix * local_normal);
     out_uv = in_uv;

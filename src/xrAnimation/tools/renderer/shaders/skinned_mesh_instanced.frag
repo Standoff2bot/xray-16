@@ -6,12 +6,18 @@ layout(location = 1) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
 
 void main() {
-    vec3 normal = normalize(in_world_normal);
-    vec3 light_dir = normalize(vec3(0.5, 1.0, 0.3));
+    // DIAGNOSTIC: Show raw gl_FragCoord.w (clip space W coordinate)
+    // If W is 0 or negative, that's why depth = 1.0!
+    float w = gl_FragCoord.w;
 
-    float diffuse_term = max(dot(normal, light_dir), 0.0);
-    vec3 ambient = vec3(0.2);
-    vec3 diffuse = vec3(0.8) * diffuse_term;
+    // Also show depth for comparison
+    float depth = gl_FragCoord.z;
 
-    out_color = vec4(ambient + diffuse, 1.0);
+    // R = W coordinate (should be positive and varying)
+    // G = depth (currently all white = 1.0)
+    // B = 0
+    out_color = vec4(w * 0.1, depth, 0.0, 1.0);
+
+    // Expected: If W is correct, you'll see red+green = yellow/orange gradient
+    // If W is 0 or tiny, you'll see green only (white)
 }

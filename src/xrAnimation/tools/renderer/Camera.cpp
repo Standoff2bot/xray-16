@@ -8,10 +8,10 @@ namespace renderer {
 
 namespace {
     constexpr float kPI = 3.14159265358979323846f;
-    constexpr float kDefaultDistance = 5.0f;
+    constexpr float kDefaultDistance = 3.5f;
     constexpr float kDefaultFOV = 45.0f;
-    constexpr float kDefaultNear = 0.1f;
-    constexpr float kDefaultFar = 1000.0f;
+    constexpr float kDefaultNear = 0.1f;  // Increased from 0.1 to improve depth precision
+    constexpr float kDefaultFar = 1000.0f; // Decreased from 1000 to improve depth precision (200:1 ratio)
     constexpr float kMinDistance = 0.1f;
     constexpr float kMaxDistance = 100.0f;
     constexpr float kMinPitch = -kPI * 0.49f; // Just below 90 degrees
