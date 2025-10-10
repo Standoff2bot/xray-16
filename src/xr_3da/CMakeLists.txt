@@ -60,7 +60,3 @@ set_target_properties(xr_3da PROPERTIES
     VS_USER_PROPS ${XRAY_MSBUILD_PROPS}
     VS_PACKAGE_REFERENCES "sdl2.nuget_2.32.4;sdl2.nuget.redist_2.32.4;directxmath_2024.10.15.1;directxtex_desktop_2019_2024.10.29.1"
 )
-
-install(TARGETS xr_3da RUNTIME
-    DESTINATION "${CMAKE_INSTALL_BINDIR}"
-)

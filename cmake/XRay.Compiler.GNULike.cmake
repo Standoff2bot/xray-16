@@ -17,8 +17,6 @@ if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "/usr")
 endif()
 
-include(GNUInstallDirs)
-
 if (DISABLE_PORTABLE_MODE)
     add_compile_definitions(DISABLE_PORTABLE_MODE)
 endif()

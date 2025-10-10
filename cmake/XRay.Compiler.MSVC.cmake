@@ -89,6 +89,8 @@ set(XRAY_SDK_BINARY_DIR "${XRAY_SDK_DIR}/binaries/${XRAY_PLATFORM}")
 list(APPEND CMAKE_PREFIX_PATH "${XRAY_SDK_DIR}")
 list(APPEND CMAKE_LIBRARY_PATH "${XRAY_SDK_LIBRARY_DIR}")
 
+install(DIRECTORY "${XRAY_SDK_BINARY_DIR}/" TYPE BIN COMPONENT OpenXRay)
+
 foreach(_xray_required_dir XRAY_SDK_DIR XRAY_SDK_INCLUDE_DIR XRAY_SDK_LIBRARY_DIR)
     if (NOT EXISTS "${${_xray_required_dir}}")
         message(FATAL_ERROR "${_xray_required_dir} not found at '${${_xray_required_dir}}'. Please point XRAY_SDK_DIR to a valid SDK installation.")

@@ -2549,9 +2549,3 @@ target_precompile_headers(xrGame
     $<$<COMPILE_LANGUAGE:CXX>:StdAfx.h>
     $<$<COMPILE_LANGUAGE:CXX>:pch_script.h>
 )
-
-if (BUILD_SHARED_LIBS)
-    install(TARGETS xrGame LIBRARY
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    )
-endif()

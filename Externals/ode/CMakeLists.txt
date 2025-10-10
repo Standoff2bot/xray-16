@@ -96,9 +96,3 @@ set_target_properties(xrODE PROPERTIES
     PREFIX ""
     UNITY_BUILD OFF
 )
-
-if (BUILD_SHARED_LIBS)
-    install(TARGETS xrODE LIBRARY
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    )
-endif()

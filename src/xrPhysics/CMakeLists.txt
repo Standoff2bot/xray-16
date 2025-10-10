@@ -435,9 +435,3 @@ target_precompile_headers(xrPhysics
     PRIVATE
     StdAfx.h
 )
-
-if (BUILD_SHARED_LIBS)
-    install(TARGETS xrPhysics LIBRARY
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    )
-endif()

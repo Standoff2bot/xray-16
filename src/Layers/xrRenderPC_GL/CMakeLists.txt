@@ -431,9 +431,3 @@ target_precompile_headers(xrRender_GL
     PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:stdafx.h>
 )
-
-if (BUILD_SHARED_LIBS)
-    install(TARGETS xrRender_GL LIBRARY
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    )
-endif()

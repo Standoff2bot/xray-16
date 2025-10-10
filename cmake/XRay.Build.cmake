@@ -13,6 +13,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${XRAY_COMPILE_OUTPUT_FOLDER}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${XRAY_COMPILE_OUTPUT_FOLDER}")
 set(CMAKE_PDB_OUTPUT_DIRECTORY "${XRAY_COMPILE_OUTPUT_FOLDER}")
 
+include(GNUInstallDirs)
+
 # Provide access to shared externals headers (e.g. submodule_check.hpp)
 include_directories(
     "${CMAKE_SOURCE_DIR}/Externals"
@@ -74,6 +76,9 @@ find_package(Vorbis REQUIRED)
 find_package(Theora REQUIRED)
 
 find_package(JPEG)
+
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT OpenXRay)
+include(InstallRequiredSystemLibraries)
 
 # https://gitlab.kitware.com/cmake/cmake/-/issues/25650
 if (CMAKE_VERSION VERSION_EQUAL "3.28.2" AND CMAKE_UNITY_BUILD)
