@@ -102,6 +102,9 @@
     <CopyFileToFolders Include="..\..\sdk\binaries\$(PlatformShortName)\OpenAL32.dll">
       <FileType>Document</FileType>
     </CopyFileToFolders>
+    <CopyFileToFolders Include="..\..\sdk\binaries\$(PlatformShortName)\phonon.dll">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
     <CopyFileToFolders Include="$(WindowsSdkDir)Redist\D3D\$(PlatformShortName)\d3dcompiler_47.dll">
       <FileType>Document</FileType>
     </CopyFileToFolders>

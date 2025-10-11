@@ -56,6 +56,9 @@
     <CopyFileToFolders Include="..\..\sdk\binaries\$(PlatformShortName)\OpenAL32.dll">
       <Filter>dependencies</Filter>
     </CopyFileToFolders>
+    <CopyFileToFolders Include="..\..\sdk\binaries\$(PlatformShortName)\phonon.dll">
+      <Filter>dependencies</Filter>
+    </CopyFileToFolders>
     <CopyFileToFolders Include="$(WindowsSdkDir)Redist\D3D\$(PlatformShortName)\d3dcompiler_47.dll">
       <Filter>dependencies</Filter>
     </CopyFileToFolders>
