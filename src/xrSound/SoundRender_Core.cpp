@@ -46,6 +46,7 @@ CSoundRender_Core::CSoundRender_Core(CSoundManager& p)
     fTimerPersistent_Delta = 0.0f;
 }
 
+#pragma optimize( "", off )
 void CSoundRender_Core::_initialize()
 {
     Timer.Start();
@@ -120,6 +121,7 @@ void CSoundRender_Core::_initialize()
 #endif
     bReady = true;
 }
+#pragma optimize( "", on )
 
 void CSoundRender_Core::_clear()
 {

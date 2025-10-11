@@ -50,6 +50,7 @@ public:
     [[nodiscard]]
     auto ipl_scene() const { return m_ipl_scene; }
     auto ipl_scene_mesh() const { return m_ipl_scene_mesh; }
+    auto ipl_scene_probes() const { return m_ipl_scene_probes; }
     auto ipl_simulator() const { return m_ipl_simulator; }
 #endif
 
@@ -76,6 +77,7 @@ private:
 #ifdef USE_STEAMAUDIO
     IPLScene m_ipl_scene{};
     IPLStaticMesh m_ipl_scene_mesh{};
+    IPLProbeBatch m_ipl_scene_probes{};
     IPLSimulator m_ipl_simulator{};
 #endif
 };

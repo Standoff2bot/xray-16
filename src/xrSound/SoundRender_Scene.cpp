@@ -1,7 +1,9 @@
 #include "stdafx.h"
 
 #include "Common/LevelStructure.hpp"
+#include "xrCore/Threading/TaskManager.hpp"
 #include "xrCDB/Intersect.hpp"
+#include "xrMaterialSystem/GameMtlLib.h"
 
 #include "SoundRender_Core.h"
 #include "SoundRender_Scene.h"
@@ -93,7 +95,7 @@ int CSoundRender_Scene::pause_emitters(bool pauseState)
 
 void CSoundRender_Scene::set_handler(sound_event* E) { sound_event_handler = E; }
 
-void CSoundRender_Scene::set_geometry_occ(CDB::MODEL* M, const Fbox& /*aabb*/)
+void CSoundRender_Scene::set_geometry_occ(CDB::MODEL* M, const Fbox& aabb)
 {
     geom_MODEL = M;
 
@@ -106,10 +108,10 @@ void CSoundRender_Scene::set_geometry_occ(CDB::MODEL* M, const Fbox& /*aabb*/)
     if (M && m_ipl_scene)
     {
         const auto tris = M->get_tris();
-        const auto tris_count = M->get_tris_count();
+        const s32  tris_count = (s32)M->get_tris_count();
 
         const auto verts = M->get_verts();
-        const auto verts_count = M->get_verts_count();
+        const s32  verts_count = (s32)M->get_verts_count();
 
         auto* temp_tris = xr_alloc<IPLTriangle>(tris_count);
         auto* temp_mat_idx = xr_alloc<IPLint32>(tris_count);
@@ -141,6 +143,43 @@ void CSoundRender_Scene::set_geometry_occ(CDB::MODEL* M, const Fbox& /*aabb*/)
         xr_free(temp_tris);
 
         iplStaticMeshAdd(m_ipl_scene_mesh, m_ipl_scene);
+
+        const auto transform = aabb.get_xform();
+
+        IPLProbeGenerationParams probeParams
+        {
+            IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR,
+            2.0f, 1.5f,
+            reinterpret_cast<const IPLMatrix4x4&>(transform)
+        };
+
+        IPLProbeArray probeArray{};
+        iplProbeArrayCreate(SoundRender->ipl_context(), &probeArray);
+        iplProbeArrayGenerateProbes(probeArray, m_ipl_scene, &probeParams);
+
+        constexpr IPLBakedDataIdentifier identifier
+        {
+            IPL_BAKEDDATATYPE_PATHING,
+            IPL_BAKEDDATAVARIATION_REVERB,
+            {},
+        };
+
+        iplProbeBatchCreate(SoundRender->ipl_context(), &m_ipl_scene_probes);
+        iplProbeBatchAddProbeArray(m_ipl_scene_probes, probeArray);
+        iplProbeBatchCommit(m_ipl_scene_probes);
+
+        IPLPathBakeParams pathingBakeParams
+        {
+            m_ipl_scene, m_ipl_scene_probes, identifier,
+            2, 2.0f, 0.5f,
+            25.0f, 50.0f,
+            s32(TaskScheduler->GetWorkersCount())
+        };
+
+        iplPathBakerBake(SoundRender->ipl_context(), &pathingBakeParams, [](IPLfloat32 progress, void*)
+        {
+            Msg("SOUND: SteamAudio: path baker progress: %f", progress);
+        }, nullptr);
     }
     if (m_ipl_scene)
         iplSceneCommit(m_ipl_scene);
