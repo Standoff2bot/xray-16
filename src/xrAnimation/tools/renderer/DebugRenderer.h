@@ -40,6 +40,8 @@ public:
     void DrawSphere(const ozz::math::Float3& center, float radius, const ozz::math::Float4& color, int segments = 12);
     void DrawBoneShape(const ozz::math::Float3& head, const ozz::math::Float3& tail,
         float radius, const ozz::math::Float4& color);
+    void DrawGrid(const ozz::math::Float3& center, float size, int divisions,
+        const ozz::math::Float4& color_main, const ozz::math::Float4& color_sub);
     void EndFrame();
     void Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_proj);
 

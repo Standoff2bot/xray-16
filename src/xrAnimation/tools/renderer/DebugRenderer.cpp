@@ -542,6 +542,30 @@ void DebugRenderer::DrawBoneShape(const ozz::math::Float3& head, const ozz::math
     DrawSolidSphere(tail, joint_radius, color, 12);
 }
 
+void DebugRenderer::DrawGrid(const ozz::math::Float3& center, float size, int divisions,
+    const ozz::math::Float4& color_main, const ozz::math::Float4& color_sub) {
+    divisions = std::max(divisions, 1);
+    const float half_size = size * 0.5f;
+    const float step = size / static_cast<float>(divisions);
+
+    // Draw grid lines
+    for (int i = 0; i <= divisions; ++i) {
+        const float offset = -half_size + step * static_cast<float>(i);
+        const bool is_center_line = (i == divisions / 2);
+        const ozz::math::Float4& line_color = is_center_line ? color_main : color_sub;
+
+        // Lines along X axis
+        const ozz::math::Float3 x_start{center.x - half_size, center.y, center.z + offset};
+        const ozz::math::Float3 x_end{center.x + half_size, center.y, center.z + offset};
+        DrawLine(x_start, x_end, line_color);
+
+        // Lines along Z axis
+        const ozz::math::Float3 z_start{center.x + offset, center.y, center.z - half_size};
+        const ozz::math::Float3 z_end{center.x + offset, center.y, center.z + half_size};
+        DrawLine(z_start, z_end, line_color);
+    }
+}
+
 void DebugRenderer::EndFrame() {
     if (line_buffer_dirty_) {
         const size_t vertex_count = line_vertices_.size();
@@ -567,6 +591,17 @@ void DebugRenderer::Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_
     }
 
     UpdateUniforms(view_proj);
+
+    static int render_frame = 0;
+    if (render_frame++ < 3) {
+        printf("* DebugRenderer::Render - line_vertices=%zu, solid_vertices=%zu\n",
+               line_vertices_.size(), solid_vertices_.size());
+        if (!line_vertices_.empty()) {
+            printf("  First line: (%.2f,%.2f,%.2f) -> (%.2f,%.2f,%.2f)\n",
+                   line_vertices_[0].position[0], line_vertices_[0].position[1], line_vertices_[0].position[2],
+                   line_vertices_[1].position[0], line_vertices_[1].position[1], line_vertices_[1].position[2]);
+        }
+    }
 
     if (!line_vertices_.empty()) {
         line_pipeline_.Bind(cmd);
@@ -789,7 +824,12 @@ void DebugRenderer::UpdateDescriptorSet() {
 }
 
 void DebugRenderer::UpdateUniforms(const ozz::math::Float4x4& view_proj) {
-    uniform_buffer_.Upload(&view_proj, sizeof(ozz::math::Float4x4));
+    // Store matrix in column-major format for GLSL (std140 layout)
+    float matrix_data[16];
+    for (int col = 0; col < 4; ++col) {
+        ozz::math::StorePtrU(view_proj.cols[col], matrix_data + col * 4);
+    }
+    uniform_buffer_.Upload(matrix_data, sizeof(matrix_data));
 }
 
 } // namespace renderer

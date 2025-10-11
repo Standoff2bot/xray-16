@@ -39,6 +39,7 @@
 namespace {
 
 using xray::animation::renderer::SkeletonLinePoint;
+using xray::animation::renderer::Camera;
 using xray::animation::renderer::VulkanRenderer;
 
 constexpr double kStatusMessageDuration = 6.0;
@@ -1497,6 +1498,53 @@ void DrawBundleInspector(ViewerState& state, VulkanRenderer& renderer, double no
     ImGui::End();
 }
 
+Camera* GetCameraForWindow(GLFWwindow* window) {
+    if (!window) {
+        return nullptr;
+    }
+    auto* renderer = static_cast<VulkanRenderer*>(glfwGetWindowUserPointer(window));
+    if (!renderer) {
+        return nullptr;
+    }
+    if (renderer->IsImGuiInitialized()) {
+        ImGui::SetCurrentContext(renderer->GetImGuiContext());
+        if (ImGui::GetIO().WantCaptureMouse) {
+            return nullptr;
+        }
+    }
+    return &renderer->GetCamera();
+}
+
+void OnGlfwMouseButton(GLFWwindow* window, int button, int action, int mods) {
+    Camera* camera = GetCameraForWindow(window);
+    if (!camera) {
+        return;
+    }
+    double xpos = 0.0;
+    double ypos = 0.0;
+    glfwGetCursorPos(window, &xpos, &ypos);
+    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS && (mods & GLFW_MOD_SHIFT)) {
+        camera->SetPivotFromScreen(xpos, ypos);
+    }
+    camera->OnMouseButton(button, action, mods, xpos, ypos);
+}
+
+void OnGlfwCursorPos(GLFWwindow* window, double xpos, double ypos) {
+    Camera* camera = GetCameraForWindow(window);
+    if (!camera) {
+        return;
+    }
+    camera->OnMouseMove(xpos, ypos);
+}
+
+void OnGlfwScroll(GLFWwindow* window, double xoffset, double yoffset) {
+    Camera* camera = GetCameraForWindow(window);
+    if (!camera) {
+        return;
+    }
+    camera->OnMouseScroll(xoffset, yoffset);
+}
+
 } // namespace
 
 int main(int argc, const char** argv) {
@@ -1518,6 +1566,10 @@ int main(int argc, const char** argv) {
     }
 
     VulkanRenderer renderer;
+    glfwSetWindowUserPointer(window, &renderer);
+    glfwSetMouseButtonCallback(window, OnGlfwMouseButton);
+    glfwSetCursorPosCallback(window, OnGlfwCursorPos);
+    glfwSetScrollCallback(window, OnGlfwScroll);
     if (!renderer.Initialize(window)) {
         Msg("! Failed to initialize Vulkan renderer");
         glfwDestroyWindow(window);

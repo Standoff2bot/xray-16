@@ -77,6 +77,27 @@ private:
     bool UpdateBoneBufferData(const std::vector<ozz::math::Float4x4>& bone_matrices);
     void UpdateDescriptorSet();
 
+    // Vertex shader debug SSBO (gl_Position instrumentation)
+    bool EnsureClipDebugBuffer(size_t count);
+    void DumpClipDebugBuffer();
+
+    // Fragment shader debug SSBO
+    bool EnsureFragDebugBuffer(size_t count);
+    void ResetFragDebugBuffer(uint32_t count);
+    void DumpFragDebugBuffer();
+
+    struct ClipDebug {
+        float clip_x;
+        float clip_y;
+        float clip_z;
+        float clip_w;
+    };
+
+    struct FragDebugEntry {
+        uint32_t recorded;
+        float sample[4];
+    };
+
     VulkanDevice* device_ = nullptr;
 
     VulkanBuffer vertex_buffer_;
@@ -99,6 +120,19 @@ private:
     uint32_t bones_per_instance_ = 0;
     bool initialized_ = false;
     bool mesh_uploaded_ = false;
+
+    // Vertex shader gl_Position debug SSBO
+    VulkanBuffer clip_debug_buffer_;
+    uint32_t clip_debug_capacity_ = 0;
+    mutable ClipDebug clip_debug_cpu_[4];
+
+    // Fragment shader debug SSBO
+    VulkanBuffer frag_debug_buffer_;
+    uint32_t frag_debug_capacity_ = 0;
+    mutable FragDebugEntry frag_debug_cpu_[4];
+
+    // Debug vertex data for CPU-side verification
+    std::vector<Vertex> debug_vertices_;
 };
 
 } // namespace renderer

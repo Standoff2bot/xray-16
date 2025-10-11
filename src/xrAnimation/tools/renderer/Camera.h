@@ -37,9 +37,11 @@ public:
     void SetNearFar(float near_plane, float far_plane);
 
     // Mouse input handling (call from GLFW callbacks)
-    void OnMouseButton(int button, int action, double xpos, double ypos);
+    void OnMouseButton(int button, int action, int mods, double xpos, double ypos);
     void OnMouseMove(double xpos, double ypos);
     void OnMouseScroll(double xoffset, double yoffset);
+    bool SetPivotFromScreen(double xpos, double ypos);
+    void SetPivot(const ozz::math::Float3& pivot, bool maintain_camera_position = true);
 
     // Getters
     float GetDistance() const { return distance_; }
@@ -69,6 +71,8 @@ private:
     // Mouse interaction state
     bool is_rotating_;
     bool is_panning_;
+    bool is_zooming_;
+    int move_direction_;
     double last_mouse_x_;
     double last_mouse_y_;
 
@@ -76,6 +80,8 @@ private:
     float rotation_sensitivity_;
     float pan_sensitivity_;
     float zoom_sensitivity_;
+    float zoom_drag_sensitivity_;
+    float move_speed_;
 
     // Cached matrices
     mutable ozz::math::Float4x4 view_matrix_;
@@ -85,6 +91,8 @@ private:
     // Helper functions
     void UpdateMatrices() const;
     ozz::math::Float3 CalculateCameraPosition() const;
+    bool RaycastGround(double screen_x, double screen_y, ozz::math::Float3& out_point) const;
+    void RecomputeOrbitFromPosition(const ozz::math::Float3& position);
 };
 
 } // namespace renderer

@@ -9,7 +9,7 @@
 #include <vector>
 #include <filesystem>
 #include <limits>
-#include <cstring>
+#include <cmath>
 
 #define Msg(...) printf(__VA_ARGS__), printf("\n")
 
@@ -29,8 +29,10 @@ struct Influence {
 };
 
 void StoreMatrix(const ozz::math::Float4x4& source, float* destination) {
-    for (int c = 0; c < 4; ++c) {
-        ozz::math::StorePtrU(source.cols[c], destination + c * 4);
+    // Store as column-major for GLSL (std140/std430 layout)
+    // This matches what ozz::math::StorePtrU does for each column
+    for (int col = 0; col < 4; ++col) {
+        ozz::math::StorePtrU(source.cols[col], destination + col * 4);
     }
 }
 
@@ -56,6 +58,8 @@ bool InstancedMeshRenderer::Initialize(VulkanDevice* device) {
 
 void InstancedMeshRenderer::Shutdown() {
     if (!device_) {
+        clip_debug_buffer_.Destroy();
+        clip_debug_capacity_ = 0;
         vertex_buffer_.Destroy();
         index_buffer_.Destroy();
         instance_buffer_.Destroy();
@@ -89,6 +93,10 @@ void InstancedMeshRenderer::Shutdown() {
     pipeline_.Destroy();
     uniform_buffer_.Destroy();
     bone_matrix_buffer_.Destroy();
+    clip_debug_buffer_.Destroy();
+    clip_debug_capacity_ = 0;
+    frag_debug_buffer_.Destroy();
+    frag_debug_capacity_ = 0;
     instance_buffer_.Destroy();
     index_buffer_.Destroy();
     vertex_buffer_.Destroy();
@@ -274,8 +282,79 @@ bool InstancedMeshRenderer::UploadMesh(const ozz::sample::Mesh& mesh) {
     index_buffer_.Upload(mesh.triangle_indices.data(), sizeof(uint16_t) * mesh.triangle_indices.size());
 
     bones_per_instance_ = static_cast<uint32_t>(mesh.num_joints());
+    debug_vertices_ = vertices;
     mesh_uploaded_ = true;
     return true;
+}
+
+bool InstancedMeshRenderer::EnsureClipDebugBuffer(size_t count) {
+    if (!device_) {
+        return false;
+    }
+
+    if (clip_debug_buffer_.GetBuffer() != VK_NULL_HANDLE && clip_debug_capacity_ >= count) {
+        return true;
+    }
+
+    clip_debug_buffer_.Destroy();
+    clip_debug_capacity_ = static_cast<uint32_t>(count);
+
+    if (clip_debug_capacity_ == 0) {
+        UpdateDescriptorSet();
+        return true;
+    }
+
+    const VkDeviceSize size_bytes = sizeof(ClipDebug) * clip_debug_capacity_;
+    clip_debug_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), size_bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU);
+
+    if (clip_debug_buffer_.GetBuffer() == VK_NULL_HANDLE) {
+        clip_debug_capacity_ = 0;
+        Msg("! Failed to create clip debug buffer");
+        UpdateDescriptorSet();
+        return false;
+    }
+
+    std::vector<ClipDebug> zeros(clip_debug_capacity_);
+    clip_debug_buffer_.Upload(zeros.data(), size_bytes);
+    UpdateDescriptorSet();
+    return true;
+}
+
+void InstancedMeshRenderer::DumpClipDebugBuffer() {
+    if (clip_debug_buffer_.GetBuffer() == VK_NULL_HANDLE || clip_debug_capacity_ == 0) {
+        return;
+    }
+
+    ClipDebug* mapped = static_cast<ClipDebug*>(clip_debug_buffer_.Map());
+    if (!mapped) {
+        return;
+    }
+
+    static int dump_counter = 0;
+    const uint32_t capture_count = std::min<uint32_t>(clip_debug_capacity_, 4u);
+    bool any_output = false;
+    for (uint32_t i = 0; i < capture_count; ++i) {
+        clip_debug_cpu_[i] = mapped[i];
+        const float w = clip_debug_cpu_[i].clip_w;
+        const float z = clip_debug_cpu_[i].clip_z;
+        if (dump_counter < 5 && (std::fabs(w) > 1e-6f || std::fabs(z) > 1e-6f)) {
+            Msg("[ClipDebugSSBO] v%u clip=(%.6f, %.6f, %.6f, %.6f)", i,
+                clip_debug_cpu_[i].clip_x,
+                clip_debug_cpu_[i].clip_y,
+                clip_debug_cpu_[i].clip_z,
+                clip_debug_cpu_[i].clip_w);
+            any_output = true;
+        }
+        mapped[i].clip_x = mapped[i].clip_y = mapped[i].clip_z = mapped[i].clip_w = 0.0f;
+    }
+
+    clip_debug_buffer_.Unmap();
+
+    if (dump_counter < 5 && !any_output) {
+        Msg("[ClipDebugSSBO] no clip outputs captured (all zeros)");
+    }
+    ++dump_counter;
 }
 
 void InstancedMeshRenderer::Render(VkCommandBuffer cmd,
@@ -295,18 +374,102 @@ void InstancedMeshRenderer::Render(VkCommandBuffer cmd,
     }
 
     const size_t required_bones = static_cast<size_t>(bones_per_instance_) * instances.size();
-    if (bones_per_instance_ > 0) {
-        if (bone_matrices.size() < required_bones) {
-            Msg("! Bone matrix buffer smaller than expected (%zu < %zu)", bone_matrices.size(), required_bones);
-            return;
-        }
+    if (bones_per_instance_ > 0 && bone_matrices.size() < required_bones) {
+        Msg("! Bone matrix buffer smaller than expected (%zu < %zu)", bone_matrices.size(), required_bones);
+        return;
     }
 
     if (!UpdateBoneBufferData(bone_matrices)) {
         return;
     }
 
+    EnsureClipDebugBuffer(4);
+    device_->WaitIdle();
+    DumpClipDebugBuffer();
+
     UpdateUniforms(view_proj);
+
+    static int debug_frames = 0;
+    if (debug_frames < 3 && !debug_vertices_.empty() && !instances.empty() && !bone_matrices.empty()) {
+        const MeshInstanceData& instance = instances.front();
+        const uint32_t base_offset = instance.bone_matrix_offset;
+
+        auto skin_vertex = [&](const Vertex& vert) -> ozz::math::SimdFloat4 {
+            const float local_raw[4] = {vert.position[0], vert.position[1], vert.position[2], 1.0f};
+            const ozz::math::SimdFloat4 local = ozz::math::simd_float4::LoadPtrU(local_raw);
+            const float weights[4] = {vert.bone_weights[0], vert.bone_weights[1], vert.bone_weights[2], vert.bone_weights[3]};
+            const uint32_t indices[4] = {vert.bone_indices[0], vert.bone_indices[1], vert.bone_indices[2], vert.bone_indices[3]};
+            const float total = weights[0] + weights[1] + weights[2] + weights[3];
+            if (total <= 0.0f) {
+                return local;
+            }
+            float accum[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            for (int i = 0; i < 4; ++i) {
+                const float weight = weights[i];
+                if (weight <= 0.0f) {
+                    continue;
+                }
+                const size_t palette_index = static_cast<size_t>(base_offset) + static_cast<size_t>(indices[i]);
+                if (palette_index >= bone_matrices.size()) {
+                    continue;
+                }
+                const ozz::math::Float4x4& bone = bone_matrices[palette_index];
+                const ozz::math::SimdFloat4 transformed = ozz::math::TransformPoint(bone, local);
+                accum[0] += ozz::math::GetX(transformed) * weight;
+                accum[1] += ozz::math::GetY(transformed) * weight;
+                accum[2] += ozz::math::GetZ(transformed) * weight;
+                accum[3] += ozz::math::GetW(transformed) * weight;
+            }
+            return ozz::math::simd_float4::LoadPtrU(accum);
+        };
+
+        const Vertex& v = debug_vertices_.front();
+        const ozz::math::SimdFloat4 skinned = skin_vertex(v);
+        const ozz::math::SimdFloat4 world = ozz::math::TransformPoint(instance.transform, skinned);
+        const ozz::math::SimdFloat4 clip = ozz::math::TransformPoint(view_proj, world);
+
+        const float clip_x = ozz::math::GetX(clip);
+        const float clip_y = ozz::math::GetY(clip);
+        const float clip_z = ozz::math::GetZ(clip);
+        const float clip_w = ozz::math::GetW(clip);
+        const float ndc_z = clip_z / clip_w;
+        const float depth = 0.5f * ndc_z + 0.5f;
+
+        const float world_x = ozz::math::GetX(world);
+        const float world_y = ozz::math::GetY(world);
+        const float world_z = ozz::math::GetZ(world);
+
+        Msg("[DepthDebug] v0 world=(%.3f, %.3f, %.3f) clip=(%.3f, %.3f, %.3f, %.3f) ndc_z=%.6f depth=%.6f",
+            world_x, world_y, world_z, clip_x, clip_y, clip_z, clip_w, ndc_z, depth);
+
+        if (debug_frames == 0) {
+            float min_depth = std::numeric_limits<float>::max();
+            float max_depth = std::numeric_limits<float>::lowest();
+            float min_ndc = std::numeric_limits<float>::max();
+            float max_ndc = std::numeric_limits<float>::lowest();
+            size_t sample_count = 0;
+            for (const Vertex& vert : debug_vertices_) {
+                const ozz::math::SimdFloat4 skinned_vert = skin_vertex(vert);
+                const ozz::math::SimdFloat4 world_vert = ozz::math::TransformPoint(instance.transform, skinned_vert);
+                const ozz::math::SimdFloat4 clip_vert = ozz::math::TransformPoint(view_proj, world_vert);
+                const float w = ozz::math::GetW(clip_vert);
+                if (std::abs(w) < 1e-6f) {
+                    continue;
+                }
+                const float ndc = ozz::math::GetZ(clip_vert) / w;
+                const float depth_val = ndc * 0.5f + 0.5f;
+                min_depth = std::min(min_depth, depth_val);
+                max_depth = std::max(max_depth, depth_val);
+                min_ndc = std::min(min_ndc, ndc);
+                max_ndc = std::max(max_ndc, ndc);
+                ++sample_count;
+            }
+            Msg("[DepthDebug] sampled %zu vertices: depth range [%.6f, %.6f], ndc_z range [%.6f, %.6f]",
+                sample_count, min_depth, max_depth, min_ndc, max_ndc);
+        }
+
+        ++debug_frames;
+    }
 
     pipeline_.Bind(cmd);
 
@@ -318,6 +481,95 @@ void InstancedMeshRenderer::Render(VkCommandBuffer cmd,
     vkCmdBindIndexBuffer(cmd, index_buffer_.GetBuffer(), 0, VK_INDEX_TYPE_UINT16);
 
     vkCmdDrawIndexed(cmd, index_count_, instance_count_, 0, 0, 0);
+}
+
+bool InstancedMeshRenderer::EnsureFragDebugBuffer(size_t count) {
+    if (!device_) {
+        return false;
+    }
+
+    if (frag_debug_buffer_.GetBuffer() != VK_NULL_HANDLE && frag_debug_capacity_ >= count) {
+        return true;
+    }
+
+    frag_debug_buffer_.Destroy();
+    frag_debug_capacity_ = static_cast<uint32_t>(count);
+
+    if (frag_debug_capacity_ == 0) {
+        UpdateDescriptorSet();
+        return true;
+    }
+
+    const VkDeviceSize size_bytes = sizeof(FragDebugEntry) * frag_debug_capacity_;
+    frag_debug_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), size_bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU);
+
+    if (frag_debug_buffer_.GetBuffer() == VK_NULL_HANDLE) {
+        frag_debug_capacity_ = 0;
+        Msg("! Failed to create fragment debug buffer");
+        UpdateDescriptorSet();
+        return false;
+    }
+
+    std::vector<FragDebugEntry> zeros(frag_debug_capacity_);
+    frag_debug_buffer_.Upload(zeros.data(), size_bytes);
+    UpdateDescriptorSet();
+    return true;
+}
+
+void InstancedMeshRenderer::ResetFragDebugBuffer(uint32_t count) {
+    if (frag_debug_buffer_.GetBuffer() == VK_NULL_HANDLE || frag_debug_capacity_ == 0) {
+        return;
+    }
+
+    FragDebugEntry* mapped = static_cast<FragDebugEntry*>(frag_debug_buffer_.Map());
+    if (!mapped) {
+        return;
+    }
+
+    const uint32_t limit = std::min<uint32_t>(frag_debug_capacity_, count);
+    for (uint32_t i = 0; i < limit; ++i) {
+        mapped[i].recorded = 0u;
+        std::fill(std::begin(mapped[i].sample), std::end(mapped[i].sample), 0.0f);
+    }
+
+    frag_debug_buffer_.Unmap();
+}
+
+void InstancedMeshRenderer::DumpFragDebugBuffer() {
+    if (frag_debug_buffer_.GetBuffer() == VK_NULL_HANDLE || frag_debug_capacity_ == 0) {
+        return;
+    }
+
+    FragDebugEntry* mapped = static_cast<FragDebugEntry*>(frag_debug_buffer_.Map());
+    if (!mapped) {
+        return;
+    }
+
+    static int dump_counter = 0;
+    const uint32_t capture_count = std::min<uint32_t>(frag_debug_capacity_, 4u);
+    bool any_output = false;
+    for (uint32_t i = 0; i < capture_count; ++i) {
+        frag_debug_cpu_[i] = mapped[i];
+        if (dump_counter < 5 && frag_debug_cpu_[i].recorded != 0u) {
+            Msg("[FragDebugSSBO] entry %u depth=%.6f computed=%.6f diff=%.6f clip_w=%.6f",
+                i,
+                frag_debug_cpu_[i].sample[0],
+                frag_debug_cpu_[i].sample[1],
+                frag_debug_cpu_[i].sample[2],
+                frag_debug_cpu_[i].sample[3]);
+            any_output = true;
+        }
+        mapped[i].recorded = 0u;
+        std::fill(std::begin(mapped[i].sample), std::end(mapped[i].sample), 0.0f);
+    }
+
+    frag_debug_buffer_.Unmap();
+
+    if (dump_counter < 5 && !any_output) {
+        Msg("[FragDebugSSBO] no fragment depth captured");
+    }
+    ++dump_counter;
 }
 
 bool InstancedMeshRenderer::CreateDescriptorSetLayout() {
@@ -333,7 +585,19 @@ bool InstancedMeshRenderer::CreateDescriptorSetLayout() {
     bones_binding.descriptorCount = 1;
     bones_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {camera_binding, bones_binding};
+    VkDescriptorSetLayoutBinding clip_binding = {};
+    clip_binding.binding = 2;
+    clip_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    clip_binding.descriptorCount = 1;
+    clip_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutBinding frag_binding = {};
+    frag_binding.binding = 3;
+    frag_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    frag_binding.descriptorCount = 1;
+    frag_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {camera_binding, bones_binding, clip_binding, frag_binding};
 
     VkDescriptorSetLayoutCreateInfo layout_info = {};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -467,7 +731,7 @@ bool InstancedMeshRenderer::CreateDescriptorPool() {
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     pool_sizes[0].descriptorCount = 1;
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    pool_sizes[1].descriptorCount = 1;
+    pool_sizes[1].descriptorCount = 3;  // bones + clip_debug + frag_debug
 
     VkDescriptorPoolCreateInfo pool_info = {};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -563,6 +827,39 @@ bool InstancedMeshRenderer::EnsureBoneBuffer(size_t matrix_count) {
 void InstancedMeshRenderer::UpdateUniforms(const ozz::math::Float4x4& view_proj) {
     CameraUBO ubo{};
     StoreMatrix(view_proj, ubo.view_proj);
+
+    // DEBUG: Print view_proj matrix AND what's in the UBO buffer
+    static int frame_count = 0;
+    if (frame_count++ < 3) {  // Only print first 3 frames
+        Msg("=== View-Proj Matrix (rows) ===");
+        Msg("  [%.3f, %.3f, %.3f, %.3f]",
+            ozz::math::GetX(view_proj.cols[0]),
+            ozz::math::GetX(view_proj.cols[1]),
+            ozz::math::GetX(view_proj.cols[2]),
+            ozz::math::GetX(view_proj.cols[3]));
+        Msg("  [%.3f, %.3f, %.3f, %.3f]",
+            ozz::math::GetY(view_proj.cols[0]),
+            ozz::math::GetY(view_proj.cols[1]),
+            ozz::math::GetY(view_proj.cols[2]),
+            ozz::math::GetY(view_proj.cols[3]));
+        Msg("  [%.3f, %.3f, %.3f, %.3f]",
+            ozz::math::GetZ(view_proj.cols[0]),
+            ozz::math::GetZ(view_proj.cols[1]),
+            ozz::math::GetZ(view_proj.cols[2]),
+            ozz::math::GetZ(view_proj.cols[3]));
+        Msg("  [%.3f, %.3f, %.3f, %.3f]",
+            ozz::math::GetW(view_proj.cols[0]),
+            ozz::math::GetW(view_proj.cols[1]),
+            ozz::math::GetW(view_proj.cols[2]),
+            ozz::math::GetW(view_proj.cols[3]));
+
+        Msg("=== Camera UBO Upload (16 floats as stored) ===");
+        for (int i = 0; i < 16; i += 4) {
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ubo.view_proj[i], ubo.view_proj[i+1], ubo.view_proj[i+2], ubo.view_proj[i+3]);
+        }
+    }
+
     uniform_buffer_.Upload(&ubo, sizeof(CameraUBO));
 }
 
@@ -584,6 +881,26 @@ bool InstancedMeshRenderer::UpdateInstanceBufferData(const std::vector<MeshInsta
         StoreMatrix(instances[i].transform, dst.transform);
         dst.bone_matrix_offset = instances[i].bone_matrix_offset;
         dst.padding[0] = dst.padding[1] = dst.padding[2] = 0.0f;
+
+        // DEBUG: Print first instance transform
+        static int inst_frame = 0;
+        if (i == 0 && inst_frame++ < 3) {
+            Msg("=== Instance Transform 0 (rows) ===");
+            const auto& m = instances[i].transform;
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetX(m.cols[0]), ozz::math::GetX(m.cols[1]),
+                ozz::math::GetX(m.cols[2]), ozz::math::GetX(m.cols[3]));
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetY(m.cols[0]), ozz::math::GetY(m.cols[1]),
+                ozz::math::GetY(m.cols[2]), ozz::math::GetY(m.cols[3]));
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetZ(m.cols[0]), ozz::math::GetZ(m.cols[1]),
+                ozz::math::GetZ(m.cols[2]), ozz::math::GetZ(m.cols[3]));
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetW(m.cols[0]), ozz::math::GetW(m.cols[1]),
+                ozz::math::GetW(m.cols[2]), ozz::math::GetW(m.cols[3]));
+            Msg("  bone_matrix_offset = %u", instances[i].bone_matrix_offset);
+        }
     }
 
     instance_buffer_.Upload(gpu_data.data(), sizeof(InstanceGpuData) * gpu_data.size());
@@ -603,6 +920,26 @@ bool InstancedMeshRenderer::UpdateBoneBufferData(const std::vector<ozz::math::Fl
     std::vector<float> flattened(matrix_count * 16);
     for (size_t i = 0; i < matrix_count; ++i) {
         StoreMatrix(bone_matrices[i], flattened.data() + i * 16);
+
+        // DEBUG: Print first 3 bone matrices
+        static int bone_frame = 0;
+        if (i < 3 && bone_frame < 3) {
+            Msg("=== Bone Matrix %zu (rows) ===", i);
+            const auto& m = bone_matrices[i];
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetX(m.cols[0]), ozz::math::GetX(m.cols[1]),
+                ozz::math::GetX(m.cols[2]), ozz::math::GetX(m.cols[3]));
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetY(m.cols[0]), ozz::math::GetY(m.cols[1]),
+                ozz::math::GetY(m.cols[2]), ozz::math::GetY(m.cols[3]));
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetZ(m.cols[0]), ozz::math::GetZ(m.cols[1]),
+                ozz::math::GetZ(m.cols[2]), ozz::math::GetZ(m.cols[3]));
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetW(m.cols[0]), ozz::math::GetW(m.cols[1]),
+                ozz::math::GetW(m.cols[2]), ozz::math::GetW(m.cols[3]));
+            if (i == 2) bone_frame++;
+        }
     }
 
     bone_matrix_buffer_.Upload(flattened.data(), sizeof(float) * flattened.size());
@@ -624,23 +961,64 @@ void InstancedMeshRenderer::UpdateDescriptorSet() {
     bone_info.offset = 0;
     bone_info.range = VK_WHOLE_SIZE;
 
-    std::array<VkWriteDescriptorSet, 2> writes = {};
+    VkDescriptorBufferInfo clip_info = {};
+    clip_info.buffer = clip_debug_buffer_.GetBuffer();
+    clip_info.offset = 0;
+    clip_info.range = VK_WHOLE_SIZE;
 
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = descriptor_set_;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[0].pBufferInfo = &camera_info;
+    VkDescriptorBufferInfo frag_info = {};
+    frag_info.buffer = frag_debug_buffer_.GetBuffer();
+    frag_info.offset = 0;
+    frag_info.range = VK_WHOLE_SIZE;
 
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = descriptor_set_;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[1].pBufferInfo = &bone_info;
+    std::vector<VkWriteDescriptorSet> writes;
 
-    vkUpdateDescriptorSets(device_->GetDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    // Always write camera and bones
+    VkWriteDescriptorSet camera_write = {};
+    camera_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    camera_write.dstSet = descriptor_set_;
+    camera_write.dstBinding = 0;
+    camera_write.descriptorCount = 1;
+    camera_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    camera_write.pBufferInfo = &camera_info;
+    writes.push_back(camera_write);
+
+    VkWriteDescriptorSet bones_write = {};
+    bones_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    bones_write.dstSet = descriptor_set_;
+    bones_write.dstBinding = 1;
+    bones_write.descriptorCount = 1;
+    bones_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bones_write.pBufferInfo = &bone_info;
+    writes.push_back(bones_write);
+
+    // Optionally write clip debug buffer
+    if (clip_debug_buffer_.GetBuffer() != VK_NULL_HANDLE) {
+        VkWriteDescriptorSet clip_write = {};
+        clip_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        clip_write.dstSet = descriptor_set_;
+        clip_write.dstBinding = 2;
+        clip_write.descriptorCount = 1;
+        clip_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        clip_write.pBufferInfo = &clip_info;
+        writes.push_back(clip_write);
+    }
+
+    // Optionally write frag debug buffer
+    if (frag_debug_buffer_.GetBuffer() != VK_NULL_HANDLE) {
+        VkWriteDescriptorSet frag_write = {};
+        frag_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        frag_write.dstSet = descriptor_set_;
+        frag_write.dstBinding = 3;
+        frag_write.descriptorCount = 1;
+        frag_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        frag_write.pBufferInfo = &frag_info;
+        writes.push_back(frag_write);
+    }
+
+    if (!writes.empty()) {
+        vkUpdateDescriptorSets(device_->GetDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
 }
 
 } // namespace renderer

@@ -402,6 +402,29 @@ void VulkanRenderer::BeginFrame() {
 
     if (debug_renderer_initialized_) {
         debug_renderer_.BeginFrame();
+        // Draw ground grid for reference - BRIGHT colors for visibility
+        const ozz::math::Float3 grid_center{0.0f, 0.0f, 0.0f};
+        const ozz::math::Float4 grid_main{1.0f, 1.0f, 1.0f, 1.0f};  // WHITE main gridlines
+        const ozz::math::Float4 grid_sub{0.8f, 0.8f, 0.8f, 1.0f};    // Light gray sub gridlines
+        debug_renderer_.DrawGrid(grid_center, 20.0f, 20, grid_main, grid_sub);
+
+        // Draw some test axes at origin to verify rendering - BRIGHT colors
+        const ozz::math::Float4x4 origin = ozz::math::Float4x4::identity();
+        debug_renderer_.DrawAxes(origin, 5.0f,  // Larger axes
+            ozz::math::Float4{1.0f, 0.0f, 0.0f, 1.0f},  // Bright Red X
+            ozz::math::Float4{0.0f, 1.0f, 0.0f, 1.0f},  // Bright Green Y
+            ozz::math::Float4{0.0f, 0.0f, 1.0f, 1.0f}); // Bright Blue Z
+
+        static int frame_count = 0;
+        if (frame_count++ < 5) {
+            Msg("* Debug renderer drawing grid and axes (frame %d)", frame_count);
+        }
+    } else {
+        static bool warned = false;
+        if (!warned) {
+            Msg("! Debug renderer not initialized");
+            warned = true;
+        }
     }
 
     if (imgui_initialized_) {
@@ -416,7 +439,7 @@ void VulkanRenderer::BeginFrame() {
         }
 
         if (!capture_mouse) {
-            camera_.Update(window_, 0.0f);
+            camera_.Update(window_, static_cast<float>(frame_delta_seconds_));
         }
     }
 
@@ -995,11 +1018,16 @@ void VulkanRenderer::PopulateSkeletonDebugShapes() {
 }
 
 void VulkanRenderer::RenderDebugPrimitives(VkCommandBuffer cmd) {
-    if (!debug_renderer_initialized_ || !show_debug_overlay_ || !skeleton_loaded_) {
+    if (!debug_renderer_initialized_) {
         return;
     }
 
-    PopulateSkeletonDebugShapes();
+    // Always populate skeleton debug shapes if overlay is enabled
+    if (show_debug_overlay_ && skeleton_loaded_) {
+        PopulateSkeletonDebugShapes();
+    }
+
+    // Always render debug primitives (including grid)
     debug_renderer_.EndFrame();
     debug_renderer_.Render(cmd, camera_.GetViewProjectionMatrix());
 }
