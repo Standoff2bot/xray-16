@@ -119,6 +119,7 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
 
     add_executable(ozz_animation_viewer
         ozz_animation_viewer.cpp
+        SimpleObjLoader.cpp
         ${RENDERER_SOURCES}
         ../../../Externals/imgui/imgui.cpp
         ../../../Externals/imgui/imgui_draw.cpp

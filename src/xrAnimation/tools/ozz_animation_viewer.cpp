@@ -1097,6 +1097,11 @@ void DrawRenderingPanel(VulkanRenderer& renderer) {
         renderer.SetShowDebugOverlay(show_debug_overlay);
     }
 
+    bool show_viking_room = renderer.GetShowVikingRoom();
+    if (ImGui::Checkbox("Show viking room (test mesh)", &show_viking_room)) {
+        renderer.SetShowVikingRoom(show_viking_room);
+    }
+
     ImGui::Separator();
 
     float clear_r = 0.0f;

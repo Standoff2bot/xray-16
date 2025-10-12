@@ -1,6 +1,7 @@
 #include "VulkanRenderer.h"
 
 #include "framework/mesh.h"
+#include "../SimpleObjLoader.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <array>
@@ -342,6 +343,15 @@ void VulkanRenderer::RenderImGui(VkCommandBuffer cmd) {
 }
 
 void VulkanRenderer::Shutdown() {
+    if (viking_room_renderer_initialized_) {
+        viking_room_renderer_.Shutdown();
+        viking_room_renderer_initialized_ = false;
+        viking_room_loaded_ = false;
+        viking_room_instances_.clear();
+        viking_room_identity_matrices_.clear();
+        viking_room_mesh_.reset();
+    }
+
     if (mesh_renderer_initialized_) {
         mesh_renderer_.Shutdown();
         mesh_renderer_initialized_ = false;
@@ -889,6 +899,8 @@ void VulkanRenderer::RenderScene() {
 
     RenderSkinnedMeshes(cmd);
 
+    RenderVikingRoom(cmd);
+
     if (skeleton_renderer_initialized_ && show_skeleton_lines_) {
         skeleton_renderer_.Render(cmd, camera_.GetViewProjectionMatrix());
     }
@@ -1076,6 +1088,70 @@ void VulkanRenderer::SetShowSkinnedMesh(bool show) {
 
 void VulkanRenderer::SetShowDebugOverlay(bool show) {
     show_debug_overlay_ = show;
+}
+
+void VulkanRenderer::SetShowVikingRoom(bool show) {
+    show_viking_room_ = show;
+
+    // Auto-load viking room mesh if enabled for first time
+    if (show && !viking_room_loaded_) {
+        LoadVikingRoomMesh();
+    }
+}
+
+bool VulkanRenderer::LoadVikingRoomMesh() {
+    if (viking_room_loaded_) {
+        return true;
+    }
+
+    // Initialize viking room renderer if needed
+    if (!viking_room_renderer_initialized_) {
+        viking_room_renderer_initialized_ = viking_room_renderer_.Initialize(&device_);
+        if (!viking_room_renderer_initialized_) {
+            Msg("! Failed to initialize viking room renderer");
+            return false;
+        }
+    }
+
+    // Allocate mesh
+    viking_room_mesh_ = std::make_unique<ozz::sample::Mesh>();
+
+    // Load the OBJ file
+    const std::string viking_room_path = "res/testdata/viking_room.obj";
+    if (!xray::animation::tools::SimpleObjLoader::LoadObjFile(viking_room_path, *viking_room_mesh_)) {
+        Msg("! Failed to load viking room mesh from: %s", viking_room_path.c_str());
+        viking_room_mesh_.reset();
+        return false;
+    }
+
+    // Upload to GPU
+    if (!viking_room_renderer_.UploadMesh(*viking_room_mesh_)) {
+        Msg("! Failed to upload viking room mesh to GPU");
+        viking_room_mesh_.reset();
+        return false;
+    }
+
+    // Set up rendering instance (non-skinned, so single identity matrix)
+    viking_room_instances_.resize(1);
+    viking_room_instances_[0].transform = ozz::math::Float4x4::identity();
+    viking_room_instances_[0].bone_matrix_offset = 0;
+
+    // Single identity matrix for non-skinned mesh
+    viking_room_identity_matrices_.resize(1);
+    viking_room_identity_matrices_[0] = ozz::math::Float4x4::identity();
+
+    viking_room_loaded_ = true;
+    Msg("* Viking room mesh loaded successfully");
+    return true;
+}
+
+void VulkanRenderer::RenderVikingRoom(VkCommandBuffer cmd) {
+    if (!viking_room_renderer_initialized_ || !viking_room_loaded_ || !show_viking_room_) {
+        return;
+    }
+
+    viking_room_renderer_.Render(cmd, camera_.GetViewProjectionMatrix(),
+                                  viking_room_instances_, viking_room_identity_matrices_);
 }
 
 void VulkanRenderer::SetMeshRotationSpeed(float radians_per_second) {

@@ -279,7 +279,10 @@ bool InstancedMeshRenderer::UploadMesh(const ozz::sample::Mesh& mesh) {
     if (!EnsureIndexBuffer(total_indices)) {
         return false;
     }
-    index_buffer_.Upload(mesh.triangle_indices.data(), sizeof(uint16_t) * mesh.triangle_indices.size());
+
+    // Convert uint16_t indices to uint32_t for VK_INDEX_TYPE_UINT32
+    std::vector<uint32_t> indices_uint32(mesh.triangle_indices.begin(), mesh.triangle_indices.end());
+    index_buffer_.Upload(indices_uint32.data(), sizeof(uint32_t) * indices_uint32.size());
 
     bones_per_instance_ = static_cast<uint32_t>(mesh.num_joints());
     debug_vertices_ = vertices;
@@ -478,7 +481,7 @@ void InstancedMeshRenderer::Render(VkCommandBuffer cmd,
     VkBuffer vertex_buffers[] = {vertex_buffer_.GetBuffer(), instance_buffer_.GetBuffer()};
     VkDeviceSize offsets[] = {0, 0};
     vkCmdBindVertexBuffers(cmd, 0, 2, vertex_buffers, offsets);
-    vkCmdBindIndexBuffer(cmd, index_buffer_.GetBuffer(), 0, VK_INDEX_TYPE_UINT16);
+    vkCmdBindIndexBuffer(cmd, index_buffer_.GetBuffer(), 0, VK_INDEX_TYPE_UINT32);
 
     vkCmdDrawIndexed(cmd, index_count_, instance_count_, 0, 0, 0);
 }
@@ -710,7 +713,7 @@ bool InstancedMeshRenderer::CreatePipeline() {
     config.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;  // Coordinate reflection reverses winding
     config.depth_test_enable = true;   // ENABLE depth testing
     config.depth_write_enable = true;  // ENABLE depth writes
-    config.depth_compare_op = VK_COMPARE_OP_LESS;  // Standard depth test
+    config.depth_compare_op = VK_COMPARE_OP_LESS;  // Must use LESS with inverted projection matrix
     config.blend_enable = false;
     config.render_pass = device_->GetRenderPass();
     config.subpass = 0;
@@ -787,7 +790,7 @@ bool InstancedMeshRenderer::EnsureVertexBuffer(size_t vertex_count) {
 
 bool InstancedMeshRenderer::EnsureIndexBuffer(size_t index_count) {
     const size_t count = std::max<size_t>(index_count, 1);
-    const VkDeviceSize size_bytes = sizeof(uint16_t) * count;
+    const VkDeviceSize size_bytes = sizeof(uint32_t) * count;
     index_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), size_bytes,
         VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
     return index_buffer_.GetBuffer() != VK_NULL_HANDLE;

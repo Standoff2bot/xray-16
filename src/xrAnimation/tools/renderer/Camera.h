@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ozz/base/maths/vec_float.h"
-#include "ozz/base/maths/simd_math.h"
+#include <ozz/base/maths/simd_math.h>
+#include <ozz/base/maths/vec_float.h>
 
 struct GLFWwindow;
 
@@ -9,90 +9,66 @@ namespace xray {
 namespace animation {
 namespace renderer {
 
-// Arcball camera controller for 3D viewport navigation
+// Clean, simple camera implementation following Vulkan tutorial conventions
 class Camera {
 public:
     Camera();
-    ~Camera() = default;
 
-    // Initialize camera with window dimensions
     void Initialize(float viewport_width, float viewport_height);
+    void Update(float delta_time);
 
-    // Update camera based on input (call each frame)
-    void Update(GLFWwindow* window, float delta_time);
-
-    // Get view matrix (world -> camera space)
+    // Get matrices
     ozz::math::Float4x4 GetViewMatrix() const;
-
-    // Get projection matrix (camera space -> clip space)
     ozz::math::Float4x4 GetProjectionMatrix() const;
-
-    // Get combined view-projection matrix
     ozz::math::Float4x4 GetViewProjectionMatrix() const;
 
-    // Camera control settings
-    void SetDistance(float distance);
+    // Camera controls
+    void SetPosition(const ozz::math::Float3& position);
     void SetTarget(const ozz::math::Float3& target);
+    void SetUp(const ozz::math::Float3& up);
+
+    // Compatibility with old Camera interface
+    void Update(GLFWwindow* window, float delta_time);
+    void OnMouseButton(int button, int action, int mods, double xpos, double ypos) {}
+    void OnMouseMove(double xpos, double ypos) {}
+    void OnMouseScroll(double xoffset, double yoffset) {}
+    bool SetPivotFromScreen(double xpos, double ypos) { return false; }  // Stub for compatibility
+    void SetDistance(float distance) {}  // Stub for compatibility
+    float GetDistance() const { return 7.0f; }  // Default distance
+    void Reset() {
+        SetPosition(ozz::math::Float3(2.0f, 2.0f, 2.0f));
+        SetTarget(ozz::math::Float3(0.0f, 0.0f, 0.0f));
+    }
+
+    // Projection settings
     void SetFOV(float fov_degrees);
     void SetNearFar(float near_plane, float far_plane);
+    void SetAspectRatio(float aspect);
 
-    // Mouse input handling (call from GLFW callbacks)
-    void OnMouseButton(int button, int action, int mods, double xpos, double ypos);
-    void OnMouseMove(double xpos, double ypos);
-    void OnMouseScroll(double xoffset, double yoffset);
-    bool SetPivotFromScreen(double xpos, double ypos);
-    void SetPivot(const ozz::math::Float3& pivot, bool maintain_camera_position = true);
-
-    // Getters
-    float GetDistance() const { return distance_; }
-    ozz::math::Float3 GetTarget() const { return target_; }
-    ozz::math::Float3 GetPosition() const;
-
-    // Reset camera to default position
-    void Reset();
+    // Get camera state
+    const ozz::math::Float3& GetPosition() const { return eye_position_; }
+    const ozz::math::Float3& GetTarget() const { return look_at_target_; }
+    float GetNear() const { return near_plane_; }
+    float GetFar() const { return far_plane_; }
 
 private:
-    // Viewport dimensions
-    float viewport_width_;
-    float viewport_height_;
-    float aspect_ratio_;
+    void UpdateMatrices() const;
 
-    // Camera parameters
-    ozz::math::Float3 target_;        // Look-at target point
-    float distance_;                   // Distance from target
-    float yaw_;                        // Horizontal rotation (radians)
-    float pitch_;                      // Vertical rotation (radians)
+    // Camera state
+    ozz::math::Float3 eye_position_;
+    ozz::math::Float3 look_at_target_;
+    ozz::math::Float3 up_vector_;
 
     // Projection parameters
-    float fov_;                        // Field of view in radians
+    float fov_radians_;
+    float aspect_ratio_;
     float near_plane_;
     float far_plane_;
-
-    // Mouse interaction state
-    bool is_rotating_;
-    bool is_panning_;
-    bool is_zooming_;
-    int move_direction_;
-    double last_mouse_x_;
-    double last_mouse_y_;
-
-    // Camera control sensitivity
-    float rotation_sensitivity_;
-    float pan_sensitivity_;
-    float zoom_sensitivity_;
-    float zoom_drag_sensitivity_;
-    float move_speed_;
 
     // Cached matrices
     mutable ozz::math::Float4x4 view_matrix_;
     mutable ozz::math::Float4x4 projection_matrix_;
     mutable bool matrices_dirty_;
-
-    // Helper functions
-    void UpdateMatrices() const;
-    ozz::math::Float3 CalculateCameraPosition() const;
-    bool RaycastGround(double screen_x, double screen_y, ozz::math::Float3& out_point) const;
-    void RecomputeOrbitFromPosition(const ozz::math::Float3& position);
 };
 
 } // namespace renderer

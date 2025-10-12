@@ -18,6 +18,7 @@
 #include <ozz/base/maths/simd_math.h>
 #include <ozz/base/maths/soa_transform.h>
 #include <vector>
+#include <memory>
 
 namespace ozz {
 namespace sample {
@@ -77,6 +78,12 @@ public:
     bool GetShowSkinnedMesh() const { return show_skinned_mesh_; }
     void SetShowDebugOverlay(bool show);
     bool GetShowDebugOverlay() const { return show_debug_overlay_; }
+    void SetShowVikingRoom(bool show);
+    bool GetShowVikingRoom() const { return show_viking_room_; }
+
+    // Viking room test mesh
+    bool LoadVikingRoomMesh();
+    bool HasVikingRoomLoaded() const { return viking_room_loaded_; }
 
     // Frame timing
     float GetFrameDeltaSeconds() const { return static_cast<float>(frame_delta_seconds_); }
@@ -102,6 +109,7 @@ private:
     bool InitializeTrianglePipeline();
     bool InitializeDebugMesh();
     void RenderSkinnedMeshes(VkCommandBuffer cmd);
+    void RenderVikingRoom(VkCommandBuffer cmd);
     void UpdateMeshAnimation(float delta_time_seconds);
     bool InitializeImGui();
     void ShutdownImGui();
@@ -150,6 +158,7 @@ private:
     bool show_skeleton_lines_ = true;
     bool show_skinned_mesh_ = true;
     bool show_debug_overlay_ = false;
+    bool show_viking_room_ = false;
 
     std::vector<MeshInstanceData> mesh_instances_;
     std::vector<ozz::math::Float4x4> mesh_bone_matrices_;
@@ -186,6 +195,14 @@ private:
     bool animate_mesh_ = true;
     float mesh_animation_time_ = 0.0f;
     bool show_bind_pose_ = false;
+
+    // Viking room test mesh
+    std::unique_ptr<ozz::sample::Mesh> viking_room_mesh_;
+    InstancedMeshRenderer viking_room_renderer_;
+    bool viking_room_renderer_initialized_ = false;
+    bool viking_room_loaded_ = false;
+    std::vector<MeshInstanceData> viking_room_instances_;
+    std::vector<ozz::math::Float4x4> viking_room_identity_matrices_;
 };
 
 } // namespace renderer
