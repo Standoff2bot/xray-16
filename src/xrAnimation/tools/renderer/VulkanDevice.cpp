@@ -48,9 +48,7 @@ bool VulkanDevice::Initialize(GLFWwindow* window, bool enable_validation) {
     if (!CreateLogicalDevice()) return false;
     if (!CreateSwapchain()) return false;
     if (!CreateImageViews()) return false;
-    if (!CreateRenderPass()) return false;
     if (!CreateDepthResources()) return false;
-    if (!CreateFramebuffers()) return false;
     if (!CreateCommandPool()) return false;
     if (!CreateAllocator()) return false;
     if (!CreateSyncObjects()) return false;
@@ -159,16 +157,7 @@ void VulkanDevice::RecreateSwapchain(int width, int height) {
 
     CreateSwapchain();
     CreateImageViews();
-    CreateRenderPass();
     CreateDepthResources();
-    CreateFramebuffers();
-}
-
-VkFramebuffer VulkanDevice::GetCurrentFramebuffer() const {
-    if (current_image_index_ < framebuffers_.size()) {
-        return framebuffers_[current_image_index_];
-    }
-    return VK_NULL_HANDLE;
 }
 
 VkImage VulkanDevice::GetCurrentSwapchainImage() const {
@@ -196,7 +185,7 @@ bool VulkanDevice::CreateInstance(bool enable_validation) {
     app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     app_info.pEngineName = "X-Ray Animation";
     app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    app_info.apiVersion = VK_API_VERSION_1_2;
+    app_info.apiVersion = VK_API_VERSION_1_3;
 
     // Get required GLFW extensions
     uint32_t glfw_extension_count = 0;
@@ -365,15 +354,54 @@ bool VulkanDevice::CreateLogicalDevice() {
         queue_create_infos.push_back(queue_create_info);
     }
 
-    VkPhysicalDeviceFeatures device_features = {};
-    device_features.samplerAnisotropy = VK_TRUE;
-    device_features.fillModeNonSolid = VK_TRUE;  // For line rendering
+    // Check available extensions
+    uint32_t extension_count = 0;
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &extension_count, nullptr);
+    available_device_extensions_.resize(extension_count);
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &extension_count, available_device_extensions_.data());
+
+    // Add push descriptors if available
+    for (const auto& ext : available_device_extensions_) {
+        if (strcmp(ext.extensionName, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) == 0) {
+            device_extensions_.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+            Msg("* Enabling VK_KHR_push_descriptor extension");
+            break;
+        }
+    }
+
+    // Setup Vulkan 1.3 feature chain
+    vulkan_11_features_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    vulkan_11_features_.pNext = nullptr;
+
+    vulkan_12_features_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    vulkan_12_features_.pNext = &vulkan_11_features_;
+    vulkan_12_features_.bufferDeviceAddress = VK_TRUE;  // Enable buffer device address
+
+    vulkan_13_features_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    vulkan_13_features_.pNext = &vulkan_12_features_;
+    vulkan_13_features_.dynamicRendering = VK_TRUE;  // Enable dynamic rendering
+    vulkan_13_features_.synchronization2 = VK_TRUE;  // Enable better synchronization
+
+    device_features_2_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    device_features_2_.pNext = &vulkan_13_features_;
+    device_features_2_.features.samplerAnisotropy = VK_TRUE;
+    device_features_2_.features.fillModeNonSolid = VK_TRUE;  // For line rendering
+
+    // Query what the device supports
+    vkGetPhysicalDeviceFeatures2(physical_device_, &device_features_2_);
+
+    // Verify required features
+    if (!vulkan_13_features_.dynamicRendering) {
+        Msg("! Dynamic rendering not supported - please update your GPU drivers");
+        return false;
+    }
 
     VkDeviceCreateInfo create_info = {};
     create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    create_info.pNext = &device_features_2_;
     create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_create_infos.size());
     create_info.pQueueCreateInfos = queue_create_infos.data();
-    create_info.pEnabledFeatures = &device_features;
+    create_info.pEnabledFeatures = nullptr;  // Use pNext chain instead
     create_info.enabledExtensionCount = static_cast<uint32_t>(device_extensions_.size());
     create_info.ppEnabledExtensionNames = device_extensions_.data();
 
@@ -386,12 +414,17 @@ bool VulkanDevice::CreateLogicalDevice() {
 
     VkResult result = vkCreateDevice(physical_device_, &create_info, nullptr, &device_);
     if (result != VK_SUCCESS) {
-        Msg("! Failed to create logical device");
+        Msg("! Failed to create logical device (error: %d)", result);
         return false;
     }
 
     vkGetDeviceQueue(device_, queue_family_indices_.graphics_family, 0, &graphics_queue_);
     vkGetDeviceQueue(device_, queue_family_indices_.present_family, 0, &present_queue_);
+
+    Msg("* Vulkan 1.3 features enabled:");
+    Msg("  - Dynamic Rendering: YES");
+    Msg("  - Synchronization2: %s", vulkan_13_features_.synchronization2 ? "YES" : "NO");
+    Msg("  - Buffer Device Address: %s", vulkan_12_features_.bufferDeviceAddress ? "YES" : "NO");
 
     return true;
 }
@@ -481,78 +514,12 @@ bool VulkanDevice::CreateImageViews() {
     return true;
 }
 
-bool VulkanDevice::CreateRenderPass() {
-    VkAttachmentDescription color_attachment = {};
-    color_attachment.format = swapchain_format_;
-    color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    VkAttachmentDescription depth_attachment = {};
-    depth_attachment.format = depth_format_;
-    depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference color_attachment_ref = {};
-    color_attachment_ref.attachment = 0;
-    color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference depth_attachment_ref = {};
-    depth_attachment_ref.attachment = 1;
-    depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass = {};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &color_attachment_ref;
-    subpass.pDepthStencilAttachment = &depth_attachment_ref;
-
-    VkSubpassDependency dependency = {};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-    std::vector<VkAttachmentDescription> attachments = {color_attachment, depth_attachment};
-    VkRenderPassCreateInfo render_pass_info = {};
-    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    render_pass_info.attachmentCount = static_cast<uint32_t>(attachments.size());
-    render_pass_info.pAttachments = attachments.data();
-    render_pass_info.subpassCount = 1;
-    render_pass_info.pSubpasses = &subpass;
-    render_pass_info.dependencyCount = 1;
-    render_pass_info.pDependencies = &dependency;
-
-    VkResult result = vkCreateRenderPass(device_, &render_pass_info, nullptr, &render_pass_);
-    if (result != VK_SUCCESS) {
-        Msg("! Failed to create render pass");
-        return false;
-    }
-
-    return true;
-}
-
 bool VulkanDevice::CreateDepthResources() {
     depth_format_ = FindDepthFormat();
 
-    Msg("====================================================================");
-    Msg("=== DEPTH BUFFER CREATION DEBUG ===");
-    Msg("Depth format: %d (D32_SFLOAT=%d, D32_SFLOAT_S8_UINT=%d, D24_UNORM_S8_UINT=%d)",
-        depth_format_, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT);
-    Msg("Depth image size: %ux%u", swapchain_extent_.width, swapchain_extent_.height);
+    Msg("* Creating depth buffer: %ux%u, format=%d", swapchain_extent_.width, swapchain_extent_.height, depth_format_);
 
-    // Create depth image
+    // Create depth image using VMA
     VkImageCreateInfo image_info = {};
     image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     image_info.imageType = VK_IMAGE_TYPE_2D;
@@ -568,41 +535,15 @@ bool VulkanDevice::CreateDepthResources() {
     image_info.samples = VK_SAMPLE_COUNT_1_BIT;
     image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    VkResult result = vkCreateImage(device_, &image_info, nullptr, &depth_image_);
+    VmaAllocationCreateInfo alloc_info = {};
+    alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    alloc_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+    VkResult result = vmaCreateImage(allocator_, &image_info, &alloc_info, &depth_image_, &depth_allocation_, nullptr);
     if (result != VK_SUCCESS) {
-        Msg("! Failed to create depth image (VkResult=%d)", result);
+        Msg("! Failed to create depth image via VMA (VkResult=%d)", result);
         return false;
     }
-    Msg("* Depth image created successfully (handle=%p)", (void*)depth_image_);
-
-    VkMemoryRequirements mem_requirements;
-    vkGetImageMemoryRequirements(device_, depth_image_, &mem_requirements);
-
-    VkMemoryAllocateInfo alloc_info = {};
-    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    alloc_info.allocationSize = mem_requirements.size;
-
-    // Find memory type
-    VkPhysicalDeviceMemoryProperties mem_properties;
-    vkGetPhysicalDeviceMemoryProperties(physical_device_, &mem_properties);
-
-    uint32_t type_filter = mem_requirements.memoryTypeBits;
-    VkMemoryPropertyFlags properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-
-    for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++) {
-        if ((type_filter & (1 << i)) && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties) {
-            alloc_info.memoryTypeIndex = i;
-            break;
-        }
-    }
-
-    result = vkAllocateMemory(device_, &alloc_info, nullptr, &depth_image_memory_);
-    if (result != VK_SUCCESS) {
-        Msg("! Failed to allocate depth image memory");
-        return false;
-    }
-
-    vkBindImageMemory(device_, depth_image_, depth_image_memory_, 0);
 
     // Create depth image view
     VkImageViewCreateInfo view_info = {};
@@ -621,50 +562,8 @@ bool VulkanDevice::CreateDepthResources() {
         Msg("! Failed to create depth image view (VkResult=%d)", result);
         return false;
     }
-    Msg("* Depth image view created successfully (handle=%p)", (void*)depth_image_view_);
-    Msg("====================================================================");
 
-    return true;
-}
-
-bool VulkanDevice::CreateFramebuffers() {
-    framebuffers_.resize(swapchain_image_views_.size());
-
-    Msg("====================================================================");
-    Msg("=== FRAMEBUFFER CREATION DEBUG ===");
-    Msg("Creating %zu framebuffers", swapchain_image_views_.size());
-    Msg("Render pass: %p", (void*)render_pass_);
-    Msg("Depth image view: %p", (void*)depth_image_view_);
-    Msg("Framebuffer size: %ux%u", swapchain_extent_.width, swapchain_extent_.height);
-
-    for (size_t i = 0; i < swapchain_image_views_.size(); i++) {
-        std::vector<VkImageView> attachments = {
-            swapchain_image_views_[i],
-            depth_image_view_
-        };
-
-        Msg("Framebuffer %zu attachments:", i);
-        Msg("  [0] Color: %p", (void*)attachments[0]);
-        Msg("  [1] Depth: %p", (void*)attachments[1]);
-
-        VkFramebufferCreateInfo framebuffer_info = {};
-        framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebuffer_info.renderPass = render_pass_;
-        framebuffer_info.attachmentCount = static_cast<uint32_t>(attachments.size());
-        framebuffer_info.pAttachments = attachments.data();
-        framebuffer_info.width = swapchain_extent_.width;
-        framebuffer_info.height = swapchain_extent_.height;
-        framebuffer_info.layers = 1;
-
-        VkResult result = vkCreateFramebuffer(device_, &framebuffer_info, nullptr, &framebuffers_[i]);
-        if (result != VK_SUCCESS) {
-            Msg("! Failed to create framebuffer %zu (VkResult=%d)", i, result);
-            return false;
-        }
-        Msg("  * Framebuffer %zu created: %p", i, (void*)framebuffers_[i]);
-    }
-
-    Msg("====================================================================");
+    Msg("* Depth buffer created successfully");
     return true;
 }
 
@@ -715,7 +614,7 @@ bool VulkanDevice::CreateAllocator() {
     allocator_info.physicalDevice = physical_device_;
     allocator_info.device = device_;
     allocator_info.pVulkanFunctions = &functions;
-    allocator_info.vulkanApiVersion = VK_API_VERSION_1_2;
+    allocator_info.vulkanApiVersion = VK_API_VERSION_1_3;
 
     VkResult result = vmaCreateAllocator(&allocator_info, &allocator_);
     if (result != VK_SUCCESS) {
@@ -941,32 +840,17 @@ void VulkanDevice::CleanupSwapchain() {
         vkDestroyImageView(device_, depth_image_view_, nullptr);
         depth_image_view_ = VK_NULL_HANDLE;
     }
-    if (depth_image_) {
-        vkDestroyImage(device_, depth_image_, nullptr);
+    if (depth_image_ && allocator_) {
+        vmaDestroyImage(allocator_, depth_image_, depth_allocation_);
         depth_image_ = VK_NULL_HANDLE;
+        depth_allocation_ = VK_NULL_HANDLE;
     }
-    if (depth_image_memory_) {
-        vkFreeMemory(device_, depth_image_memory_, nullptr);
-        depth_image_memory_ = VK_NULL_HANDLE;
-    }
-
-    // Destroy framebuffers
-    for (auto framebuffer : framebuffers_) {
-        vkDestroyFramebuffer(device_, framebuffer, nullptr);
-    }
-    framebuffers_.clear();
 
     // Destroy image views
     for (auto image_view : swapchain_image_views_) {
         vkDestroyImageView(device_, image_view, nullptr);
     }
     swapchain_image_views_.clear();
-
-    // Destroy render pass
-    if (render_pass_) {
-        vkDestroyRenderPass(device_, render_pass_, nullptr);
-        render_pass_ = VK_NULL_HANDLE;
-    }
 
     // Destroy swapchain
     if (swapchain_) {

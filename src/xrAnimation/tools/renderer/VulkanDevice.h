@@ -38,14 +38,13 @@ public:
     VkQueue GetGraphicsQueue() const { return graphics_queue_; }
     VkQueue GetPresentQueue() const { return present_queue_; }
     VkSwapchainKHR GetSwapchain() const { return swapchain_; }
-    VkRenderPass GetRenderPass() const { return render_pass_; }
     VkCommandPool GetCommandPool() const { return command_pool_; }
     VmaAllocator GetAllocator() const { return allocator_; }
 
     // Current frame data
-    VkFramebuffer GetCurrentFramebuffer() const;
     VkImage GetCurrentSwapchainImage() const;
     VkImageView GetCurrentSwapchainImageView() const;
+    VkImageView GetDepthImageView() const { return depth_image_view_; }
     uint32_t GetCurrentFrameIndex() const { return current_frame_; }
     uint32_t GetSwapchainImageCount() const { return static_cast<uint32_t>(swapchain_images_.size()); }
     uint32_t GetCurrentImageIndex() const { return current_image_index_; }
@@ -80,9 +79,7 @@ private:
     bool CreateLogicalDevice();
     bool CreateSwapchain();
     bool CreateImageViews();
-    bool CreateRenderPass();
     bool CreateDepthResources();
-    bool CreateFramebuffers();
     bool CreateSyncObjects();
     bool CreateCommandPool();
     bool CreateAllocator();
@@ -129,13 +126,9 @@ private:
 
     // Depth buffer
     VkImage depth_image_ = VK_NULL_HANDLE;
-    VkDeviceMemory depth_image_memory_ = VK_NULL_HANDLE;
+    VmaAllocation depth_allocation_ = VK_NULL_HANDLE;
     VkImageView depth_image_view_ = VK_NULL_HANDLE;
     VkFormat depth_format_;
-
-    // Render pass and framebuffers
-    VkRenderPass render_pass_ = VK_NULL_HANDLE;
-    std::vector<VkFramebuffer> framebuffers_;
 
     // Command pool
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
@@ -157,7 +150,7 @@ private:
     GLFWwindow* window_ = nullptr;
 
     // Required device extensions
-    const std::vector<const char*> device_extensions_ = {
+    std::vector<const char*> device_extensions_ = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
 
@@ -165,6 +158,15 @@ private:
     const std::vector<const char*> validation_layers_ = {
         "VK_LAYER_KHRONOS_validation"
     };
+
+    // Vulkan 1.3 features
+    VkPhysicalDeviceVulkan13Features vulkan_13_features_ = {};
+    VkPhysicalDeviceVulkan12Features vulkan_12_features_ = {};
+    VkPhysicalDeviceVulkan11Features vulkan_11_features_ = {};
+    VkPhysicalDeviceFeatures2 device_features_2_ = {};
+
+    // Available extensions
+    std::vector<VkExtensionProperties> available_device_extensions_;
 };
 
 } // namespace renderer

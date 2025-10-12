@@ -16,7 +16,7 @@ struct PipelineConfig {
     std::string vertex_shader_path;
     std::string fragment_shader_path;
 
-    // Vertex input (for now, empty - triangle shader has hardcoded vertices)
+    // Vertex input
     std::vector<VkVertexInputBindingDescription> vertex_bindings;
     std::vector<VkVertexInputAttributeDescription> vertex_attributes;
 
@@ -30,17 +30,27 @@ struct PipelineConfig {
     // Depth/stencil
     bool depth_test_enable = true;
     bool depth_write_enable = true;
-    VkCompareOp depth_compare_op = VK_COMPARE_OP_LESS;
+    VkCompareOp depth_compare_op = VK_COMPARE_OP_LESS_OR_EQUAL;
+    VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
 
     // Blending
     bool blend_enable = false;
 
-    // Render pass
-    VkRenderPass render_pass = VK_NULL_HANDLE;
-    uint32_t subpass = 0;
+    // Dynamic rendering formats
+    VkFormat color_format = VK_FORMAT_B8G8R8A8_SRGB;
 
-    // Descriptor set layouts (empty for simple triangle)
+    // Descriptor set layouts
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
+
+    // Push descriptor support
+    bool use_push_descriptors = false;
+
+    // Push constants
+    std::vector<VkPushConstantRange> push_constant_ranges;
+
+    // Specialization constants
+    std::vector<VkSpecializationMapEntry> specialization_entries;
+    std::vector<uint8_t> specialization_data;
 };
 
 // Vulkan graphics pipeline wrapper

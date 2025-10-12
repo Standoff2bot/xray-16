@@ -168,9 +168,9 @@ bool VulkanRenderer::InitializeTrianglePipeline() {
     // No blending
     config.blend_enable = false;
 
-    // Use device render pass
-    config.render_pass = device_.GetRenderPass();
-    config.subpass = 0;
+    // Dynamic rendering formats
+    config.color_format = device_.GetSwapchainFormat();
+    config.depth_format = VK_FORMAT_D32_SFLOAT;
 
     // No descriptor sets for simple triangle
     config.descriptor_set_layouts.clear();
@@ -252,7 +252,7 @@ bool VulkanRenderer::InitializeImGui() {
     }
 
     ImGui_ImplVulkan_InitInfo init_info = {};
-    init_info.ApiVersion = VK_API_VERSION_1_2;
+    init_info.ApiVersion = VK_API_VERSION_1_3;
     init_info.Instance = device_.GetInstance();
     init_info.PhysicalDevice = device_.GetPhysicalDevice();
     init_info.Device = device_handle;
@@ -262,10 +262,9 @@ bool VulkanRenderer::InitializeImGui() {
     init_info.MinImageCount = device_.GetSwapchainImageCount();
     init_info.ImageCount = device_.GetSwapchainImageCount();
     init_info.PipelineCache = VK_NULL_HANDLE;
-    init_info.PipelineInfoMain.RenderPass = device_.GetRenderPass();
-    init_info.PipelineInfoMain.Subpass = 0;
     init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    init_info.UseDynamicRendering = false;
+    init_info.UseDynamicRendering = true;
+    init_info.PipelineInfoMain.ColorAttachmentFormat = device_.GetSwapchainFormat();
     init_info.Allocator = nullptr;
     init_info.CheckVkResultFn = CheckVkResult;
     init_info.MinAllocationSize = 1024 * 1024;
@@ -478,22 +477,54 @@ void VulkanRenderer::BeginFrame() {
 
     vkBeginCommandBuffer(cmd, &begin_info);
 
-    // Begin render pass
-    VkRenderPassBeginInfo render_pass_info = {};
-    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    render_pass_info.renderPass = device_.GetRenderPass();
-    render_pass_info.framebuffer = device_.GetCurrentFramebuffer();
-    render_pass_info.renderArea.offset = {0, 0};
-    render_pass_info.renderArea.extent = device_.GetSwapchainExtent();
+    // Transition swapchain image to color attachment layout
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = device_.GetCurrentSwapchainImage();
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
-    VkClearValue clear_values[2];
-    clear_values[0].color = {{clear_color_[0], clear_color_[1], clear_color_[2], 1.0f}};
-    clear_values[1].depthStencil = {1.0f, 0};
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    render_pass_info.clearValueCount = 2;
-    render_pass_info.pClearValues = clear_values;
+    // Begin dynamic rendering (Vulkan 1.3)
+    VkRenderingAttachmentInfo color_attachment = {};
+    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    color_attachment.imageView = device_.GetCurrentSwapchainImageView();
+    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color_attachment.clearValue.color = {{clear_color_[0], clear_color_[1], clear_color_[2], 1.0f}};
 
-    vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderingAttachmentInfo depth_attachment = {};
+    depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth_attachment.imageView = device_.GetDepthImageView();
+    depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth_attachment.clearValue.depthStencil = {1.0f, 0};
+
+    VkRenderingInfo rendering_info = {};
+    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    rendering_info.renderArea.offset = {0, 0};
+    rendering_info.renderArea.extent = device_.GetSwapchainExtent();
+    rendering_info.layerCount = 1;
+    rendering_info.colorAttachmentCount = 1;
+    rendering_info.pColorAttachments = &color_attachment;
+    rendering_info.pDepthAttachment = &depth_attachment;
+
+    vkCmdBeginRendering(cmd, &rendering_info);
 
     // Set dynamic viewport and scissor
     VkViewport viewport = {};
@@ -517,8 +548,29 @@ void VulkanRenderer::EndFrame() {
 
     RenderImGui(cmd);
 
-    // End render pass
-    vkCmdEndRenderPass(cmd);
+    // End dynamic rendering
+    vkCmdEndRendering(cmd);
+
+    // Transition swapchain image to present layout
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = device_.GetCurrentSwapchainImage();
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = 0;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     // End command buffer
     vkEndCommandBuffer(cmd);

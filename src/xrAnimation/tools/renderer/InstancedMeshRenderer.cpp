@@ -727,7 +727,7 @@ bool InstancedMeshRenderer::CreatePipeline() {
     config.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;  // Coordinate reflection reverses winding
     config.depth_test_enable = true;   // ENABLE depth testing
     config.depth_write_enable = true;  // ENABLE depth writes
-    config.depth_compare_op = VK_COMPARE_OP_LESS;  // Must use LESS with inverted projection matrix
+    config.depth_compare_op = VK_COMPARE_OP_LESS_OR_EQUAL;  // Use LESS_OR_EQUAL like reference implementation
     config.blend_enable = false;
     config.render_pass = device_->GetRenderPass();
     config.subpass = 0;
