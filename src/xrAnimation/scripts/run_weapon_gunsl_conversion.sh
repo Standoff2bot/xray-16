@@ -48,9 +48,10 @@ if [[ ! -f "${SKELETON_PATH}" ]]; then
     exit 1
 fi
 
-SKELETON_OUTPUT="${OUTPUT_DIR}/${SKELETON_BASENAME}.ozz"
-run_converter "${CONVERTER}" skeleton "${SKELETON_PATH}" "${SKELETON_OUTPUT}"
+BUNDLE_OUTPUT="${OUTPUT_DIR}/${SKELETON_BASENAME}.ozzx"
+run_converter "${CONVERTER}" bundle "${SKELETON_PATH}" "${BUNDLE_OUTPUT}"
 
+# Still convert animations separately for viewer
 FIRST_ANIMATION_OUTPUT=""
 for animation_base in "${ANIMATION_BASENAMES[@]}"; do
     ANIMATION_PATH="${ROOT_DIR}/res/testdata/${CATEGORY}/${animation_base}.omf"
@@ -64,12 +65,6 @@ for animation_base in "${ANIMATION_BASENAMES[@]}"; do
         echo "[ozz] warning: animation file not found: ${ANIMATION_PATH}" >&2
     fi
 done
-
-MESH_OUTPUT="${OUTPUT_DIR}/${SKELETON_BASENAME}_mesh.ozz"
-run_converter "${CONVERTER}" mesh "${SKELETON_PATH}" "${MESH_OUTPUT}"
-
-BUNDLE_OUTPUT="${OUTPUT_DIR}/${SKELETON_BASENAME}.ozzx"
-run_converter "${CONVERTER}" bundle "${SKELETON_PATH}" "${BUNDLE_OUTPUT}"
 
 if [[ -z "${TEXTURE_ROOT}" ]]; then
     DEFAULT_TEXTURE_ROOT="/mnt/f/modding/Vanilla_Guns_noedits/unpacked_patches/basedata/textures"
