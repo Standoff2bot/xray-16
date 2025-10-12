@@ -34,3 +34,6 @@
 [submodule "Externals/entt"]
 	path = Externals/entt
 	url = https://github.com/skypjack/entt.git
+[submodule "Externals/glfw"]
+	path = Externals/glfw
+	url = https://github.com/glfw/glfw.git

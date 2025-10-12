@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "InstancedMeshRenderer.h"
 
 #include "VulkanDevice.h"
@@ -65,6 +66,7 @@ void InstancedMeshRenderer::Shutdown() {
         instance_buffer_.Destroy();
         bone_matrix_buffer_.Destroy();
         uniform_buffer_.Destroy();
+        debug_uniform_buffer_.Destroy();
         pipeline_.Destroy();
         descriptor_set_layout_ = VK_NULL_HANDLE;
         descriptor_pool_ = VK_NULL_HANDLE;
@@ -92,6 +94,7 @@ void InstancedMeshRenderer::Shutdown() {
 
     pipeline_.Destroy();
     uniform_buffer_.Destroy();
+    debug_uniform_buffer_.Destroy();
     bone_matrix_buffer_.Destroy();
     clip_debug_buffer_.Destroy();
     clip_debug_capacity_ = 0;
@@ -387,6 +390,17 @@ void InstancedMeshRenderer::Render(VkCommandBuffer cmd,
     }
 
     EnsureClipDebugBuffer(4);
+    EnsureFragDebugBuffer(4);  // Ensure fragment debug buffer exists
+
+    // Set debug mode in fragment SSBO
+    if (frag_debug_buffer_.GetBuffer() != VK_NULL_HANDLE) {
+        FragDebugEntry* mapped = static_cast<FragDebugEntry*>(frag_debug_buffer_.Map());
+        if (mapped) {
+            mapped[0].data[0] = static_cast<float>(debug_mode_);
+            frag_debug_buffer_.Unmap();
+        }
+    }
+
     device_->WaitIdle();
     DumpClipDebugBuffer();
 
@@ -533,7 +547,7 @@ void InstancedMeshRenderer::ResetFragDebugBuffer(uint32_t count) {
     const uint32_t limit = std::min<uint32_t>(frag_debug_capacity_, count);
     for (uint32_t i = 0; i < limit; ++i) {
         mapped[i].recorded = 0u;
-        std::fill(std::begin(mapped[i].sample), std::end(mapped[i].sample), 0.0f);
+        std::fill(std::begin(mapped[i].data), std::end(mapped[i].data), 0.0f);
     }
 
     frag_debug_buffer_.Unmap();
@@ -555,16 +569,16 @@ void InstancedMeshRenderer::DumpFragDebugBuffer() {
     for (uint32_t i = 0; i < capture_count; ++i) {
         frag_debug_cpu_[i] = mapped[i];
         if (dump_counter < 5 && frag_debug_cpu_[i].recorded != 0u) {
-            Msg("[FragDebugSSBO] entry %u depth=%.6f computed=%.6f diff=%.6f clip_w=%.6f",
+            Msg("[FragDebugSSBO] entry %u data[0]=%.6f data[1]=%.6f data[2]=%.6f data[3]=%.6f",
                 i,
-                frag_debug_cpu_[i].sample[0],
-                frag_debug_cpu_[i].sample[1],
-                frag_debug_cpu_[i].sample[2],
-                frag_debug_cpu_[i].sample[3]);
+                frag_debug_cpu_[i].data[0],
+                frag_debug_cpu_[i].data[1],
+                frag_debug_cpu_[i].data[2],
+                frag_debug_cpu_[i].data[3]);
             any_output = true;
         }
         mapped[i].recorded = 0u;
-        std::fill(std::begin(mapped[i].sample), std::end(mapped[i].sample), 0.0f);
+        std::fill(std::begin(mapped[i].data), std::end(mapped[i].data), 0.0f);
     }
 
     frag_debug_buffer_.Unmap();
@@ -594,13 +608,13 @@ bool InstancedMeshRenderer::CreateDescriptorSetLayout() {
     clip_binding.descriptorCount = 1;
     clip_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    VkDescriptorSetLayoutBinding frag_binding = {};
-    frag_binding.binding = 3;
-    frag_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    frag_binding.descriptorCount = 1;
-    frag_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutBinding frag_debug_binding = {};
+    frag_debug_binding.binding = 3;
+    frag_debug_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;  // Changed to SSBO
+    frag_debug_binding.descriptorCount = 1;
+    frag_debug_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {camera_binding, bones_binding, clip_binding, frag_binding};
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {camera_binding, bones_binding, clip_binding, frag_debug_binding};
 
     VkDescriptorSetLayoutCreateInfo layout_info = {};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -732,7 +746,7 @@ bool InstancedMeshRenderer::CreatePipeline() {
 bool InstancedMeshRenderer::CreateDescriptorPool() {
     VkDescriptorPoolSize pool_sizes[2] = {};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    pool_sizes[0].descriptorCount = 1;
+    pool_sizes[0].descriptorCount = 1;  // camera only
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     pool_sizes[1].descriptorCount = 3;  // bones + clip_debug + frag_debug
 
@@ -777,7 +791,14 @@ bool InstancedMeshRenderer::CreateUniformBuffer() {
     }
 
     uniform_buffer_.Upload(&identity, sizeof(CameraUBO));
-    return uniform_buffer_.GetBuffer() != VK_NULL_HANDLE;
+
+    const VkDeviceSize debug_size = sizeof(DebugSettings);
+    debug_uniform_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), debug_size,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+    debug_uniform_buffer_.Upload(&debug_settings_, sizeof(DebugSettings));
+
+    return uniform_buffer_.GetBuffer() != VK_NULL_HANDLE && debug_uniform_buffer_.GetBuffer() != VK_NULL_HANDLE;
 }
 
 bool InstancedMeshRenderer::EnsureVertexBuffer(size_t vertex_count) {
@@ -969,10 +990,10 @@ void InstancedMeshRenderer::UpdateDescriptorSet() {
     clip_info.offset = 0;
     clip_info.range = VK_WHOLE_SIZE;
 
-    VkDescriptorBufferInfo frag_info = {};
-    frag_info.buffer = frag_debug_buffer_.GetBuffer();
-    frag_info.offset = 0;
-    frag_info.range = VK_WHOLE_SIZE;
+    VkDescriptorBufferInfo frag_debug_info = {};
+    frag_debug_info.buffer = frag_debug_buffer_.GetBuffer();
+    frag_debug_info.offset = 0;
+    frag_debug_info.range = VK_WHOLE_SIZE;
 
     std::vector<VkWriteDescriptorSet> writes;
 
@@ -1007,21 +1028,44 @@ void InstancedMeshRenderer::UpdateDescriptorSet() {
         writes.push_back(clip_write);
     }
 
-    // Optionally write frag debug buffer
+    // Optionally write fragment debug SSBO
     if (frag_debug_buffer_.GetBuffer() != VK_NULL_HANDLE) {
-        VkWriteDescriptorSet frag_write = {};
-        frag_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        frag_write.dstSet = descriptor_set_;
-        frag_write.dstBinding = 3;
-        frag_write.descriptorCount = 1;
-        frag_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        frag_write.pBufferInfo = &frag_info;
-        writes.push_back(frag_write);
+        VkWriteDescriptorSet frag_debug_write = {};
+        frag_debug_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        frag_debug_write.dstSet = descriptor_set_;
+        frag_debug_write.dstBinding = 3;
+        frag_debug_write.descriptorCount = 1;
+        frag_debug_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        frag_debug_write.pBufferInfo = &frag_debug_info;
+        writes.push_back(frag_debug_write);
     }
 
     if (!writes.empty()) {
         vkUpdateDescriptorSets(device_->GetDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
+}
+
+void InstancedMeshRenderer::SetDebugMode(uint32_t mode) {
+    debug_mode_ = mode;
+}
+
+const char* InstancedMeshRenderer::GetDebugModeName() const {
+    static const char* mode_names[] = {
+        "Normal Lighting",
+        "Face Orientation (gl_FrontFacing)",
+        "Normal Direction Visualization",
+        "Depth Visualization",
+        "UV Coordinates",
+        "Normal Z Component",
+        "Checkerboard Front/Back",
+        "Two-Sided Visualization",
+        "World Position Gradient"
+    };
+
+    if (debug_mode_ < kNumDebugModes) {
+        return mode_names[debug_mode_];
+    }
+    return "Unknown";
 }
 
 } // namespace renderer

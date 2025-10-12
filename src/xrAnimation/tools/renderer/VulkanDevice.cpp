@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "VulkanDevice.h"
 
 #include <GLFW/glfw3.h>
@@ -276,24 +277,71 @@ bool VulkanDevice::PickPhysicalDevice() {
     std::vector<VkPhysicalDevice> devices(device_count);
     vkEnumeratePhysicalDevices(instance_, &device_count, devices.data());
 
+    Msg("====================================================================");
+    Msg("=== GPU DETECTION DEBUG ===");
+    Msg("Found %u Vulkan device(s)", device_count);
+    Msg("--------------------------------------------------------------------");
+
     // Rate all devices and pick the best one
     int best_score = 0;
-    for (const auto& device : devices) {
-        int score = RateDeviceSuitability(device);
+    for (size_t i = 0; i < devices.size(); i++) {
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(devices[i], &props);
+
+        const char* device_type_str = "UNKNOWN";
+        switch(props.deviceType) {
+            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   device_type_str = "DISCRETE_GPU"; break;
+            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: device_type_str = "INTEGRATED_GPU"; break;
+            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    device_type_str = "VIRTUAL_GPU"; break;
+            case VK_PHYSICAL_DEVICE_TYPE_CPU:            device_type_str = "CPU (Software)"; break;
+            default: break;
+        }
+
+        int score = RateDeviceSuitability(devices[i]);
+
+        Msg("Device #%zu: %s", i, props.deviceName);
+        Msg("  Type: %s", device_type_str);
+        Msg("  Vendor ID: 0x%04X", props.vendorID);
+        Msg("  Device ID: 0x%04X", props.deviceID);
+        Msg("  API Version: %u.%u.%u",
+            VK_VERSION_MAJOR(props.apiVersion),
+            VK_VERSION_MINOR(props.apiVersion),
+            VK_VERSION_PATCH(props.apiVersion));
+        Msg("  Driver Version: %u", props.driverVersion);
+        Msg("  Suitability Score: %d", score);
+        Msg("--------------------------------------------------------------------");
+
         if (score > best_score) {
             best_score = score;
-            physical_device_ = device;
+            physical_device_ = devices[i];
         }
     }
 
     if (physical_device_ == VK_NULL_HANDLE) {
         Msg("! No suitable GPU found");
+        Msg("====================================================================");
         return false;
     }
 
     VkPhysicalDeviceProperties properties;
     vkGetPhysicalDeviceProperties(physical_device_, &properties);
-    Msg("* Selected GPU: %s", properties.deviceName);
+
+    const char* selected_type = "UNKNOWN";
+    switch(properties.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   selected_type = "DISCRETE_GPU"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: selected_type = "INTEGRATED_GPU"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    selected_type = "VIRTUAL_GPU"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:            selected_type = "CPU (Software)"; break;
+        default: break;
+    }
+
+    Msg("*** SELECTED GPU: %s ***", properties.deviceName);
+    Msg("    Type: %s", selected_type);
+    Msg("    Score: %d", best_score);
+    if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+        Msg("    ⚠️  WARNING: Using CPU software rendering - performance will be poor!");
+    }
+    Msg("====================================================================");
 
     queue_family_indices_ = FindQueueFamilies(physical_device_);
 
@@ -498,6 +546,12 @@ bool VulkanDevice::CreateRenderPass() {
 bool VulkanDevice::CreateDepthResources() {
     depth_format_ = FindDepthFormat();
 
+    Msg("====================================================================");
+    Msg("=== DEPTH BUFFER CREATION DEBUG ===");
+    Msg("Depth format: %d (D32_SFLOAT=%d, D32_SFLOAT_S8_UINT=%d, D24_UNORM_S8_UINT=%d)",
+        depth_format_, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT);
+    Msg("Depth image size: %ux%u", swapchain_extent_.width, swapchain_extent_.height);
+
     // Create depth image
     VkImageCreateInfo image_info = {};
     image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -516,9 +570,10 @@ bool VulkanDevice::CreateDepthResources() {
 
     VkResult result = vkCreateImage(device_, &image_info, nullptr, &depth_image_);
     if (result != VK_SUCCESS) {
-        Msg("! Failed to create depth image");
+        Msg("! Failed to create depth image (VkResult=%d)", result);
         return false;
     }
+    Msg("* Depth image created successfully (handle=%p)", (void*)depth_image_);
 
     VkMemoryRequirements mem_requirements;
     vkGetImageMemoryRequirements(device_, depth_image_, &mem_requirements);
@@ -563,9 +618,11 @@ bool VulkanDevice::CreateDepthResources() {
 
     result = vkCreateImageView(device_, &view_info, nullptr, &depth_image_view_);
     if (result != VK_SUCCESS) {
-        Msg("! Failed to create depth image view");
+        Msg("! Failed to create depth image view (VkResult=%d)", result);
         return false;
     }
+    Msg("* Depth image view created successfully (handle=%p)", (void*)depth_image_view_);
+    Msg("====================================================================");
 
     return true;
 }
@@ -573,11 +630,22 @@ bool VulkanDevice::CreateDepthResources() {
 bool VulkanDevice::CreateFramebuffers() {
     framebuffers_.resize(swapchain_image_views_.size());
 
+    Msg("====================================================================");
+    Msg("=== FRAMEBUFFER CREATION DEBUG ===");
+    Msg("Creating %zu framebuffers", swapchain_image_views_.size());
+    Msg("Render pass: %p", (void*)render_pass_);
+    Msg("Depth image view: %p", (void*)depth_image_view_);
+    Msg("Framebuffer size: %ux%u", swapchain_extent_.width, swapchain_extent_.height);
+
     for (size_t i = 0; i < swapchain_image_views_.size(); i++) {
         std::vector<VkImageView> attachments = {
             swapchain_image_views_[i],
             depth_image_view_
         };
+
+        Msg("Framebuffer %zu attachments:", i);
+        Msg("  [0] Color: %p", (void*)attachments[0]);
+        Msg("  [1] Depth: %p", (void*)attachments[1]);
 
         VkFramebufferCreateInfo framebuffer_info = {};
         framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -590,11 +658,13 @@ bool VulkanDevice::CreateFramebuffers() {
 
         VkResult result = vkCreateFramebuffer(device_, &framebuffer_info, nullptr, &framebuffers_[i]);
         if (result != VK_SUCCESS) {
-            Msg("! Failed to create framebuffer %zu", i);
+            Msg("! Failed to create framebuffer %zu (VkResult=%d)", i, result);
             return false;
         }
+        Msg("  * Framebuffer %zu created: %p", i, (void*)framebuffers_[i]);
     }
 
+    Msg("====================================================================");
     return true;
 }
 

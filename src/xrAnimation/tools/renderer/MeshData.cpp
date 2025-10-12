@@ -1,5 +1,4 @@
 #include "stdafx.h"
-
 #include "MeshData.h"
 
 #include <algorithm>

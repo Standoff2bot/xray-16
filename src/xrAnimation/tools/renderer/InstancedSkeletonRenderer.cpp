@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "InstancedSkeletonRenderer.h"
 
 #include "VulkanDevice.h"

@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "VulkanRenderer.h"
 
 #include "framework/mesh.h"
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <iostream>
 #include <ozz/animation/runtime/animation.h>
 #include <ozz/animation/runtime/local_to_model_job.h>
 #include <ozz/animation/runtime/sampling_job.h>
@@ -795,6 +797,11 @@ void VulkanRenderer::UpdateMeshAnimation(float delta_time_seconds) {
     const ozz::math::Float4x4 rotation = ozz::math::Float4x4::FromAxisAngle(ozz::math::Float3::y_axis(), angle);
     const ozz::math::Float4x4 translation = ozz::math::Float4x4::Translation(ozz::math::Float3(0.0f, -0.5f, 0.0f));
     mesh_instances_[0].transform = translation * rotation;
+
+    // Also apply rotation to viking room test mesh
+    if (!viking_room_instances_.empty()) {
+        viking_room_instances_[0].transform = translation * rotation;
+    }
 
     if (skeleton_renderer_initialized_ && skeleton_loaded_) {
         std::array<ozz::math::Float4x4, 1> transforms = { mesh_instances_[0].transform };

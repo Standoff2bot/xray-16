@@ -47,6 +47,12 @@ public:
     bool HasMesh() const { return mesh_uploaded_; }
     uint32_t BonesPerInstance() const { return bones_per_instance_; }
 
+    // Debug mode control for SSBO-based fragment debugging
+    void SetDebugMode(uint32_t mode);
+    uint32_t GetDebugMode() const { return debug_mode_; }
+    const char* GetDebugModeName() const;
+    static constexpr uint32_t kNumDebugModes = 9;
+
 private:
     struct Vertex {
         float position[3];
@@ -95,7 +101,14 @@ private:
 
     struct FragDebugEntry {
         uint32_t recorded;
-        float sample[4];
+        float data[4];  // data[0] = debug_mode, data[1-3] = debug values
+    };
+
+    struct DebugSettings {
+        int32_t debug_mode = 0;
+        float debug_scale1 = 10.0f;
+        float debug_scale2 = 1.0f;
+        float padding = 0.0f;
     };
 
     VulkanDevice* device_ = nullptr;
@@ -105,6 +118,7 @@ private:
     VulkanBuffer instance_buffer_;
     VulkanBuffer bone_matrix_buffer_;
     VulkanBuffer uniform_buffer_;
+    VulkanBuffer debug_uniform_buffer_;
 
     VulkanPipeline pipeline_;
 
@@ -133,6 +147,12 @@ private:
 
     // Debug vertex data for CPU-side verification
     std::vector<Vertex> debug_vertices_;
+
+    // Debug settings
+    DebugSettings debug_settings_;
+
+    // Debug mode for shader visualization via SSBO
+    uint32_t debug_mode_ = 0;
 };
 
 } // namespace renderer

@@ -1,9 +1,14 @@
 #include "stdafx.h"
-
 #include "DebugRenderer.h"
 
 #include "VulkanDevice.h"
 #include "VulkanPipeline.h"
+
+// X-Ray geometry types
+#include "xrCore/_vector3d.h"
+#include "xrCore/_obb.h"
+#include "xrCore/_sphere.h"
+#include "xrCore/_cylinder.h"
 
 #include <algorithm>
 #include <array>
@@ -22,7 +27,7 @@ constexpr VkDeviceSize kDefaultVertexCapacity = 1024;
 constexpr float kTwoPi = 6.28318530718f;
 constexpr float kEpsilon = 1e-5f;
 
-inline ozz::math::Float3 ToFloat3(const Fvector3& v) {
+inline ozz::math::Float3 ToFloat3(const Fvector& v) {
     return ozz::math::Float3{ v.x, v.y, v.z };
 }
 
@@ -61,6 +66,7 @@ inline float ColumnLength(const ozz::math::SimdFloat4& column) {
 }
 
 using ozz::math::Cross;
+using ozz::math::Length;
 using ozz::math::NormalizeSafe;
 
 } // namespace

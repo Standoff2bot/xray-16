@@ -27,6 +27,13 @@ endif()
 
 add_subdirectory(ozz-animation)
 
+# GLFW - Window and input library for Vulkan/OpenGL
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "Build GLFW example programs" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "Build GLFW test programs" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "Build GLFW documentation" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "Generate GLFW installation target" FORCE)
+add_subdirectory(glfw)
+
 # EnTT - Entity Component System library (header-only)
 add_subdirectory(entt)
 

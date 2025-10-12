@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Common/Common.hpp"
-
 #include "VulkanDevice.h"
 #include "VulkanPipeline.h"
 #include "Camera.h"
@@ -59,6 +57,8 @@ public:
     const InstancedSkeletonRenderer& GetSkeletonRenderer() const { return skeleton_renderer_; }
     DebugRenderer& GetDebugRenderer() { return debug_renderer_; }
     const DebugRenderer& GetDebugRenderer() const { return debug_renderer_; }
+    InstancedMeshRenderer& GetMeshRenderer() { return mesh_renderer_; }
+    const InstancedMeshRenderer& GetMeshRenderer() const { return mesh_renderer_; }
     bool LoadBundleMesh(const ozz::sample::Mesh& mesh, const ozz::animation::Skeleton& skeleton);
     bool HasMeshLoaded() const { return mesh_loaded_; }
     bool HasSkeletonLoaded() const { return skeleton_loaded_; }

@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "VulkanPipeline.h"
 #include <fstream>
 #include <cstdio>

@@ -91,9 +91,13 @@ for row in rows:
 - Workflow:
   1. Reconfigure debug build if needed: `cmake -S xray-16 -B ozz_utils -DCMAKE_BUILD_TYPE=Debug`.
   2. Rebuild the viewer: `cmake --build ozz_utils --target ozz_animation_viewer -j` (target skipped when using Visual Studio generators).
-  3. Run the viewer headless (ensure `LD_LIBRARY_PATH` points at the build bin dir):
+  3. Visual Studio 2022 workflow:
+     - Initialise the GLFW submodule: `git submodule update --init Externals/glfw`.
+     - Generate GLFW binaries once: `cmake -S Externals/glfw -B Externals/glfw/build -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_DOCS=OFF`.
+     - Open either the standalone `src/xrAnimation/tools/ozz_animation_viewer.sln` or the top-level `src/engine.sln` (the viewer lives under **utils/ozz_animation_viewer**), ensure the `VULKAN_SDK` env var points at your LunarG install (or set the MSBuild property `GlslcExecutable` to the glslc path), and build the `ozz_animation_viewer` project (shaders are compiled automatically into `bin/<Cfg>/shaders/`).
+  4. Run the viewer headless (ensure `LD_LIBRARY_PATH` points at the build bin dir):
      `LD_LIBRARY_PATH=ozz_utils/bin/Debug ozz_utils/bin/Debug/ozz_animation_viewer --bundle=asset_tests/stalker_hero.ozzx --render=false --max_idle_loops=1`.
-  4. Capture the `=== OZZ BIND POSE TABLE ===` output for comparisons.
+  5. Capture the `=== OZZ BIND POSE TABLE ===` output for comparisons.
 
 ## Animation JSON Dump (ozz_animation_viewer)
 - Context: Need frame-by-frame world transforms straight from ozz to diff against Blender exports.

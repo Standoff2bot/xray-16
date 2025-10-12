@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "VulkanBuffer.h"
 #include <cstring>
 #include <cstdio>

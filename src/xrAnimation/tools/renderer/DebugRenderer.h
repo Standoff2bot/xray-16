@@ -1,7 +1,12 @@
 #pragma once
 
-#include "Common/Common.hpp"
-#include "xrCore/xrCore.h"
+#include "Common/Platform.hpp"
+
+// Define XRCORE_API for linking against xrCore.lib (not building it)
+#ifndef XRCORE_API
+#  define XRCORE_API XR_IMPORT
+#  define TRACY_IMPORTS
+#endif
 
 #include "VulkanBuffer.h"
 #include "VulkanPipeline.h"
@@ -11,7 +16,6 @@
 #include "ozz/base/maths/vec_float.h"
 #include "ozz/base/maths/simd_math.h"
 #include "xrCommon/xr_vector.h"
-#include "xrCore/_vector3d.h"
 
 struct Fobb;
 struct Fcylinder;

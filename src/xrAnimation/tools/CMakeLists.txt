@@ -1,10 +1,16 @@
 set(_xrAnimation_tool_targets "")
 
 # Find Vulkan SDK (required for ozz_animation_viewer Vulkan renderer)
-find_package(Vulkan)
+# Vulkan SDK is a system dependency - install from:
+#   Windows: https://vulkan.lunarg.com/
+#   Linux: sudo apt-get install libvulkan-dev vulkan-tools
+find_package(Vulkan COMPONENTS glslc)
 if(Vulkan_FOUND)
     message(STATUS "Vulkan SDK found: ${Vulkan_INCLUDE_DIRS}")
     message(STATUS "Vulkan library: ${Vulkan_LIBRARIES}")
+    if(Vulkan_glslc_FOUND)
+        message(STATUS "Vulkan glslc shader compiler found")
+    endif()
 
     # Check for shader compiler (glslc preferred, glslangValidator as fallback)
     find_program(GLSLC glslc HINTS ${Vulkan_INCLUDE_DIRS}/../bin ENV VULKAN_SDK)
@@ -60,7 +66,7 @@ set(_converter_src ${CMAKE_CURRENT_SOURCE_DIR}/xray_to_ozz_converter.cpp)
 if(EXISTS ${_converter_src})
     add_executable(xray_to_ozz_converter
         xray_to_ozz_converter.cpp
-        ../../../Externals/ozz-animation/samples/framework/mesh.cc
+        ${CMAKE_SOURCE_DIR}/Externals/ozz-animation/samples/framework/mesh.cc
     )
 
     target_link_libraries(xray_to_ozz_converter
@@ -76,12 +82,11 @@ if(EXISTS ${_converter_src})
 
     target_include_directories(xray_to_ozz_converter
         PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/..
-        ${CMAKE_CURRENT_SOURCE_DIR}/../..
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../Include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/ozz-animation/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/ozz-animation/samples
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/imgui
+        ${CMAKE_SOURCE_DIR}/src/xrAnimation
+        ${CMAKE_SOURCE_DIR}/src/xrAnimation/Include
+        ${CMAKE_SOURCE_DIR}/Externals/ozz-animation/include
+        ${CMAKE_SOURCE_DIR}/Externals/ozz-animation/samples
+        ${CMAKE_SOURCE_DIR}/Externals/imgui
     )
 
     set_target_properties(xray_to_ozz_converter PROPERTIES
@@ -94,11 +99,8 @@ if(EXISTS ${_converter_src})
 endif()
 
 # ozz animation viewer tool (using ozz playback sample)
+# Now supported on all platforms including Visual Studio with GLFW submodule
 set(_ozz_animation_viewer_supported ON)
-if(CMAKE_GENERATOR MATCHES "Visual Studio")
-    set(_ozz_animation_viewer_supported OFF)
-    message(STATUS "Skipping ozz_animation_viewer for Visual Studio generators")
-endif()
 
 if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
     # Renderer source files
@@ -120,19 +122,19 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
     add_executable(ozz_animation_viewer
         ozz_animation_viewer.cpp
         SimpleObjLoader.cpp
+        ${CMAKE_SOURCE_DIR}/Externals/ozz-animation/samples/framework/mesh.cc
         ${RENDERER_SOURCES}
-        ../../../Externals/imgui/imgui.cpp
-        ../../../Externals/imgui/imgui_draw.cpp
-        ../../../Externals/imgui/imgui_tables.cpp
-        ../../../Externals/imgui/imgui_widgets.cpp
-        ../../../Externals/imgui/backends/imgui_impl_glfw.cpp
-        ../../../Externals/imgui/backends/imgui_impl_vulkan.cpp
+        ${CMAKE_SOURCE_DIR}/Externals/imgui/imgui.cpp
+        ${CMAKE_SOURCE_DIR}/Externals/imgui/imgui_draw.cpp
+        ${CMAKE_SOURCE_DIR}/Externals/imgui/imgui_tables.cpp
+        ${CMAKE_SOURCE_DIR}/Externals/imgui/imgui_widgets.cpp
+        ${CMAKE_SOURCE_DIR}/Externals/imgui/backends/imgui_impl_glfw.cpp
+        ${CMAKE_SOURCE_DIR}/Externals/imgui/backends/imgui_impl_vulkan.cpp
     )
 
-    # Link to the existing ozz sample_framework and Vulkan
+    # Link required runtime libraries and Vulkan
     target_link_libraries(ozz_animation_viewer
         PRIVATE
-        sample_framework  # From ozz-animation
         glfw
         xrAnimation
         xrCore
@@ -145,20 +147,24 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
 
     target_include_directories(ozz_animation_viewer
         PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/..
-        ${CMAKE_CURRENT_SOURCE_DIR}/../..
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../Include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/ozz-animation/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/ozz-animation/samples
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/imgui
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/imgui/backends
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../Externals/vma
         ${CMAKE_CURRENT_SOURCE_DIR}/renderer
+        ${CMAKE_SOURCE_DIR}/src/xrAnimation
+        ${CMAKE_SOURCE_DIR}/src/xrAnimation/Include
+        ${CMAKE_SOURCE_DIR}/Externals/ozz-animation/include
+        ${CMAKE_SOURCE_DIR}/Externals/ozz-animation/samples
+        ${CMAKE_SOURCE_DIR}/Externals/imgui
+        ${CMAKE_SOURCE_DIR}/Externals/imgui/backends
+        ${CMAKE_SOURCE_DIR}/Externals/vma
+        ${CMAKE_SOURCE_DIR}/Externals/tracy/public
+        ${CMAKE_SOURCE_DIR}/sdk/include/SDL2
     )
 
     target_compile_definitions(ozz_animation_viewer
         PRIVATE
         OZZ_SHADER_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders"
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        _CRT_SECURE_NO_WARNINGS
     )
 
 
