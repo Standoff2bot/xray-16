@@ -367,6 +367,36 @@ float CSoundRender_Scene::get_occlusion_to(const Fvector& hear_pt, const Fvector
             const float scaled = 1.0f - (effectiveOcclusion * psSoundOcclusionScale);
             return std::clamp(scaled, 0.0f, 1.0f);
         }
+
+        SteamAudio::CSteamAudioScene::DirectQueryResult query;
+        const auto& listener = SoundRender->listener_params();
+        if (m_steamAudioScene->QueryDirect(listener.position, listener.orientation[0], listener.orientation[1], listener.orientation[2], snd_pt, query) && query.valid)
+        {
+            const float occStrength = std::clamp(psSteamAudioOcclusionStrength, 0.0f, 5.0f);
+            const float transStrength = std::clamp(psSteamAudioTransmissionStrength, 0.0f, 5.0f);
+            const float averageOcclusion = std::clamp((query.occlusion[0] + query.occlusion[1] + query.occlusion[2]) / 3.0f, 0.0f, 1.0f);
+            const float averageTransmission = std::clamp((query.transmission[0] + query.transmission[1] + query.transmission[2]) / 3.0f, 0.0f, 1.0f);
+            const float weightedOcclusion = std::clamp(averageOcclusion * occStrength, 0.0f, 1.0f);
+            const float weightedTransmission = std::clamp(averageTransmission * transStrength, 0.0f, 1.0f);
+            const float effectiveOcclusion = weightedOcclusion * (1.0f - weightedTransmission);
+            const float scaled = 1.0f - (effectiveOcclusion * psSoundOcclusionScale);
+            const float clamped = std::clamp(scaled, 0.0f, 1.0f);
+
+#if !defined(MASTER_GOLD)
+            if (psSteamAudioDebugQueries)
+            {
+                Msg("* SOUND: SteamAudioQuery: L(%.2f, %.2f, %.2f) -> S(%.2f, %.2f, %.2f) occ:[%.2f %.2f %.2f] trans:[%.2f %.2f %.2f] distAtt=%.3f result=%.3f",
+                    listener.position.x, listener.position.y, listener.position.z,
+                    snd_pt.x, snd_pt.y, snd_pt.z,
+                    query.occlusion[0], query.occlusion[1], query.occlusion[2],
+                    query.transmission[0], query.transmission[1], query.transmission[2],
+                    query.distanceAttenuation,
+                    clamped);
+            }
+#endif
+
+            return clamped;
+        }
     }
 #endif
 

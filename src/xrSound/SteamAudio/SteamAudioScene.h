@@ -8,6 +8,7 @@ namespace SteamAudio
 {
 
 class CSteamAudioMaterials;
+class CSteamAudioSource;
 
 /**
  * @brief RAII wrapper for Steam Audio scene and simulator
@@ -74,6 +75,20 @@ public:
      */
     void CommitSimulator();
 
+    struct DirectQueryResult
+    {
+        float occlusion[3]{ 1.0f, 1.0f, 1.0f };
+        float transmission[3]{ 1.0f, 1.0f, 1.0f };
+        float distanceAttenuation{ 1.0f };
+        bool valid{ false };
+    };
+
+    /**
+     * @brief Evaluate direct sound metrics between arbitrary listener/source points
+     */
+    bool QueryDirect(const Fvector& listenerPos, const Fvector& listenerAhead, const Fvector& listenerUp, const Fvector& listenerRight,
+                     const Fvector& sourcePos, DirectQueryResult& result);
+
     /**
      * @brief Check if scene is initialized and ready
      */
@@ -94,6 +109,8 @@ private:
     IPLSimulator m_simulator{};
     IPLProbeBatch m_probeBatch{};
     IPLAudioSettings m_audioSettings{};
+
+    CSteamAudioSource* m_querySource{};
 };
 
 } // namespace SteamAudio

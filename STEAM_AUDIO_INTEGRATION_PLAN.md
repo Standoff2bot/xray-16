@@ -986,6 +986,7 @@ XRSOUND_API extern float psSteamAudioReverbTime; // Max reverb duration (0.5-5.0
 - Engine consumes `xrMaterialSystem` acoustics by default
 - Add `-steamaudio_custom_materials` launch flag to load `sounds/steam_audio_materials.ltx`
 - Config maps X-Ray materials to Steam Audio properties (moddable)
+- Console tuning: `snd_steamaudio_occ_strength`, `snd_steamaudio_trans_strength`, `snd_steamaudio_distance_blend`, `snd_steamaudio_debug_queries`
 
 **Example Override: `steam_audio_materials.ltx`**
 ```ini

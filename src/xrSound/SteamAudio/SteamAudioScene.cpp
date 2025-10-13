@@ -1,6 +1,9 @@
 #include "stdafx.h"
 #include "SteamAudioScene.h"
 #include "SteamAudioMaterials.h"
+#include "SteamAudioSource.h"
+
+#include <cstring>
 #include "xrCore/xrCore.h"
 #include "xrCore/Threading/TaskManager.hpp"
 #include "xrMaterialSystem/GameMtlLib.h"
@@ -11,6 +14,8 @@ namespace SteamAudio
 CSteamAudioScene::~CSteamAudioScene()
 {
     ClearGeometry();
+
+    xr_delete(m_querySource);
 
     if (m_simulator)
     {
@@ -268,6 +273,66 @@ void CSteamAudioScene::CommitSimulator()
 
     // Commit pending changes (sources added/removed)
     iplSimulatorCommit(m_simulator);
+}
+
+bool CSteamAudioScene::QueryDirect(const Fvector& listenerPos, const Fvector& listenerAhead, const Fvector& listenerUp, const Fvector& listenerRight,
+                                   const Fvector& sourcePos, DirectQueryResult& result)
+{
+    if (!IsValid())
+        return false;
+
+    if (!m_querySource)
+    {
+        m_querySource = xr_new<CSteamAudioSource>(m_context, m_simulator, m_audioSettings, nullptr, 1);
+        if (!m_querySource || !m_querySource->IsValid())
+        {
+            xr_delete(m_querySource);
+            return false;
+        }
+    }
+
+    // Prepare source orientation similar to runtime emitters
+    Fvector ahead;
+    ahead.sub(listenerPos, sourcePos);
+    if (ahead.square_magnitude() < EPS_S)
+        ahead.set(0.f, 0.f, 1.f);
+    else
+        ahead.normalize();
+
+    Fvector up = listenerUp;
+    if (up.square_magnitude() < EPS_S)
+        up.set(0.f, 1.f, 0.f);
+    else
+        up.normalize();
+
+    Fvector right;
+    right.crossproduct(up, ahead);
+    if (right.square_magnitude() < EPS_S)
+        right.set(1.f, 0.f, 0.f);
+    else
+        right.normalize();
+
+    up.crossproduct(ahead, right);
+    up.normalize();
+    right.normalize();
+
+    m_querySource->UpdateInputs(sourcePos, ahead, up, right);
+
+    iplSimulatorCommit(m_simulator);
+    iplSimulatorRunDirect(m_simulator);
+
+    if (!m_querySource->UpdateDirectMetricsOnly())
+        return false;
+
+    const auto& metrics = m_querySource->GetDirectMetrics();
+    if (!metrics.valid)
+        return false;
+
+    std::memcpy(result.occlusion, metrics.occlusion, sizeof(result.occlusion));
+    std::memcpy(result.transmission, metrics.transmission, sizeof(result.transmission));
+    result.distanceAttenuation = metrics.distanceAttenuation;
+    result.valid = true;
+    return true;
 }
 
 bool CSteamAudioScene::BakePathData(const Fbox& aabb)

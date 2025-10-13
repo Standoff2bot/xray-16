@@ -43,6 +43,7 @@ XRSOUND_API int psSoundCacheSizeMB = 32;
 XRSOUND_API float psSteamAudioOcclusionStrength = 1.0f;
 XRSOUND_API float psSteamAudioTransmissionStrength = 1.0f;
 XRSOUND_API float psSteamAudioDistanceBlend = 1.0f;
+XRSOUND_API int psSteamAudioDebugQueries = 0;
 #endif
 
 CSoundRender_Core* SoundRender = nullptr;

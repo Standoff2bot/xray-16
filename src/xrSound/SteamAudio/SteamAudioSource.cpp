@@ -2,6 +2,8 @@
 #include "SteamAudioSource.h"
 #include "xrCore/xrCore.h"
 
+#include <cstring>
+
 namespace SteamAudio
 {
 
@@ -143,6 +145,14 @@ void CSteamAudioSource::UpdateInputs(const Fvector& position, const Fvector& ahe
     iplSourceSetInputs(m_source, inputs.flags, &inputs);
 }
 
+void CSteamAudioSource::StoreDirectMetrics(const IPLDirectSimulationOutputs& outputs)
+{
+    m_directMetrics.valid = true;
+    m_directMetrics.distanceAttenuation = outputs.distanceAttenuation;
+    std::memcpy(m_directMetrics.occlusion, outputs.occlusion, sizeof(m_directMetrics.occlusion));
+    std::memcpy(m_directMetrics.transmission, outputs.transmission, sizeof(m_directMetrics.transmission));
+}
+
 void CSteamAudioSource::ApplyDirectEffect(float* inputBuffer, float* outputBuffer, int numSamples)
 {
     m_directMetrics.valid = false;
@@ -167,10 +177,7 @@ void CSteamAudioSource::ApplyDirectEffect(float* inputBuffer, float* outputBuffe
     iplSourceGetOutputs(m_source, IPL_SIMULATIONFLAGS_DIRECT, &outputs);
 
     // Cache direct metrics for other systems (occlusion / transmission)
-    m_directMetrics.valid = true;
-    m_directMetrics.distanceAttenuation = outputs.direct.distanceAttenuation;
-    std::memcpy(m_directMetrics.occlusion, outputs.direct.occlusion, sizeof(m_directMetrics.occlusion));
-    std::memcpy(m_directMetrics.transmission, outputs.direct.transmission, sizeof(m_directMetrics.transmission));
+    StoreDirectMetrics(outputs.direct);
 
     // Deinterleave input buffer
     iplAudioBufferDeinterleave(m_context, inputBuffer, &m_inputBuffer);
@@ -216,6 +223,26 @@ void CSteamAudioSource::ApplyBinauralEffect(float* inputBuffer, float* outputBuf
 
     // Interleave stereo output
     iplAudioBufferInterleave(m_context, &m_binauralOutputBuffer, outputBuffer);
+}
+
+bool CSteamAudioSource::UpdateDirectMetricsOnly()
+{
+    m_directMetrics.valid = false;
+
+    if (!m_source)
+        return false;
+
+    IPLSimulationOutputs outputs{};
+    outputs.direct.flags = static_cast<IPLDirectEffectFlags>(
+        IPL_DIRECTEFFECTFLAGS_APPLYDISTANCEATTENUATION |
+        IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION |
+        IPL_DIRECTEFFECTFLAGS_APPLYDIRECTIVITY |
+        IPL_DIRECTEFFECTFLAGS_APPLYOCCLUSION |
+        IPL_DIRECTEFFECTFLAGS_APPLYTRANSMISSION
+    );
+    iplSourceGetOutputs(m_source, IPL_SIMULATIONFLAGS_DIRECT, &outputs);
+    StoreDirectMetrics(outputs.direct);
+    return m_directMetrics.valid;
 }
 
 } // namespace SteamAudio

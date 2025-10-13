@@ -56,6 +56,7 @@ XRSOUND_API extern u32 snd_device_id;
 XRSOUND_API extern float psSteamAudioOcclusionStrength;
 XRSOUND_API extern float psSteamAudioTransmissionStrength;
 XRSOUND_API extern float psSteamAudioDistanceBlend;
+XRSOUND_API extern int psSteamAudioDebugQueries;
 #endif
 
 XRSOUND_API extern ISoundScene* DefaultSoundScene;

@@ -90,6 +90,8 @@ public:
     [[nodiscard]] const DirectMetrics& GetDirectMetrics() const { return m_directMetrics; }
 
 private:
+    void StoreDirectMetrics(const IPLDirectSimulationOutputs& outputs);
+
     // Steam Audio handles
     IPLContext m_context{};
     IPLSimulator m_simulator{};
@@ -115,3 +117,8 @@ private:
 };
 
 } // namespace SteamAudio
+    /**
+     * @brief Refresh direct metrics without applying audio processing.
+     * @return true if metrics were updated successfully.
+     */
+    bool UpdateDirectMetricsOnly();

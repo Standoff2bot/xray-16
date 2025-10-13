@@ -213,9 +213,9 @@ None.
 
 - [ ] **3.2** Occlusion replacement
   - [x] Use `IPLDirectEffect` for occlusion
-  - [ ] Replace `CSoundRender_Scene::get_occlusion_to()`
-  - [ ] Preserve `psSoundOcclusionScale` compatibility
-  - [ ] Handle partial occlusion
+  - [x] Replace `CSoundRender_Scene::get_occlusion_to()`
+  - [x] Preserve `psSoundOcclusionScale` compatibility
+  - [x] Handle partial occlusion
 
 - [ ] **3.3** Transmission simulation
   - [ ] Configure transmission in `IPLDirectEffectParams`
@@ -239,6 +239,7 @@ None.
 - Steam Audio direct occlusion now drives per-emitter attenuation; legacy raycast occlusion is only used as a fallback when Steam Audio data is unavailable.
 - Steam Audio transmission and distance attenuation metrics now inform emitter volume and AI occlusion queries, keeping non-audio systems in sync with the simulator.
 - Added tuning consoles `snd_steamaudio_occ_strength`, `snd_steamaudio_trans_strength`, and `snd_steamaudio_distance_blend` for runtime balancing of Steam Audio direct sound parameters.
+- Implemented dedicated Steam Audio scene queries for stealth/AI, with optional logging via `snd_steamaudio_debug_queries`.
 
 ### Testing Checklist
 
