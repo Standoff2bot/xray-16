@@ -28,6 +28,14 @@ else()
     message(WARNING "Install Vulkan SDK or run: sudo apt-get install libvulkan-dev vulkan-tools glslang-tools")
 endif()
 
+# Find X11 libraries (required for GLFW on Linux)
+if(UNIX AND NOT APPLE)
+    find_package(X11 REQUIRED)
+    if(X11_FOUND)
+        message(STATUS "X11 found: ${X11_LIBRARIES}")
+    endif()
+endif()
+
 # Shader compilation function
 function(add_shader TARGET SHADER)
     if(NOT GLSLC)
@@ -144,6 +152,14 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
         ozz_base
         Vulkan::Vulkan
     )
+
+    # Link X11 libraries on Linux
+    if(UNIX AND NOT APPLE AND X11_FOUND)
+        target_link_libraries(ozz_animation_viewer
+            PRIVATE
+            ${X11_LIBRARIES}
+        )
+    endif()
 
     target_include_directories(ozz_animation_viewer
         PRIVATE
