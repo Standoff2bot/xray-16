@@ -8,7 +8,11 @@
 #include "SoundRender_Scene.h"
 
 #ifdef USE_STEAMAUDIO
-namespace SteamAudio { class CSteamAudioContext; }
+namespace SteamAudio
+{
+    class CSteamAudioContext;
+    class CSteamAudioMaterials;
+}
 #endif
 
 class CSoundRender_Core : public ISoundManager
@@ -84,6 +88,7 @@ protected:
 
 #ifdef USE_STEAMAUDIO
     SteamAudio::CSteamAudioContext* m_steamAudioContext{};
+    SteamAudio::CSteamAudioMaterials* m_steamAudioMaterials{};
 #endif
 
 public:
@@ -128,6 +133,9 @@ public:
 #ifdef USE_STEAMAUDIO
     [[nodiscard]]
     SteamAudio::CSteamAudioContext* GetSteamAudioContext() const { return m_steamAudioContext; }
+
+    [[nodiscard]]
+    SteamAudio::CSteamAudioMaterials* GetSteamAudioMaterials() const { return m_steamAudioMaterials; }
 #endif
 
 public:

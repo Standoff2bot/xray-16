@@ -1,0 +1,105 @@
+; Steam Audio Material Database
+;
+; This file maps X-Ray materials to Steam Audio acoustic properties.
+; Properties are specified as: material_name = low, mid, high, scattering, trans_low, trans_mid, trans_high
+;
+; Where:
+; - low/mid/high: Sound absorption at low (250-500 Hz), mid (1-2 kHz), and high (4-8 kHz) frequencies (0.0-1.0)
+; - scattering: How much sound is scattered diffusely vs reflected specularly (0.0-1.0)
+; - trans_low/trans_mid/trans_high: Sound transmission through material at different frequencies (0.0-1.0)
+;
+; Default materials are provided by the engine. This file allows you to override
+; or add new materials for custom content.
+
+[materials]
+
+; ============================================================================
+; COMMON BUILDING MATERIALS
+; ============================================================================
+
+; Concrete (walls, floors in buildings)
+materials\concrete = 0.05, 0.07, 0.08, 0.05, 0.02, 0.01, 0.01
+
+; Brick walls
+materials\brick = 0.03, 0.04, 0.07, 0.05, 0.02, 0.015, 0.01
+
+; Metal (doors, machinery, containers)
+materials\metal = 0.01, 0.02, 0.02, 0.10, 0.20, 0.15, 0.10
+
+; Wood (doors, furniture, floors)
+materials\wood = 0.15, 0.25, 0.30, 0.10, 0.10, 0.08, 0.05
+
+; Glass (windows)
+materials\glass = 0.03, 0.02, 0.02, 0.05, 0.90, 0.85, 0.80
+
+; ============================================================================
+; TERRAIN & OUTDOOR
+; ============================================================================
+
+; Earth/Dirt (outdoor terrain, underground)
+materials\earth = 0.15, 0.25, 0.40, 0.10, 0.05, 0.03, 0.02
+
+; Asphalt/Pavement
+materials\asphalt = 0.10, 0.12, 0.15, 0.05, 0.03, 0.02, 0.01
+
+; Grass/Vegetation
+materials\grass = 0.20, 0.30, 0.50, 0.15, 0.05, 0.03, 0.02
+
+; ============================================================================
+; SOFT MATERIALS
+; ============================================================================
+
+; Fabric/Curtains (highly absorbent)
+materials\fabric = 0.25, 0.60, 0.80, 0.20, 0.01, 0.01, 0.01
+
+; Foam/Padding
+materials\foam = 0.40, 0.70, 0.90, 0.25, 0.01, 0.01, 0.01
+
+; ============================================================================
+; SPECIAL MATERIALS (STALKER-SPECIFIC)
+; ============================================================================
+
+; Anomaly zones (very high absorption, highly diffuse)
+; Represents the strange acoustic properties of anomaly fields
+materials\anomaly = 0.90, 0.90, 0.90, 0.50, 0.01, 0.01, 0.01
+
+; Electro anomaly (less absorption than regular anomaly)
+materials\anomaly_electro = 0.70, 0.75, 0.80, 0.40, 0.05, 0.03, 0.02
+
+; Radiation zone (moderate absorption)
+materials\radiation = 0.30, 0.40, 0.50, 0.20, 0.10, 0.08, 0.05
+
+; ============================================================================
+; ADDITIONAL MATERIALS (Examples for modders)
+; ============================================================================
+
+; Reinforced concrete (bunkers, thick walls)
+;materials\concrete_reinforced = 0.02, 0.03, 0.04, 0.03, 0.01, 0.005, 0.005
+
+; Rusty metal (aged structures)
+;materials\metal_rusty = 0.03, 0.04, 0.05, 0.12, 0.15, 0.12, 0.08
+
+; Plaster walls
+;materials\plaster = 0.08, 0.10, 0.12, 0.06, 0.05, 0.03, 0.02
+
+; Ceramic tiles (bathrooms, kitchens)
+;materials\tile = 0.01, 0.02, 0.02, 0.04, 0.03, 0.02, 0.01
+
+; ============================================================================
+; NOTES FOR MODDERS
+; ============================================================================
+;
+; - Higher absorption = less echo/reverb (soft materials like fabric, foam)
+; - Lower absorption = more echo/reverb (hard materials like concrete, metal)
+; - Higher scattering = more diffuse reflections (rough surfaces)
+; - Lower scattering = more specular reflections (smooth surfaces)
+; - Higher transmission = sound passes through easily (glass, thin walls)
+; - Lower transmission = sound blocked (thick concrete, earth)
+;
+; Tips:
+; - Indoor spaces: Use materials with moderate absorption (0.05-0.30)
+; - Outdoor spaces: Use materials with higher absorption (0.10-0.50)
+; - Metal structures: Very low absorption, moderate transmission
+; - Underground: Earth has high absorption, blocks transmission
+; - For realistic results, vary materials in your levels!
+;

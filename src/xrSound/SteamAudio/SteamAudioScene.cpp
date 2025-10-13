@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "SteamAudioScene.h"
+#include "SteamAudioMaterials.h"
 #include "xrCore/xrCore.h"
 #include "xrCore/Threading/TaskManager.hpp"
 #include "xrMaterialSystem/GameMtlLib.h"
@@ -91,7 +92,7 @@ bool CSteamAudioScene::Initialize(IPLContext context, const IPLAudioSettings& au
     return true;
 }
 
-bool CSteamAudioScene::LoadGeometry(CDB::MODEL* model, const Fbox& aabb, bool bakePaths)
+bool CSteamAudioScene::LoadGeometry(CDB::MODEL* model, const Fbox& aabb, CSteamAudioMaterials* materialDatabase, bool bakePaths)
 {
     if (!model || !IsValid())
     {
@@ -114,14 +115,39 @@ bool CSteamAudioScene::LoadGeometry(CDB::MODEL* model, const Fbox& aabb, bool ba
     auto* temp_tris = xr_alloc<IPLTriangle>(tris_count);
     auto* temp_mat_idx = xr_alloc<IPLint32>(tris_count);
 
-    // Build material array from GameMtlLib
+    // Build material array
     xr_vector<IPLMaterial> materials;
     materials.reserve(GMLib.CountMaterial());
 
-    for (const SGameMtl* material : GMLib.Materials())
+    // If we have a material database, use it to override GMLib materials
+    if (materialDatabase)
     {
-        // Reinterpret cast: SGameMtl::Acoustics should match IPLMaterial layout
-        materials.emplace_back(reinterpret_cast<const IPLMaterial&>(material->Acoustics));
+        Msg("* SOUND: SteamAudio: Using material database (%d materials)", materialDatabase->GetMaterialCount());
+
+        for (const SGameMtl* gameMaterial : GMLib.Materials())
+        {
+            // Try to get material from database by name
+            IPLMaterial material = materialDatabase->GetMaterial(gameMaterial->m_Name.c_str());
+
+            // If not found in database, fall back to GMLib acoustics (if available)
+            if (!materialDatabase->HasMaterial(gameMaterial->m_Name.c_str()))
+            {
+                // Fall back to GMLib's acoustics property
+                material = reinterpret_cast<const IPLMaterial&>(gameMaterial->Acoustics);
+            }
+
+            materials.push_back(material);
+        }
+    }
+    else
+    {
+        // No material database - use GMLib acoustics properties directly
+        Msg("* SOUND: SteamAudio: Using GMLib acoustics properties");
+
+        for (const SGameMtl* gameMaterial : GMLib.Materials())
+        {
+            materials.emplace_back(reinterpret_cast<const IPLMaterial&>(gameMaterial->Acoustics));
+        }
     }
 
     // Convert triangle data

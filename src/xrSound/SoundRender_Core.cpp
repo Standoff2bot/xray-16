@@ -8,6 +8,7 @@
 
 #ifdef USE_STEAMAUDIO
 #include "SteamAudio/SteamAudioContext.h"
+#include "SteamAudio/SteamAudioMaterials.h"
 #endif
 
 // XXX: old SDK functionality
@@ -84,6 +85,12 @@ void CSoundRender_Core::_initialize()
         {
             Msg("* SOUND: SteamAudio: Initialized successfully (sample rate: %d, frame size: %d, latency: %.1fms)",
                 sampleRate, frameSize, (frameSize * 1000.0f) / sampleRate);
+
+            // Initialize material database
+            m_steamAudioMaterials = xr_new<SteamAudio::CSteamAudioMaterials>();
+
+            // Try to load custom materials from config (falls back to defaults if not found)
+            m_steamAudioMaterials->LoadFromConfig("sounds\\steam_audio_materials.ltx");
         }
     }
 #endif
@@ -96,7 +103,8 @@ void CSoundRender_Core::_clear()
     bReady = false;
 
 #ifdef USE_STEAMAUDIO
-    // RAII: Wrapper automatically releases Steam Audio resources
+    // RAII: Wrappers automatically release Steam Audio resources
+    xr_delete(m_steamAudioMaterials);
     xr_delete(m_steamAudioContext);
 #endif
 

@@ -7,6 +7,8 @@
 namespace SteamAudio
 {
 
+class CSteamAudioMaterials;
+
 /**
  * @brief RAII wrapper for Steam Audio scene and simulator
  *
@@ -41,10 +43,11 @@ public:
      * @brief Load geometry from X-Ray collision database
      * @param model X-Ray CDB model containing level geometry
      * @param aabb Axis-aligned bounding box for the geometry
+     * @param materials Material database for acoustic properties (can be nullptr for GMLib fallback)
      * @param bakePaths Whether to bake path data (can cause long load times)
      * @return true if geometry loaded successfully
      */
-    bool LoadGeometry(CDB::MODEL* model, const Fbox& aabb, bool bakePaths = false);
+    bool LoadGeometry(CDB::MODEL* model, const Fbox& aabb, CSteamAudioMaterials* materials = nullptr, bool bakePaths = false);
 
     /**
      * @brief Clear all geometry from the scene

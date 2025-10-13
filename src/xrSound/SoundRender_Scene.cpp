@@ -86,10 +86,11 @@ void CSoundRender_Scene::set_geometry_occ(CDB::MODEL* M, const Fbox& aabb)
     {
         if (M)
         {
-            // Load geometry with optional path baking
-            // TODO: Make path baking configurable via console variable
-            constexpr bool bakePaths = false; // Disabled for now - blocks level loading
-            if (!m_steamAudioScene->LoadGeometry(M, aabb, bakePaths))
+            // Load geometry with material database and optional path baking
+            auto* materials = SoundRender->GetSteamAudioMaterials();
+            const bool bakePaths = psSoundFlags.test(ss_SteamAudio_BakePaths);
+
+            if (!m_steamAudioScene->LoadGeometry(M, aabb, materials, bakePaths))
             {
                 Msg("~ SOUND: SteamAudio: Failed to load geometry");
             }
