@@ -7,6 +7,12 @@
 
 #include "xrCore/Threading/TaskManager.hpp"
 
+#ifdef USE_STEAMAUDIO
+#include "SteamAudio/SteamAudioSource.h"
+#include "SteamAudio/SteamAudioScene.h"
+#include "SteamAudio/SteamAudioContext.h"
+#endif
+
 extern u32 psSoundModel;
 extern float psSoundVEffects;
 
@@ -14,7 +20,7 @@ void CSoundRender_Emitter::set_position(const Fvector& pos)
 {
     if (source()->channels_num() == 1
 #ifdef USE_STEAMAUDIO
-        || m_ipl_source
+        || m_steamAudioSource
 #endif
         )
         p_source.position = pos;
@@ -49,20 +55,14 @@ CSoundRender_Emitter::CSoundRender_Emitter(CSoundRender_Scene* s)
       bMoved(true),
       marker(0xabababab)
 {
-#ifdef USE_STEAMAUDIO
-    if (const auto simulator = scene->ipl_simulator())
-    {
-        IPLSourceSettings sourceSettings{ IPL_SIMULATIONFLAGS_DIRECT };
-        iplSourceCreate(simulator, &sourceSettings, &m_ipl_source);
-    }
-#endif
+    // NOTE: Steam Audio source created lazily in start() when we have audio format info
 }
 
 CSoundRender_Emitter::~CSoundRender_Emitter()
 {
 #ifdef USE_STEAMAUDIO
-    if (m_ipl_source)
-        iplSourceRelease(&m_ipl_source);
+    // RAII: Wrapper automatically releases Steam Audio resources
+    xr_delete(m_steamAudioSource);
 #endif
 
     // try to release dependencies, events, for example
@@ -258,22 +258,17 @@ std::pair<u8*, size_t> CSoundRender_Emitter::obtain_block()
         current_block = 0;
     --filled_blocks;
 #ifdef USE_STEAMAUDIO
-    if (psSoundFlags.test(ss_EFX) && scene->ipl_scene_mesh() && !is_2D())
+    // Apply Steam Audio direct effect (occlusion, distance, transmission) using RAII wrapper
+    if (psSoundFlags.test(ss_EFX) && m_steamAudioSource && !is_2D())
     {
-        const auto context = SoundRender->ipl_context();
+        const auto data_info = source()->data_info();
+        const int numSamples = result.second / (data_info.channels * sizeof(float));
 
-        IPLSimulationOutputs outputs{};
-        outputs.direct.flags = static_cast<IPLDirectEffectFlags>(
-            IPL_DIRECTEFFECTFLAGS_APPLYAIRABSORPTION |
-            IPL_DIRECTEFFECTFLAGS_APPLYDIRECTIVITY |
-            IPL_DIRECTEFFECTFLAGS_APPLYOCCLUSION |
-            IPL_DIRECTEFFECTFLAGS_APPLYTRANSMISSION
-            );
-        iplSourceGetOutputs(m_ipl_source, IPL_SIMULATIONFLAGS_DIRECT, &outputs);
-
-        iplAudioBufferDeinterleave(context, (float*)result.first, &ipl_buffers.direct_input);
-        iplDirectEffectApply(ipl_effects.direct, &outputs.direct, &ipl_buffers.direct_input, &ipl_buffers.direct_output);
-        iplAudioBufferInterleave(context, &ipl_buffers.direct_output, (float*)result.first);
+        // Wrapper handles deinterleaving, effect application, and reinterleaving
+        m_steamAudioSource->ApplyDirectEffect(
+            (float*)result.first,
+            (float*)result.first,
+            numSamples);
     }
 #endif
     return std::move(result);

@@ -9,43 +9,26 @@
 #include "SoundRender_Scene.h"
 #include "SoundRender_Emitter.h"
 
+#ifdef USE_STEAMAUDIO
+#include "SteamAudio/SteamAudioScene.h"
+#include "SteamAudio/SteamAudioContext.h"
+#endif
+
 CSoundRender_Scene::CSoundRender_Scene()
 {
 #ifdef USE_STEAMAUDIO
-    if (const auto context = SoundRender->ipl_context())
+    // Initialize Steam Audio scene with wrapper
+    if (auto* steamAudioContext = SoundRender->GetSteamAudioContext())
     {
-        IPLSceneSettings sceneSettings
+        if (steamAudioContext->IsInitialized())
         {
-            IPL_SCENETYPE_DEFAULT,
-            nullptr, nullptr, nullptr, nullptr,
-            this,
-            nullptr, nullptr
-        };
-        iplSceneCreate(context, &sceneSettings, &m_ipl_scene);
-
-        const auto [samplingRate, frameSize] = SoundRender->ipl_settings();
-
-        IPLSimulationSettings simulationSettings
-        {
-            IPL_SIMULATIONFLAGS_DIRECT,
-            IPL_SCENETYPE_DEFAULT,
-            IPL_REFLECTIONEFFECTTYPE_CONVOLUTION,
-            128,
-            4096,
-            32,
-            2.0f,
-            1,
-            8,
-            2,
-            5,
-            32,
-            samplingRate, frameSize,
-            nullptr, nullptr, nullptr,
-        };
-        iplSimulatorCreate(context, &simulationSettings, &m_ipl_simulator);
-
-        iplSimulatorSetScene(m_ipl_simulator, m_ipl_scene);
-        iplSimulatorCommit(m_ipl_simulator);
+            m_steamAudioScene = xr_new<SteamAudio::CSteamAudioScene>();
+            if (!m_steamAudioScene->Initialize(steamAudioContext->GetContext(), steamAudioContext->GetAudioSettings()))
+            {
+                Msg("! SOUND: SteamAudio: Failed to initialize scene, disabling Steam Audio for this scene");
+                xr_delete(m_steamAudioScene);
+            }
+        }
     }
 #endif
 }
@@ -69,10 +52,8 @@ CSoundRender_Scene::~CSoundRender_Scene()
     xr_delete(geom_SOM);
 
 #ifdef USE_STEAMAUDIO
-    if (m_ipl_simulator)
-        iplSimulatorRelease(&m_ipl_simulator);
-    if (m_ipl_scene)
-        iplSceneRelease(&m_ipl_scene);
+    // RAII: Wrapper automatically releases Steam Audio resources
+    xr_delete(m_steamAudioScene);
 #endif
 }
 
@@ -100,89 +81,25 @@ void CSoundRender_Scene::set_geometry_occ(CDB::MODEL* M, const Fbox& aabb)
     geom_MODEL = M;
 
 #ifdef USE_STEAMAUDIO
-    if (m_ipl_scene_mesh)
+    // Use wrapper to handle geometry loading
+    if (m_steamAudioScene && m_steamAudioScene->IsValid())
     {
-        iplStaticMeshRemove(m_ipl_scene_mesh, m_ipl_scene);
-        iplStaticMeshRelease(&m_ipl_scene_mesh);
-    }
-    if (M && m_ipl_scene)
-    {
-        const auto tris = M->get_tris();
-        const s32  tris_count = (s32)M->get_tris_count();
-
-        const auto verts = M->get_verts();
-        const s32  verts_count = (s32)M->get_verts_count();
-
-        auto* temp_tris = xr_alloc<IPLTriangle>(tris_count);
-        auto* temp_mat_idx = xr_alloc<IPLint32>(tris_count);
-
-        // XXX: replace xr_vector with small_buffer and buffer_vector. But upgrade buffer_vector to match C++17 std::vector first.
-        xr_vector<IPLMaterial> materials;
-        materials.reserve(GMLib.CountMaterial());
-
-        for (const SGameMtl* material : GMLib.Materials())
+        if (M)
         {
-            materials.emplace_back(reinterpret_cast<const IPLMaterial&>(material->Acoustics));
+            // Load geometry with optional path baking
+            // TODO: Make path baking configurable via console variable
+            constexpr bool bakePaths = false; // Disabled for now - blocks level loading
+            if (!m_steamAudioScene->LoadGeometry(M, aabb, bakePaths))
+            {
+                Msg("~ SOUND: SteamAudio: Failed to load geometry");
+            }
         }
-
-        for (int i = 0; i < tris_count; ++i)
+        else
         {
-            temp_tris[i] = reinterpret_cast<IPLTriangle&>(tris[i].verts);
-            temp_mat_idx[i] = tris[i].material;
+            // Clear geometry
+            m_steamAudioScene->ClearGeometry();
         }
-
-        IPLStaticMeshSettings staticMeshSettings
-        {
-            verts_count, tris_count, static_cast<IPLint32>(materials.size()),
-            reinterpret_cast<IPLVector3*>(verts), temp_tris,
-            temp_mat_idx, materials.data()
-        };
-
-        iplStaticMeshCreate(m_ipl_scene, &staticMeshSettings, &m_ipl_scene_mesh);
-        xr_free(temp_mat_idx);
-        xr_free(temp_tris);
-
-        iplStaticMeshAdd(m_ipl_scene_mesh, m_ipl_scene);
-
-        const auto transform = aabb.get_xform();
-
-        IPLProbeGenerationParams probeParams
-        {
-            IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR,
-            2.0f, 1.5f,
-            reinterpret_cast<const IPLMatrix4x4&>(transform)
-        };
-
-        IPLProbeArray probeArray{};
-        iplProbeArrayCreate(SoundRender->ipl_context(), &probeArray);
-        iplProbeArrayGenerateProbes(probeArray, m_ipl_scene, &probeParams);
-
-        constexpr IPLBakedDataIdentifier identifier
-        {
-            IPL_BAKEDDATATYPE_PATHING,
-            IPL_BAKEDDATAVARIATION_REVERB,
-            {},
-        };
-
-        iplProbeBatchCreate(SoundRender->ipl_context(), &m_ipl_scene_probes);
-        iplProbeBatchAddProbeArray(m_ipl_scene_probes, probeArray);
-        iplProbeBatchCommit(m_ipl_scene_probes);
-
-        IPLPathBakeParams pathingBakeParams
-        {
-            m_ipl_scene, m_ipl_scene_probes, identifier,
-            2, 2.0f, 0.5f,
-            25.0f, 50.0f,
-            s32(TaskScheduler->GetWorkersCount())
-        };
-
-        iplPathBakerBake(SoundRender->ipl_context(), &pathingBakeParams, [](IPLfloat32 progress, void*)
-        {
-            Msg("SOUND: SteamAudio: path baker progress: %f", progress);
-        }, nullptr);
     }
-    if (m_ipl_scene)
-        iplSceneCommit(m_ipl_scene);
 #endif
 }
 
@@ -365,11 +282,22 @@ CSoundRender_Emitter* CSoundRender_Scene::i_play(ref_sound& S, u32 flags, float 
 void CSoundRender_Scene::update()
 {
     ZoneScoped;
+
 #ifdef USE_STEAMAUDIO
-    if (m_ipl_simulator)
+    // Update Steam Audio listener position and run simulation
+    if (m_steamAudioScene && m_steamAudioScene->IsValid())
     {
-        iplSimulatorCommit(m_ipl_simulator);
-        iplSimulatorRunDirect(m_ipl_simulator);
+        const auto& listener = SoundRender->listener_params();
+        m_steamAudioScene->UpdateListener(
+            listener.position,
+            listener.orientation[0], // forward
+            listener.orientation[1], // up
+            listener.orientation[2]  // right
+        );
+
+        // Commit any pending changes (sources added/removed) and run direct simulation
+        m_steamAudioScene->CommitSimulator();
+        m_steamAudioScene->RunDirectSimulation();
     }
 #endif
 

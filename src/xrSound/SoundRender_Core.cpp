@@ -6,6 +6,10 @@
 #include "SoundRender_Source.h"
 #include "SoundRender_Emitter.h"
 
+#ifdef USE_STEAMAUDIO
+#include "SteamAudio/SteamAudioContext.h"
+#endif
+
 // XXX: old SDK functionality
 //#if defined(XR_PLATFORM_WINDOWS)
 //#define OPENAL
@@ -15,6 +19,11 @@
 XRSOUND_API Flags32 psSoundFlags =
 {
     ss_Hardware | ss_EFX
+#ifdef USE_STEAMAUDIO
+    // Steam Audio enabled by default if compiled in
+    | ss_UseSteamAudio | ss_SteamAudio_HRTF
+    // Note: ss_SteamAudio_BakePaths disabled by default to avoid blocking level loads
+#endif
 };
 
 XRSOUND_API int psSoundTargets = 32;
@@ -55,68 +64,27 @@ void CSoundRender_Core::_initialize()
     bPresent = true;
 
 #ifdef USE_STEAMAUDIO
+    // Initialize Steam Audio with proper settings
+    // CRITICAL FIX: Frame size changed from 19200 (400ms latency!) to 1024 (~21ms)
     if (supports_float_pcm && psSoundFlags.test(ss_UseFloat32) && psSoundFlags.test(ss_EFX))
     {
-        IPLSIMDLevel simdLevel = IPL_SIMDLEVEL_SSE2;
-        if (CPU::HasAVX512F)
-            simdLevel = IPL_SIMDLEVEL_AVX512;
-        else if (CPU::HasAVX2)
-            simdLevel = IPL_SIMDLEVEL_AVX2;
-        else if (CPU::HasAVX)
-            simdLevel = IPL_SIMDLEVEL_AVX;
-        else if (CPU::HasSSE42)
-            simdLevel = IPL_SIMDLEVEL_SSE4;
+        const bool enableValidation = strstr(Core.Params, "-steamaudio_validate") != nullptr;
 
-        const IPLContextFlags flags
+        m_steamAudioContext = xr_new<SteamAudio::CSteamAudioContext>();
+
+        constexpr int sampleRate = 48000;
+        constexpr int frameSize = 1024;  // FIX: Was 19200 (400ms!), now 1024 (~21ms @ 48kHz)
+
+        if (!m_steamAudioContext->Initialize(sampleRate, frameSize, enableValidation))
         {
-            strstr(Core.Params, "-steamaudio_validate")
-                ? IPL_CONTEXTFLAGS_VALIDATION
-                : IPLContextFlags{}
-        };
-
-        IPLContextSettings contextSettings
+            Msg("! SOUND: SteamAudio: Failed to initialize, disabling Steam Audio");
+            xr_delete(m_steamAudioContext);
+        }
+        else
         {
-            STEAMAUDIO_VERSION,
-            [](IPLLogLevel level, const char* message)
-            {
-                // These warnings are incorrect, values are correct.
-                if (0 == xr_strcmp(message, "Warning: setInputs: invalid IPLfloat32: (&inputs->directivity)->dipoleWeight = 0.000000\n"))
-                    return;
-                if (0 == xr_strcmp(message, "Warning: apply: invalid IPLTransmissionType: params->flags = 31\n"))
-                    return;
-
-                char mark = '\0';
-                switch (level)
-                {
-                case IPL_LOGLEVEL_INFO:    mark = '*'; break;
-                case IPL_LOGLEVEL_WARNING: mark = '~'; break;
-                case IPL_LOGLEVEL_ERROR:   mark = '!'; break;
-                case IPL_LOGLEVEL_DEBUG:   mark = '#'; break;
-                }
-                Msg("%c SOUND: SteamAudio: %s", mark, message);
-            },
-            [](IPLsize size, IPLsize alignment)
-            {
-                return Memory.mem_alloc(size, alignment);
-            },
-            [](void* memoryBlock)
-            {
-                Memory.mem_free(memoryBlock);
-            },
-            simdLevel,
-            flags,
-        };
-
-        iplContextCreate(&contextSettings, &m_ipl_context);
-        IPLHRTFSettings hrtfSettings
-        {
-            IPL_HRTFTYPE_DEFAULT,
-            nullptr, nullptr, 0,
-            1.0f, IPL_HRTFNORMTYPE_NONE
-        };
-
-        m_ipl_settings = { 48000, 19200 };
-        iplHRTFCreate(m_ipl_context, &m_ipl_settings, &hrtfSettings, &m_ipl_hrtf);
+            Msg("* SOUND: SteamAudio: Initialized successfully (sample rate: %d, frame size: %d, latency: %.1fms)",
+                sampleRate, frameSize, (frameSize * 1000.0f) / sampleRate);
+        }
     }
 #endif
     bReady = true;
@@ -128,10 +96,8 @@ void CSoundRender_Core::_clear()
     bReady = false;
 
 #ifdef USE_STEAMAUDIO
-    if (m_ipl_hrtf)
-        iplHRTFRelease(&m_ipl_hrtf);
-    if (m_ipl_context)
-        iplContextRelease(&m_ipl_context);
+    // RAII: Wrapper automatically releases Steam Audio resources
+    xr_delete(m_steamAudioContext);
 #endif
 
     // remove sources
@@ -282,28 +248,8 @@ void CSoundRender_Core::update_listener(const Fvector& P, const Fvector& D, cons
     m_effects->commit();
 
 #ifdef USE_STEAMAUDIO
-    if (m_ipl_context)
-    {
-        const IPLCoordinateSpace3 listenerCoordinates
-        {
-            reinterpret_cast<const IPLVector3&>(R),
-            reinterpret_cast<const IPLVector3&>(N),
-            reinterpret_cast<const IPLVector3&>(D),
-            reinterpret_cast<const IPLVector3&>(P)
-        }; // the world-space position and orientation of the listener
-
-        IPLSimulationSharedInputs sharedInputs
-        {
-            listenerCoordinates,
-            64, 8,
-            2.0f, 1,
-            1.0f,
-            nullptr, nullptr
-        };
-
-        for (const auto scene : m_scenes)
-            iplSimulatorSetSharedInputs(scene->ipl_simulator(), IPL_SIMULATIONFLAGS_DIRECT, &sharedInputs);
-    }
+    // Listener updates now handled by individual scenes via CSteamAudioScene wrapper
+    // See CSoundRender_Scene::update()
 #endif
 }
 

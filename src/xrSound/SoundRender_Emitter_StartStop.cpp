@@ -46,43 +46,25 @@ void CSoundRender_Emitter::start(const ref_sound& _owner, u32 flags, float delay
     ovf = source()->open();
 
 #ifdef USE_STEAMAUDIO
-    if (const auto simulator = scene->ipl_simulator())
+    // Lazy initialization: Create Steam Audio source when we have audio format info
+    if (SoundRender->ipl_context() && scene->ipl_simulator() && !m_steamAudioSource)
     {
-        iplSourceAdd(m_ipl_source, simulator);
-
         const auto context = SoundRender->ipl_context();
-        auto& settings = source()->ipl_audio_settings();
+        const auto simulator = scene->ipl_simulator();
+        const auto hrtf = SoundRender->ipl_hrtf();
+        const auto& audioSettings = source()->ipl_audio_settings();
 
-        IPLDirectEffectSettings direct{ data_info.channels };
-        iplDirectEffectCreate(context, &settings, &direct, &ipl_effects.direct);
-
-        IPLReflectionEffectSettings refl{ IPL_REFLECTIONEFFECTTYPE_CONVOLUTION, settings.frameSize * 2, 4 };
-        iplReflectionEffectCreate(context, &settings, &refl, &ipl_effects.reflection);
-
-        IPLPathEffectSettings path{ 1, IPL_TRUE, {}, SoundRender->ipl_hrtf() };
-        iplPathEffectCreate(context, &settings, &path, &ipl_effects.path);
-
-        iplAudioBufferAllocate(context, data_info.channels, settings.frameSize, &ipl_buffers.direct_input);
-        iplAudioBufferAllocate(context, data_info.channels, settings.frameSize, &ipl_buffers.direct_output);
+        // Create RAII wrapper (automatically manages all Steam Audio resources)
+        m_steamAudioSource = xr_new<SteamAudio::CSteamAudioSource>(
+            context, simulator, audioSettings, hrtf, data_info.channels);
     }
 #endif
 }
 
 void CSoundRender_Emitter::i_stop()
 {
-#ifdef USE_STEAMAUDIO
-    if (const auto context = SoundRender->ipl_context())
-    {
-        iplSourceRemove(m_ipl_source, scene->ipl_simulator());
-
-        iplDirectEffectRelease(&ipl_effects.direct);
-        iplReflectionEffectRelease(&ipl_effects.reflection);
-        iplPathEffectRelease(&ipl_effects.path);
-
-        iplAudioBufferFree(context, &ipl_buffers.direct_output);
-        iplAudioBufferFree(context, &ipl_buffers.direct_input);
-    }
-#endif
+    // NOTE: No Steam Audio cleanup needed here - RAII wrapper handles it in destructor
+    // Resources persist across play/stop cycles for efficiency
     bRewind = FALSE;
     if (target)
         stop_target();

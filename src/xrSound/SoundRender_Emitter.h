@@ -10,6 +10,10 @@ struct OggVorbis_File;
 
 class Task;
 
+#ifdef USE_STEAMAUDIO
+namespace SteamAudio { class CSteamAudioSource; }
+#endif
+
 class CSoundRender_Emitter final : public CSound_emitter
 {
 public:
@@ -42,22 +46,11 @@ public:
 
 #ifdef USE_STEAMAUDIO
 private:
-    IPLSource m_ipl_source{};
-
-    struct
-    {
-        IPLDirectEffect direct{};
-        IPLReflectionEffect reflection{};
-        IPLPathEffect path{};
-    } ipl_effects{};
-    struct
-    {
-        IPLAudioBuffer direct_input{};
-        IPLAudioBuffer direct_output{};
-    } ipl_buffers{};
+    SteamAudio::CSteamAudioSource* m_steamAudioSource{};
 
 public:
-    auto ipl_source() const { return m_ipl_source; }
+    [[nodiscard]]
+    SteamAudio::CSteamAudioSource* GetSteamAudioSource() const { return m_steamAudioSource; }
 #endif
 
     [[nodiscard]]

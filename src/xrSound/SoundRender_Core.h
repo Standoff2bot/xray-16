@@ -7,6 +7,10 @@
 #include "SoundRender_Effects.h"
 #include "SoundRender_Scene.h"
 
+#ifdef USE_STEAMAUDIO
+namespace SteamAudio { class CSteamAudioContext; }
+#endif
+
 class CSoundRender_Core : public ISoundManager
 {
 protected:
@@ -79,9 +83,7 @@ protected:
     CSoundRender_Effects* m_effects{};
 
 #ifdef USE_STEAMAUDIO
-    IPLContext m_ipl_context{};
-    IPLHRTF m_ipl_hrtf{};
-    IPLAudioSettings m_ipl_settings{};
+    SteamAudio::CSteamAudioContext* m_steamAudioContext{};
 #endif
 
 public:
@@ -125,9 +127,7 @@ public:
 
 #ifdef USE_STEAMAUDIO
     [[nodiscard]]
-    auto ipl_context() const { return m_ipl_context; }
-    const auto& ipl_settings() const { return m_ipl_settings; }
-    auto ipl_hrtf() const { return m_ipl_hrtf; }
+    SteamAudio::CSteamAudioContext* GetSteamAudioContext() const { return m_steamAudioContext; }
 #endif
 
 public:

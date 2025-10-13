@@ -60,6 +60,11 @@ enum : u32
     ss_Hardware = 1ul << 1ul, //!< Use hardware mixing only
     ss_EFX = 1ul << 2ul, //!< Use efx
     ss_UseFloat32 = 1ul << 3ul, //!< Use 32-bit float sound instead of 16-bit
+
+    // Steam Audio flags
+    ss_UseSteamAudio = 1ul << 4ul, //!< Enable Steam Audio spatial processing
+    ss_SteamAudio_HRTF = 1ul << 5ul, //!< Enable HRTF-based binaural rendering
+    ss_SteamAudio_BakePaths = 1ul << 6ul, //!< Enable path baking (may block level loads)
 };
 
 enum : u32

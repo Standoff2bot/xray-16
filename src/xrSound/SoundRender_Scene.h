@@ -4,6 +4,10 @@
 
 class CSoundRender_Emitter;
 
+#ifdef USE_STEAMAUDIO
+namespace SteamAudio { class CSteamAudioScene; }
+#endif
+
 class CSoundRender_Scene final : public ISoundScene
 {
 public:
@@ -48,10 +52,7 @@ public:
 public:
 #ifdef USE_STEAMAUDIO
     [[nodiscard]]
-    auto ipl_scene() const { return m_ipl_scene; }
-    auto ipl_scene_mesh() const { return m_ipl_scene_mesh; }
-    auto ipl_scene_probes() const { return m_ipl_scene_probes; }
-    auto ipl_simulator() const { return m_ipl_simulator; }
+    SteamAudio::CSteamAudioScene* GetSteamAudioScene() const { return m_steamAudioScene; }
 #endif
 
 private:
@@ -75,9 +76,6 @@ private:
     int m_iPauseCounter{ 1 };
 
 #ifdef USE_STEAMAUDIO
-    IPLScene m_ipl_scene{};
-    IPLStaticMesh m_ipl_scene_mesh{};
-    IPLProbeBatch m_ipl_scene_probes{};
-    IPLSimulator m_ipl_simulator{};
+    SteamAudio::CSteamAudioScene* m_steamAudioScene{};
 #endif
 };
