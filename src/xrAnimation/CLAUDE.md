@@ -1,238 +1,253 @@
-# CLAUDE.md
+# X-Ray ozz-animation Integration - Agent Documentation
 
-## X-Ray to ozz-animation Integration Project
+**Document Type:** Agent Session Context & Project Guide
+**Last Updated:** 2025-10-12
+**Status:** Living Document
 
-## ⚠️ CRITICAL BUILD INFORMATION
-- **CMake Build Directory:** ALWAYS use `./build` (NOT `./out/build`)
-- **Build Performance:** ALWAYS use `-j$(nproc)` flag for parallel builds
-- **Example:** `cmake --build ./build -j$(nproc)`
+---
 
-## X-Ray to ozz-animation Integration Project
+## Table of Contents
 
-### Current Status (Phase 1, Week 2 - Completed!)
-- ✅ xrAnimation module created and building successfully
+1. [Project Overview](#project-overview)
+2. [Critical Build Information](#build-info)
+3. [Current Status](#current-status)
+4. [Key Technical Decisions](#technical-decisions)
+5. [Implementation Insights](#implementation-insights)
+6. [Session Context & MVP Notes](#session-context)
+7. [Resources & Documentation](#resources)
+
+---
+
+## Project Overview {#project-overview}
+
+### Mission
+Integrate ozz-animation (modern, SIMD-optimized animation library) into OpenXRay to replace the legacy X-Ray animation system while maintaining full backward compatibility.
+
+### Timeline: MVP Delivered (10-12 weeks completed)
+
+#### Phase 1: Foundation (Weeks 1-2) - ✅ COMPLETED
+- ✅ Build system & initial study
+- ✅ Existing system analysis
+- ✅ xrAnimation module created
 - ✅ Dependencies resolved (ozz-animation, imgui, SDL2)
-- ✅ Basic project structure established
-- ✅ IKinematicsAnimated interface analyzed and documented
-- ✅ Usage patterns traced in game code (ActorAnimation.cpp patterns)
-- ✅ Critical paths identified
-- ✅ X-Ray to ozz method mapping completed
-- ✅ Basic ozz test harness created
-- ✅ CKinematicsAnimated implementation analyzed
-- ✅ Motion/Blend system (CMotion, CBlend) documented
+- ✅ IKinematics interface analyzed
+- ✅ Usage patterns traced
 - ✅ Integration points documented
-- ✅ OzzAnimationSystem core implementation completed
-- ✅ OzzAnimationSystem extended features (channels, partitions, callbacks)
-- ✅ OzzKinematicsAnimated compatibility layer implemented
-- ✅ Compilation errors fixed
-- ✅ Test programs created with real X-Ray data
-- ✅ X-Ray mesh/animation files added to project (res/gamedata/meshes/actors)
 
-### Project Overview
-Integrating ozz-animation (modern, SIMD-optimized animation library) into OpenXRay to replace the legacy X-Ray animation system.
+#### Phase 2: Prototype & Converter (Weeks 3-5) - ✅ COMPLETED
+- ✅ Basic ozz integration
+- ✅ OGF→ozz skeleton converter
+- ✅ OMF→ozz animation converter
+- ✅ Asset conversion pipeline working
+- ✅ Coordinate system transformation solved
+- ✅ Motion marks format fixed
+- ✅ Per-bone animation distribution working
 
-### Timeline: 10-12 Weeks
+#### Phase 3: Core Implementation (Weeks 6-8) - ✅ COMPLETED
+- ✅ Full animation system (OzzAnimationSystem)
+- ✅ Runtime façade (OzzKinematics, OzzKinematicsAnimated)
+- ✅ Three-tier architecture (Core, Static, Animated)
+- ✅ Game integration via COzzKinematicsVisual
+- ✅ Asset conversion tools production-ready
 
-#### Phase 1: Foundation (Weeks 1-2) - CURRENT
-- Week 1: Build system & initial study
-- Week 2: Existing system analysis
+#### Phase 4: Polish & Optimization (Weeks 9-10) - ✅ MVP COMPLETE
+- ✅ Testing & parity validation
+- ✅ ozz_animation_viewer tool
+- ✅ Comprehensive documentation
+- 🔄 Performance optimization (ongoing)
 
-#### Phase 2: Prototype (Weeks 3-5)
-- Week 3: Basic ozz integration
-- Week 4: X-Ray compatibility layer
-- Week 5: Asset pipeline prototype
+---
 
-#### Phase 3: Core Implementation (Weeks 6-8)
-- Week 6: Full animation system
-- Week 7: Asset conversion tools
-- Week 8: Game integration
+## Critical Build Information {#build-info}
 
-#### Phase 4: Polish (Weeks 9-10)
-- Week 9: Testing & optimization
-- Week 10: Tools & documentation
+### ⚠️ CRITICAL: Build System Requirements
 
-### Key Technical Decisions
+**CMake Build Directory:**
+- ✅ ALWAYS use `./build` (NOT `./out/build`)
+- ✅ ALWAYS use `-j$(nproc)` flag for parallel builds
+- ❌ NEVER use Visual Studio's CMake integration (causes path issues)
 
-1. **Use X-Ray Types**: xr_vector, xr_unique_ptr, Fmatrix, Fvector
-2. **Incremental Integration**: Keep old system working while building new
-3. **Full API Compatibility**: Maintain IKinematicsAnimated interface
-4. **Asset Conversion**: Build tools for OGF → ozz conversion
+**Example Commands:**
+```bash
+# Configure (first time)
+cmake -S xray-16 -B build -DCMAKE_BUILD_TYPE=Debug
 
-### Implementation Notes
+# Build (parallel)
+cmake --build ./build -j$(nproc)
 
-#### Core Classes
-- `OzzAnimationSystem`: Core ozz wrapper
-- `OzzKinematicsAnimated`: IKinematicsAnimated implementation
-- `XRayToOzzConverter`: Asset conversion framework
+# Build specific target
+cmake --build ./build --target xrAnimation -j$(nproc)
 
-#### Critical Integration Points
-1. Motion ID system
-2. Blend management (CBlend compatibility)
-3. Bone callbacks
-4. Partition support
-5. Physics integration
-6. Script bindings
-
-### Documentation Created
-- `docs/IKinematicsAnimated_Analysis.md` - Complete interface documentation
-- `docs/XRay_to_ozz_Mapping.md` - Method mapping and integration strategy
-
-### Test Infrastructure
-- `tests/test_ozz_basic.cpp` - Basic ozz functionality tests
-- `xrAnimation.cpp/h` - Module initialization and test runner
-
-### Progress Update (Phase 2, Week 3 - Completed!)
-1. ✅ Implemented OGF parser with proper bone hierarchy reading
-2. ✅ Implemented OMF parser with compression support
-3. ✅ Created converter CLI tool using proper converter classes
-4. ✅ Fixed chunk IDs based on SDK source code analysis
-5. ✅ Added TransformConverter for matrix conversions
-
-### Key Achievements
-- **OGF Converter**: Reads bone names, parent relationships, OBBs, IK data
-- **OMF Converter**: Handles compressed motion data, supports both 8/16-bit formats
-- **Converter Tool**: Full CLI with skeleton, animation, and batch conversion modes
-- **SDK Integration**: Used xrSDK source to verify file formats and chunk structures
-
-### Phase 2, Week 4 - COMPLETED MAJOR BREAKTHROUGH!
-
-#### Critical Technical Discoveries
-
-**1. X-Ray to ozz Coordinate System Conversion (SOLVED)**
-- X-Ray uses Y-up coordinate system, ozz/OpenGL uses Z-up
-- Required coordinate transformation: `(X, Y, Z) → (X, Z, -Y)`
-- Implemented in `TransformConverter::XRayToOzz()` with proper matrix conversion:
-```cpp
-// Apply coordinate conversion matrix similar to blender-xray MATRIX_BONE
-converted_matrix.i.set(xray_matrix.i.x, xray_matrix.i.z, -xray_matrix.i.y);  // X-axis
-converted_matrix.j.set(xray_matrix.j.x, xray_matrix.j.z, -xray_matrix.j.y);  // Y-axis  
-converted_matrix.k.set(xray_matrix.k.x, xray_matrix.k.z, -xray_matrix.k.y);  // Z-axis
-converted_matrix.c.set(xray_matrix.c.x, xray_matrix.c.z, -xray_matrix.c.y);  // Translation
+# Run tests
+ctest --test-dir ./build --output-on-failure
 ```
 
-**2. OMF Motion Marks String Format (CRITICAL BUG FIX)**
-- Motion marks in OGF_S_SMPARAMS version 4 use `\r\n` termination, NOT null termination
-- Standard `r_stringZ()` fails - must read until `\n` and strip trailing `\r`
-- Fixed in `ReadMotionParams()` with custom string reader
-- This was causing reader overflow errors that blocked all OMF conversion
+**Important Paths:**
+- **Source:** `/mnt/f/modding/claude_sessions/xray-16/`
+- **Build:** `/mnt/f/modding/claude_sessions/xray-16/build/`
+- **Binaries:** `./build/bin/Debug/` or `./build/bin/Release/`
+- **Test Assets:** `./res/gamedata/meshes/actors/`
 
-**3. Per-Bone Animation Data Structure (MAJOR REWRITE)**
-- Original OMF converter was accumulating ALL bone motion data into single object
-- Each motion contains data for multiple bones that must be distributed separately
-- Restructured `OMFBoneMotion` to contain `xr_vector<OMFBoneData> bone_data`
-- Each `OMFBoneData` has separate keyframes for individual bones
-- Fixed `ConvertSingleMotion()` to map bone IDs to correct animation tracks
+---
 
-**4. Blender-xray Integration Research**
-- Confirmed X-Ray format specifications through blender-xray codebase analysis
-- Motion marks use special string format with `\r\n` endings
-- Coordinate system transformation proven in production addon
-- Bone part system maps to animation partitioning
+## Current Status {#current-status}
 
-#### Successful Conversion Results
-- **OGF Skeleton**: stalker_hero_1.ogf → stalker_hero_1_skeleton_fixed.ozz (47 bones, 2.7KB)
-- **OMF Animation**: critical_hit_grup_1.omf → 4 separate .ozz files (multi-bone animation)
-- **ozz-animation Compatibility**: Files load successfully in official ozz playback sample
-- **Multi-bone Animation**: All 47 skeleton bones now receive animation data (vs previous 1 bone)
+### MVP Status: ✅ Delivered
 
-#### Technical Implementation Status
-✅ **OGF Converter**: Bone hierarchy, IK data, coordinate conversion
-✅ **OMF Converter**: Per-bone motion data, motion marks, compressed keyframes  
-✅ **Coordinate System**: X-Ray Y-up to ozz Z-up conversion working
-✅ **File Format**: Motion marks `\r\n` string format handled correctly
-✅ **Animation Distribution**: Per-bone motion data mapped to correct tracks
-✅ **ozz Integration**: Files load and run in ozz-animation viewer successfully
+**What Works:**
+- ✅ Asset conversion (OGF/OMF → ozz/ozzx)
+- ✅ Runtime loading and playback
+- ✅ Full IKinematics/IKinematicsAnimated compatibility
+- ✅ Visual integration with COzzKinematicsVisual
+- ✅ Parity tests passing
+- ✅ Startup conversion system
+- ✅ Three-tier architecture (eliminates "$editor" spam)
+- ✅ Extended bone metadata (physics, IK constraints)
 
-#### Major Breakthrough - IK Data Parsing Fixed!
+**What's Next (Post-MVP):**
+- 🔄 Parallel animation updates (500+ characters)
+- 🔄 Shared motion container (memory optimization)
+- 🔄 GPU skinning
+- 🔄 Advanced IK/Ragdoll systems (see ECS_IK_REFACTOR_STATUS.md)
 
-#### Problem
-- Skeleton loaded successfully but all bones collapsed to (0,0,0)
-- Scene bounds were (0,0,0) to (0,0,0) - entire skeleton was a single point
+### Test Infrastructure
+- **Converter Tests:** `xrAnimation_converter_tests`
+- **Parity Tests:** `ozz_kinematics_tests`
+- **Visualization:** `ozz_animation_viewer` (with profiling)
+- **Test Fixtures:** `src/xrAnimation/tests/testdata/`
 
-#### Root Cause Discovery
-- `CBone::ExportOGF()` only writes IK data for bones where `shape.Valid()` returns true
-- Not all bones have IK data written to OGF files - only those with valid shapes
-- Our converter was assuming all bones would have IK data, causing read corruption
+---
 
-#### Solution
-- Implemented `SBoneShape::Valid()` check from xrSDK in OGF converter
-- Read shape data first, check validity, only read IK data if valid
-- Use OBB transform as fallback for bones without valid IK data
-- Result: Skeleton now visible with proper bone positions!
+## Key Technical Decisions {#technical-decisions}
 
-### Debug Tools Created
-- Custom `debug_playback` executable that outputs detailed bone positions
-- Shows skeleton in bind pose without requiring animation
-- Displays all bone transforms and scene bounds for debugging
-
-### Animation Conversion Status
-- ✅ OMF motion data format decoded correctly
-- ✅ Proper bone count handling for OGF format
-- ✅ Fixed data reading order (compressed values before t_size/t_init)
-- ✅ Keyframe values look reasonable after conversion
-- ✅ Fixed animation playback - bones no longer stuck at (0,0,0)
-- ✅ Fixed skeleton orientation - quaternion conjugation handles handedness
-
-### Phase 2 Week 4 - COMPLETED! 🎉
-
-#### Final Solution: Quaternion Conjugation
-
+### 1. Use X-Ray Types & Conventions
 ```cpp
-// Convert from left-handed to right-handed coordinate system
+// ✅ DO: Use X-Ray types
+xr_vector<T>          // Not std::vector
+xr_unique_ptr<T>      // Not std::unique_ptr
+xr_new<T>() / xr_delete()  // Not new/delete
+Fmatrix, Fvector, Fquaternion  // X-Ray math types
+Msg() / Msgf()        // Not printf/cout
+IReader* / IWriter*   // X-Ray file I/O
+FS.r_open() / FS.r_close()  // Virtual file system
+
+// ❌ DON'T: Use STL directly
+std::vector<T>        // Use xr_vector
+new/delete            // Use xr_new/xr_delete
+std::cout / printf    // Use Msg()
+std::fstream          // Use IReader/IWriter
+```
+
+### 2. Incremental Integration Strategy
+- Keep legacy `CKinematics` working alongside `OzzKinematics`
+- Developer toggle: `g_use_ozz_visuals` console variable
+- Fallback to legacy on missing `.ozzx` bundles
+- No gameplay code changes during migration
+- Lua scripts remain unchanged
+
+### 3. Full API Compatibility
+- `IKinematics` interface fully implemented
+- `IKinematicsAnimated` interface fully implemented
+- Legacy bone callback system preserved
+- Motion partition system maintained
+- Blend pool compatible with `CBlend` usage patterns
+
+### 4. Asset Conversion Pipeline
+- Startup conversion with digest tracking
+- CLI tool for batch conversion
+- `.ozzx` bundle format (skeleton + mesh + metadata)
+- Extended bone records (physics, IK, collision hints)
+
+---
+
+## Implementation Insights {#implementation-insights}
+
+### Critical Discoveries
+
+#### 1. Coordinate System Conversion ✅ SOLVED
+**Problem:** X-Ray uses Y-up, ozz/OpenGL uses Z-up
+
+**Solution:**
+```cpp
+// Transform: (X, Y, Z) → (X, Z, -Y)
+Fmatrix converted;
+converted.i.set(xray.i.x, xray.i.z, -xray.i.y);  // X-axis
+converted.j.set(xray.j.x, xray.j.z, -xray.j.y);  // Y-axis
+converted.k.set(xray.k.x, xray.k.z, -xray.k.y);  // Z-axis
+converted.c.set(xray.c.x, xray.c.z, -xray.c.y);  // Position
+```
+
+#### 2. OMF Motion Marks Format ✅ FIXED
+**Problem:** Motion marks use `\r\n` termination, NOT null termination
+
+**Solution:**
+```cpp
+// Read until '\n', strip trailing '\r'
+xr_string ReadMotionMark(IReader* reader) {
+    xr_string result;
+    char ch;
+    while (reader->r(&ch, sizeof(ch))) {
+        if (ch == '\n') break;
+        if (ch != '\r') result += ch;
+    }
+    return result;
+}
+```
+
+#### 3. Per-Bone Animation Distribution ✅ FIXED
+**Problem:** OMF contains motion data for ALL bones, must distribute correctly
+
+**Solution:**
+```cpp
+// Each OMFBoneMotion contains data for multiple bones
+struct OMFBoneMotion {
+    xr_string motion_name;
+    xr_vector<OMFBoneData> bone_data;  // One entry per bone
+};
+
+// Map bone IDs to correct animation tracks during conversion
+for (const OMFBoneData& bone : motion.bone_data) {
+    u16 bone_idx = skeleton.FindBoneByName(bone.bone_name);
+    ozz_animation.tracks[bone_idx] = ConvertKeyframes(bone.keyframes);
+}
+```
+
+#### 4. IK Data Parsing ✅ FIXED
+**Problem:** Not all bones have IK data in OGF (only those with valid shapes)
+
+**Solution:**
+```cpp
+bool SBoneShape::Valid() const {
+    return (type == stBox && !box.IsZero()) ||
+           (type == stSphere && sphere.R > 0) ||
+           (type == stCylinder && cylinder.IsValid());
+}
+
+// Read IK data only if shape is valid
+if (shape.Valid()) {
+    // Read SJointIKData, mass, center_of_mass
+} else {
+    // Use OBB transform as fallback
+}
+```
+
+#### 5. Quaternion Conjugation ✅ FIXED
+**Problem:** Left-handed (X-Ray) vs right-handed (ozz) coordinate systems
+
+**Solution:**
+```cpp
+// Convert from left-handed to right-handed
 Fquaternion quat;
 quat.set(xray_matrix);
-// Conjugate: negate x, y, z components, keep w the same
+// Conjugate: negate x, y, z components, keep w
 result.rotation = ozz::math::Quaternion(-quat.x, -quat.y, -quat.z, quat.w);
 ```
 
-### Next Steps (Phase 3)
-1. ✅ Skeleton conversion working correctly
-2. 🔄 Update OMF animation converter with quaternion conjugation
-3. Begin renderer integration with working conversion pipeline
-4. Test with multiple X-Ray models and animations
-5. Performance profiling and optimization
-
-### Important Reminders
-- Always use X-Ray file system (FS.r_open)
-- Use Msg() for logging, not printf/cout
-- Memory: xr_new/xr_delete, not new/delete
-- Fquaternion/Fvector use .set(), not constructors
-- Test continuously, maintain working build
-
-### Key Implementation Insights (Week 2)
-
-#### CKinematicsAnimated Architecture
-- **Blend Pool**: Fixed-size pool `svector<CBlend, MAX_BLENDED_POOL>`
-- **Motion Storage**: `MotionsSlotVec` with shared_motions and per-bone data
-- **Update Pipeline**: UpdateTracks → LL_UpdateTracks → Per-blend update → Bone calculation
-- **Partition System**: Allows independent animation of body parts (torso/legs)
-- **Channel System**: 4 channels with global weight factors
-
-#### Animation Usage Patterns (from ActorAnimation.cpp)
-```cpp
-// Common pattern for state-based animation
-IKinematicsAnimated* K = smart_cast<IKinematicsAnimated*>(Visual());
-if (mstate_rl & mcFwd)
-    M_legs = AS->legs_fwd;
-else if (mstate_rl & mcBack)
-    M_legs = AS->legs_back;
-
-// Torso override for weapons
-STorsoWpn* TW = &ST->m_torso[weapon_slot];
-M_torso = W->IsZoomed() ? TW->zoom : TW->moving[moving_idx];
-```
-
-#### Integration Requirements
-1. **Smart pointer casting**: Game code uses `smart_cast<IKinematicsAnimated*>(Visual())`
-2. **Motion IDs**: Stored in game state objects (SActorState, STorsoWpn)
-3. **Callbacks**: Critical for state transitions (legs_play_callback)
-4. **Bone callbacks**: Per-bone procedural animation (HeadCallback, SpinCallback)
-
 ### ozz-animation SIMD Access Patterns
 
-ozz-animation uses SIMD types (SSE/NEON) for performance. You cannot access members directly:
+⚠️ **CRITICAL:** ozz uses SIMD types - cannot access members directly!
 
-**WRONG:**
+**❌ WRONG:**
 ```cpp
 ozz::math::SimdFloat4 vec;
 float x = vec.x;  // ERROR: 'x' is not a member of '__m128'
@@ -241,140 +256,427 @@ ozz::math::Float4x4 matrix;
 float m11 = matrix.cols[0].x;  // ERROR: cols[0] is SimdFloat4
 ```
 
-**CORRECT:**
+**✅ CORRECT:**
 ```cpp
 // For SimdFloat4 - use GetX/Y/Z/W functions
 ozz::math::SimdFloat4 vec;
 float x = ozz::math::GetX(vec);
 float y = ozz::math::GetY(vec);
-float z = ozz::math::GetZ(vec);
-float w = ozz::math::GetW(vec);
 
 // For Float4x4 matrices
 ozz::math::Float4x4 matrix;
 float m11 = ozz::math::GetX(matrix.cols[0]);
-float m12 = ozz::math::GetX(matrix.cols[1]);
 float m21 = ozz::math::GetY(matrix.cols[0]);
 
-// For SoaTransform (4 transforms stored in SoA layout)
+// For SoaTransform (4 transforms in SoA layout)
 ozz::math::SoaTransform transforms;
-// Access translation of transform 0
-float tx0 = ozz::math::GetX(transforms.translation.x);
-// Access translation of transform 1  
-float tx1 = ozz::math::GetY(transforms.translation.x);
-// Access translation of transform 2
-float tx2 = ozz::math::GetZ(transforms.translation.x);
-// Access translation of transform 3
-float tx3 = ozz::math::GetW(transforms.translation.x);
+float tx0 = ozz::math::GetX(transforms.translation.x);  // Transform 0
+float tx1 = ozz::math::GetY(transforms.translation.x);  // Transform 1
 ```
 
-**Key SIMD Types in ozz:**
-- `SimdFloat4` - 4 floats in SIMD register
+**Key SIMD Types:**
+- `SimdFloat4` - 4 floats in SIMD register (__m128)
 - `Float4x4` - 4x4 matrix with SimdFloat4 columns
 - `SoaTransform` - 4 transforms in Structure-of-Arrays layout
 - `SoaFloat3` - 4 Float3 vectors in SoA layout
 - `SoaQuaternion` - 4 quaternions in SoA layout
 
-### OzzAnimationSystem Implementation Progress
+### CKinematicsAnimated Architecture
 
-#### Core Features Implemented
-- Basic skeleton/animation loading using X-Ray FS
-- Animation handle system (replaces CBlend)
-- Multi-animation blending with ozz jobs
-- Transform conversion (ozz ↔ X-Ray matrices)
-- Callback support for X-Ray compatibility
-
-#### Extended Features Added (OzzAnimationSystem_Extensions.cpp)
-- **Channel System**: SetChannelFactor() for 4-channel weights
-- **Partition Support**: PlayAnimationOnPartition() with bone masks
-- **Additional Transforms**: Per-bone procedural overlays
-- **Root Motion**: Extraction for movement
-- **X-Ray Compatibility**: MotionID mapping, CBlend callbacks
-
-#### Key Implementation Patterns
+**Blend Pool:**
 ```cpp
-// Use X-Ray file system
-IReader* reader = FS.r_open(path.c_str());
-// ... read data
-FS.r_close(reader);
+// Fixed-size blend pool (no dynamic allocation)
+svector<CBlend, MAX_BLENDED_POOL> blend_pool;
 
-// Animation handle replaces CBlend
-struct AnimationHandle {
-    size_t animation_index;
-    float current_time;
-    float weight;
-    u16 partition_id;
-    u8 channel;
-    PlayCallback callback;
-    void* callback_param;
+// Active blends tracked separately
+xr_vector<CBlend*> m_Blends;  // Pointers into pool
+```
+
+**Motion Storage (Bone-Major Layout):**
+```cpp
+struct SMotionsSlot {
+    shared_motions motions;           // Shared motion data
+    BoneMotionsVec bone_motions;      // xr_vector<MotionVec*>
+    //             ^^^ Each entry is MotionVec* (pointer to vector of CMotions)
 };
 
-// Partition masks for body part animation
-SetPartitionMask(TORSO_PARTITION, torso_bones);
-PlayAnimationOnPartition("reload", TORSO_PARTITION, 1.0f, false, channel);
+// Access pattern (critical for performance)
+CMotion* motion = m_Motions[slot].bone_motions[bone_id]->at(motion_idx);
+//                          ^^^^ BONE-MAJOR: bone first, then motion
 ```
 
-### OGF/OMF Converter Implementation (Phase 2, Week 3 - Completed)
-
-#### Key Format Details from xrSDK Analysis
-
-**OGF Bone Hierarchy (from ExportSkeleton.cpp):**
+**Update Pipeline:**
 ```cpp
-F.open_chunk(OGF_S_BONE_NAMES);  // Chunk ID = 13 (0x0D)
-F.w_u32(bone_count);
-for each bone:
-    F.w_stringZ(bone_name);
-    F.w_stringZ(parent_name);  // Empty string if root bone
-    F.w(&obb, sizeof(Fobb));    // Oriented bounding box
-F.close_chunk();
+UpdateTracks()
+  → LL_UpdateTracks()
+    → For each blend: blend->timeCurrent += dt
+    → CalculateBones_Invalidate()
+      → CalculateBones(TRUE)
+        → Bone_Calculate() for each bone
+          → CLBone() or BuildBoneMatrix()
+            → Apply callbacks, additional transforms
 ```
 
-**Important Chunk IDs (from FMesh.hpp):**
-- OGF_HEADER = 1
-- OGF_S_BONE_NAMES = 13 (0x0D)
-- OGF_S_MOTIONS = 14 (0x0E)  
-- OGF_S_SMPARAMS = 15 (0x0F)
-- OGF_S_IKDATA = 16 (0x10)
-- OGF_S_USERDATA = 17 (0x11)
-- OGF_S_DESC = 18 (0x12)
+**Partition System:**
+```cpp
+// Allows independent animation of body parts
+#define MAX_PARTS 4
+CPartition m_Partition[MAX_PARTS];  // e.g., LEGS, TORSO, HEAD, etc.
 
-**SBoneShape Structure (112 bytes):**
+// Usage
+MotionID legs_id = {.slot=0, .idx=walk_motion};
+MotionID torso_id = {.slot=1, .idx=reload_motion};
+PlayCycle(legs_id, 1.0f, LEGS_PARTITION);
+PlayCycle(torso_id, 1.0f, TORSO_PARTITION);
+```
+
+### Animation Usage Patterns (from ActorAnimation.cpp)
+
+**Common Pattern:**
+```cpp
+IKinematicsAnimated* K = smart_cast<IKinematicsAnimated*>(Visual());
+
+// State-based motion selection
+if (mstate_rl & mcFwd)
+    M_legs = AS->legs_fwd;      // MotionID from state object
+else if (mstate_rl & mcBack)
+    M_legs = AS->legs_back;
+
+// Play with callback
+K->PlayCycle(M_legs, true, legs_play_callback, this);
+
+// Torso override for weapons
+STorsoWpn* TW = &ST->m_torso[weapon_slot];
+M_torso = W->IsZoomed() ? TW->zoom : TW->moving[moving_idx];
+K->PlayCycle(M_torso, true, nullptr, nullptr, TORSO_PARTITION);
+```
+
+### File Format Details (from xrSDK)
+
+**OGF Chunk IDs:**
+```cpp
+#define OGF_HEADER        1   // File header
+#define OGF_S_BONE_NAMES  13  // 0x0D - Bone hierarchy
+#define OGF_S_MOTIONS     14  // 0x0E - Motion references
+#define OGF_S_SMPARAMS    15  // 0x0F - Motion parameters
+#define OGF_S_IKDATA      16  // 0x10 - IK constraints, shapes
+#define OGF_S_USERDATA    17  // 0x11 - User metadata
+#define OGF_S_DESC        18  // 0x12 - Description
+```
+
+**OGF_S_BONE_NAMES Structure:**
+```cpp
+// Chunk 13 (0x0D)
+u32 bone_count;
+for (u32 i = 0; i < bone_count; ++i) {
+    stringZ bone_name;
+    stringZ parent_name;  // Empty string if root
+    Fobb obb;             // Oriented bounding box (60 bytes)
+}
+```
+
+**OGF_S_IKDATA Structure (version 0x0001):**
+```cpp
+// Only present if SBoneShape::Valid() returns true!
+for each bone (if valid) {
+    SJointIKData ik_data;   // Joint type, limits, spring/damping
+    float mass;
+    Fvector center_of_mass;
+}
+```
+
+**SBoneShape Structure (112 bytes total):**
 ```cpp
 struct SBoneShape {
-    u16 type;           // 2 bytes
-    Flags16 flags;      // 2 bytes  
+    u16 type;           // 2 bytes: stNone=0, stBox=1, stSphere=2, stCylinder=3
+    Flags16 flags;      // 2 bytes
     Fobb box;          // 60 bytes (15 floats)
     Fsphere sphere;    // 16 bytes (4 floats)
     Fcylinder cylinder;// 32 bytes (8 floats)
+
+    bool Valid() const {
+        return (type == stBox && !box.IsZero()) ||
+               (type == stSphere && sphere.R > 0) ||
+               (type == stCylinder && cylinder.IsValid());
+    }
 };
 ```
 
-**OMF Compression:**
-- Version 4 format
-- Quaternions: 16-bit per component
-- Translation: 8-bit or 16-bit (flag controlled)
-- flTKeyPresent = (1 << 0)
-- flRKeyAbsent = (1 << 1)
-- flTKey16IsBit = (1 << 2)
+**OMF Compression Format (Version 4):**
+```cpp
+// Flags
+#define flTKeyPresent  (1 << 0)  // Translation keys present
+#define flRKeyAbsent   (1 << 1)  // Rotation keys absent
+#define flTKey16IsBit  (1 << 2)  // Use 16-bit translation (else 8-bit)
 
-#### Converter Tool Usage
+// Quaternion: Always 16-bit per component
+struct CKeyQR {
+    i16 x, y, z, w;  // Range: -32767..32767 → -1.0..1.0
+};
 
-**IMPORTANT:** The converter expects an output DIRECTORY, not a filename. The output file will use the input filename with .ozz extension.
+// Translation: 8-bit or 16-bit based on flTKey16IsBit
+struct CKeyQT8 {
+    u8 x, y, z;  // Range: 0..255 → compressed range
+};
+
+struct CKeyQT16 {
+    u16 x, y, z;  // Range: 0..65535 → compressed range
+};
+```
+
+---
+
+## Session Context & MVP Notes {#session-context}
+
+### Project Milestones
+
+**September 2025 - Project Start**
+- Initial ozz-animation research
+- Build system setup
+- Module creation
+
+**Week 1-2: Foundation**
+- X-Ray animation system analysis
+- Interface documentation created
+- Integration strategy defined
+
+**Week 3: Converter Breakthrough**
+- OGF parser working
+- OMF parser working
+- First successful skeleton conversion
+
+**Week 4: Critical Bug Fixes**
+- Coordinate system solved
+- Motion marks format fixed
+- Per-bone animation distribution
+- IK data parsing fixed
+- Quaternion conjugation applied
+
+**Week 5: Blender Validation**
+- Compared with blender-xray addon
+- Verified file format specifications
+- Confirmed coordinate transformations
+- All conversions validated
+
+**Week 6-8: Runtime Implementation**
+- OzzAnimationSystem core
+- OzzKinematicsAnimated wrapper
+- Channel and partition support
+- Callback system integration
+
+**Week 9: Three-Tier Architecture**
+- Split into OzzKinematicsCore, OzzKinematics, OzzKinematicsAnimated
+- Eliminated "$editor" spam for static props
+- Memory optimization for non-animated models
+
+**Week 10: Polish & Testing**
+- Parity tests created
+- ozz_animation_viewer tool
+- Documentation comprehensive
+- MVP delivered
+
+**October 2025 - Post-MVP Planning**
+- ECS IK/Ragdoll system design
+- Parallel animation optimization roadmap
+- Shared motion container architecture
+- Startup conversion system
+
+### Development Environment
+
+**Platform:** WSL2 (Ubuntu on Windows)
+**Compiler:** GCC 11.4+
+**Build System:** CMake 3.20+
+**IDE:** VS Code with Remote-WSL
+
+**Key Directories:**
+```
+/mnt/f/modding/claude_sessions/xray-16/
+├── build/                              # CMake build output
+├── src/
+│   ├── xrAnimation/                    # Animation module
+│   │   ├── docs/                       # Documentation
+│   │   │   ├── OZZ_KINEMATICS_INTEGRATION_STATUS.md
+│   │   │   ├── OZZ_KINEMATICS_INTEGRATION_DETAILS.md
+│   │   │   ├── ECS_IK_REFACTOR_STATUS.md
+│   │   │   └── ECS_IK_REFACTOR_DETAILS.md
+│   │   ├── tools/                      # Converter & viewer
+│   │   │   ├── xray_to_ozz_converter/  # CLI converter
+│   │   │   ├── ozz_animation_viewer/   # Visualization tool
+│   │   │   └── CLAUDE.md               # Tool documentation
+│   │   ├── tests/                      # Test suite
+│   │   └── CLAUDE.md                   # This file
+│   └── Layers/xrRender/
+│       └── OzzKinematicsVisual.h/cpp   # Visual integration
+└── res/gamedata/meshes/actors/         # Test assets
+```
+
+### Converter Tool Usage
+
+**⚠️ IMPORTANT:** Output parameter is a DIRECTORY, not a filename!
 
 ```bash
 # Convert skeleton
-xray_to_ozz_converter skeleton actor.ogf output_dir/              # Creates output_dir/actor.ozz
-xray_to_ozz_converter skeleton actor.ogf .                        # Creates ./actor.ozz
+xray_to_ozz_converter skeleton stalker_hero_1.ogf .
+# → Creates ./stalker_hero_1.ozz
 
-# Convert animation with skeleton (skeleton.ogf comes FIRST)
-xray_to_ozz_converter animation skeleton.ogf walk.omf output_dir/  # Creates output_dir/walk.ozz
-xray_to_ozz_converter animation skeleton.ogf walk.omf .           # Creates ./walk.ozz
+xray_to_ozz_converter skeleton stalker_hero_1.ogf /output/path/
+# → Creates /output/path/stalker_hero_1.ozz
 
-# Batch convert directory
-xray_to_ozz_converter batch animations/ ozz_animations/ skeleton.ogf [-optimize]
+# Convert animation (skeleton.ogf comes FIRST!)
+xray_to_ozz_converter animation stalker_hero_1.ogf critical_hit.omf .
+# → Creates ./critical_hit.ozz
+
+xray_to_ozz_converter animation stalker_hero_1.ogf walk.omf /output/path/
+# → Creates /output/path/walk.ozz
+
+# Batch convert
+xray_to_ozz_converter batch animations/ ozz_out/ stalker_hero_1.ogf [-optimize]
 ```
 
-#### Test Assets Location
-- `/mnt/f/modding/claude_sessions/xray-16/res/gamedata/meshes/actors/`
-- Contains .ogf skeleton files and .omf animation files
-- Example: stalker_animation.omf, stalker_bandit/*.ogf
+### Test Assets
+
+**Location:** `res/gamedata/meshes/actors/`
+
+**Available Assets:**
+- `stalker_hero_1.ogf` - Player skeleton (47 bones)
+- `critical_hit_grup_1.omf` - Death animation
+- `stalker_animation.omf` - Various player animations
+- `stalker_bandit/*.ogf` - Bandit NPC models
+
+### Console Commands
+
+**Runtime Testing:**
+```
+# Enable ozz runtime
+g_use_ozz_visuals 1
+
+# Debug commands
+debug_dump_ozz_palette          # Snapshot bone matrices
+debug_dump_ozz_palette_toggle   # Auto-dump comparison
+g_dev_ozz_actor                 # Hot-swap player model
+g_dev_ozz_animation_list        # List available motions
+g_dev_ozz_animation <name>      # Play specific animation
+```
+
+### Performance Targets
+
+**Current (MVP):**
+- 50-100 animated characters functional
+- Animation update not yet optimized
+- Per-instance motion libraries
+
+**Target (Post-Optimization):**
+- 500-1000 characters @ 60 FPS
+- <4ms animation update budget
+- Shared motion libraries (10-50x memory reduction)
+- 70%+ CPU utilization (parallel updates)
+
+---
+
+## Resources & Documentation {#resources}
+
+### Project Documentation
+
+**Status & Planning:**
+- `docs/OZZ_KINEMATICS_INTEGRATION_STATUS.md` - Current status, roadmap
+- `docs/OZZ_KINEMATICS_INTEGRATION_DETAILS.md` - Technical deep dive, extended metadata, shared motion container
+- `docs/ECS_IK_REFACTOR_STATUS.md` - Advanced IK/ragdoll system plan (6 phases, 12-16 weeks)
+- `docs/ECS_IK_REFACTOR_DETAILS.md` - ECS architecture, migration strategy
+
+**Agent Documentation:**
+- `CLAUDE.md` (this file) - Session context, key decisions, implementation insights
+- `CLAUDE_COMMANDS.md` - Quick reference commands
+- `CLAUDE_CONTEXT.md` - Code patterns, technical context
+
+**Tool Documentation:**
+- `tools/CLAUDE.md` - Converter tool usage
+- `tools/VULKAN_RENDERER_DESIGN.md` - Vulkan renderer design (ozz_animation_viewer)
+
+### External Resources
+
+**ozz-animation:**
+- [GitHub Repository](https://github.com/guillaumeblanc/ozz-animation)
+- [Documentation](http://guillaumeblanc.github.io/ozz-animation/)
+- [Samples](https://github.com/guillaumeblanc/ozz-animation/tree/master/samples)
+
+**X-Ray Engine:**
+- [OpenXRay GitHub](https://github.com/OpenXRay/xray-16)
+- [blender-xray Addon](https://github.com/PavelBlend/blender-xray) - Reference for file formats
+- [xrSDK](https://github.com/OpenXRay/xray-16/tree/xd_dev/SDK) - Legacy SDK with format specs
+
+**EnTT (for ECS):**
+- [GitHub Repository](https://github.com/skypjack/entt)
+- [Documentation](https://github.com/skypjack/entt/wiki)
+
+### Common Issues & Solutions
+
+**Issue: CMake can't find ozz-animation**
+```bash
+# Solution: Ensure submodule is initialized
+git submodule update --init --recursive Externals/ozz-animation
+```
+
+**Issue: Build fails with "undefined reference to ozz::*"**
+```bash
+# Solution: Clean build directory
+rm -rf build/
+cmake -S xray-16 -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build ./build -j$(nproc)
+```
+
+**Issue: Converter crashes on loading OGF**
+```bash
+# Solution: Verify file path and X-Ray FS initialization
+Msg("Loading OGF: %s", path.c_str());
+IReader* reader = FS.r_open(path.c_str());
+if (!reader) {
+    Msg("! Failed to open OGF: %s", path.c_str());
+    return false;
+}
+```
+
+**Issue: Skeleton collapses to (0,0,0)**
+```bash
+# Solution: Check IK data parsing - not all bones have valid shapes
+if (bone_shape.Valid()) {
+    // Read IK data
+} else {
+    // Use OBB transform fallback
+}
+```
+
+**Issue: Animation looks wrong (twisted/mirrored)**
+```bash
+# Solution: Apply quaternion conjugation for handedness conversion
+Fquaternion quat;
+quat.set(xray_matrix);
+result.rotation = ozz::math::Quaternion(-quat.x, -quat.y, -quat.z, quat.w);
+```
+
+---
+
+## Next Steps (Post-MVP)
+
+### Immediate (Weeks 11-12)
+1. ✅ Complete documentation consolidation
+2. 🔄 Expand test coverage (weapon animations, monster animations)
+3. 🔄 Profile performance in full game scenarios
+4. 🔄 Begin ECS IK Phase 1.1 (Ground Probing)
+
+### Short-term (Weeks 13-16)
+1. 🎯 Implement parallel animation updates
+2. 🎯 Test with 500+ animated characters
+3. 🎯 Begin shared motion container implementation (if needed)
+4. 🎯 Continue ECS IK Phase 1 (Enhanced Foot IK)
+
+### Long-term (Months 5-6)
+1. 🎯 GPU skinning implementation
+2. 🎯 Complete ECS IK/Ragdoll systems (Phases 2-6)
+3. 🎯 Hot-reload support for animations
+4. 🎯 Advanced modding API
+
+---
+
+**Document Version:** 2.0
+**Maintainer:** OpenXRay Animation Team
+**Last Review:** 2025-10-12
