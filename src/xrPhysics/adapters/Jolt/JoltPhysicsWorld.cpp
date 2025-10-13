@@ -38,6 +38,7 @@
 #include "JoltPhysicsBody.h"
 #include "JoltPhysicsConstraint.h"
 #include "JoltPhysicsCharacter.h"
+#include "JoltPhysicsRagdoll.h"
 #include "xrMaterialSystem/GameMtlLib.h"
 
 // Layer that objects can be in, determines which other objects it can collide with
@@ -498,6 +499,13 @@ void JoltPhysicsWorld::Shutdown()
         xr_delete(character);
     }
     m_characters.clear();
+
+    // Clean up ragdolls
+    for (auto ragdoll : m_ragdolls)
+    {
+        xr_delete(ragdoll);
+    }
+    m_ragdolls.clear();
 
     // Clean up Jolt
     xr_delete(m_contact_listener);
@@ -1203,6 +1211,41 @@ void JoltPhysicsWorld::DestroyCharacter(IPhysicsCharacter* character)
 
     // Delete the character
     xr_delete(character);
+}
+
+IPhysicsRagdoll* JoltPhysicsWorld::CreateRagdoll()
+{
+    if (!m_initialized || !m_physics_system)
+    {
+        Msg("! JoltPhysicsWorld::CreateRagdoll: World not initialized");
+        return nullptr;
+    }
+
+    // Create ragdoll
+    JoltPhysicsRagdoll* ragdoll = new JoltPhysicsRagdoll(this);
+    m_ragdolls.push_back(ragdoll);
+
+    Msg("* JoltPhysicsWorld: Created ragdoll system");
+
+    return ragdoll;
+}
+
+void JoltPhysicsWorld::DestroyRagdoll(IPhysicsRagdoll* ragdoll)
+{
+    if (!ragdoll)
+    {
+        return;
+    }
+
+    // Remove from tracking vector
+    auto it = std::find(m_ragdolls.begin(), m_ragdolls.end(), ragdoll);
+    if (it != m_ragdolls.end())
+    {
+        m_ragdolls.erase(it);
+    }
+
+    // Delete the ragdoll
+    xr_delete(ragdoll);
 }
 
 // Factory function

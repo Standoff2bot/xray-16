@@ -278,6 +278,126 @@ public:
     virtual void Update(float dt) = 0;
 };
 
+// Forward declarations for ragdoll
+class IKinematics;
+class IPhysicsRagdoll;
+
+// Ragdoll element - a single body in the ragdoll system
+// Maps to a specific bone in the skeleton
+struct RagdollElement
+{
+    u16 bone_id;                    // Skeleton bone ID
+    IPhysicsBody* body;             // Physics body
+    IPhysicsConstraint* joint;      // Joint connecting to parent (NULL for root)
+    RagdollElement* parent;         // Parent element in hierarchy
+    xr_vector<RagdollElement*> children; // Child elements
+
+    Fvector mass_center;            // Local mass center
+    float mass;                     // Element mass
+    bool is_breakable;              // Can joint break?
+    float break_force;              // Force threshold for breaking
+    float break_torque;             // Torque threshold for breaking
+
+    RagdollElement()
+        : bone_id(u16(-1)), body(nullptr), joint(nullptr),
+          parent(nullptr), mass(1.0f), is_breakable(false),
+          break_force(FLT_MAX), break_torque(FLT_MAX)
+    {
+        mass_center.set(0, 0, 0);
+    }
+};
+
+// Ragdoll interface - multi-body physics shell for animated characters
+// Provides bone-mapped physics bodies with breakable constraints
+class IPhysicsRagdoll
+{
+public:
+    virtual ~IPhysicsRagdoll() = default;
+
+    // Build from skeleton
+    virtual bool BuildFromKinematics(IKinematics* kinematics, bool create_all_bones = false) = 0;
+
+    // Element management
+    virtual RagdollElement* AddElement(u16 bone_id, u16 parent_bone_id) = 0;
+    virtual RagdollElement* GetElement(u16 bone_id) = 0;
+    virtual const RagdollElement* GetElement(u16 bone_id) const = 0;
+    virtual RagdollElement* GetElementByIndex(u16 index) = 0;
+    virtual u16 GetElementCount() const = 0;
+    virtual void RemoveElement(u16 bone_id) = 0;
+
+    // Shape addition to elements
+    virtual void AddSphereToElement(u16 bone_id, const Fvector& center, float radius) = 0;
+    virtual void AddBoxToElement(u16 bone_id, const Fvector& center, const Fvector& half_extents, const Fmatrix& rotation) = 0;
+    virtual void AddCapsuleToElement(u16 bone_id, const Fvector& center, float radius, float height, const Fmatrix& rotation) = 0;
+
+    // Joint configuration
+    virtual void SetJointLimits(u16 bone_id, float low, float high, u32 axis_index = 0) = 0;
+    virtual void SetJointSpringDamping(u16 bone_id, float spring, float damping, u32 axis_index = 0) = 0;
+    virtual void SetJointBreakable(u16 bone_id, bool breakable, float break_force, float break_torque) = 0;
+    virtual bool IsJointBroken(u16 bone_id) const = 0;
+
+    // Mass properties
+    virtual void SetElementMass(u16 bone_id, float mass) = 0;
+    virtual float GetElementMass(u16 bone_id) const = 0;
+    virtual void SetTotalMass(float mass) = 0;
+    virtual float GetTotalMass() const = 0;
+
+    // Activation/Deactivation
+    virtual void Activate(const Fmatrix& transform) = 0;
+    virtual void Activate(const Fmatrix& transform, const Fvector& linear_vel, const Fvector& angular_vel) = 0;
+    virtual void Deactivate() = 0;
+    virtual bool IsActive() const = 0;
+
+    // Enable/Disable
+    virtual void Enable() = 0;
+    virtual void Disable() = 0;
+    virtual bool IsEnabled() const = 0;
+
+    // Transform
+    virtual void GetRootTransform(Fmatrix& transform) const = 0;
+    virtual void SetRootTransform(const Fmatrix& transform) = 0;
+
+    // Velocity
+    virtual void GetRootLinearVelocity(Fvector& vel) const = 0;
+    virtual void GetRootAngularVelocity(Fvector& vel) const = 0;
+    virtual void SetRootLinearVelocity(const Fvector& vel) = 0;
+    virtual void SetRootAngularVelocity(const Fvector& vel) = 0;
+
+    // Forces and impulses
+    virtual void AddForce(const Fvector& force) = 0;
+    virtual void AddForceAtBone(u16 bone_id, const Fvector& force, const Fvector& position) = 0;
+    virtual void AddImpulse(const Fvector& impulse) = 0;
+    virtual void AddImpulseAtBone(u16 bone_id, const Fvector& impulse, const Fvector& position) = 0;
+
+    // Hit system (for damage application)
+    virtual void ApplyHit(u16 bone_id, const Fvector& position, const Fvector& direction,
+                         float impulse_magnitude) = 0;
+
+    // Collision control
+    virtual void SetCollisionGroup(u32 group) = 0;
+    virtual u32 GetCollisionGroup() const = 0;
+    virtual void SetRagdollCollisionMode(bool enabled) = 0;
+
+    // Material
+    virtual void SetMaterial(u16 material_id) = 0;
+    virtual void SetFriction(float friction) = 0;
+    virtual void SetRestitution(float restitution) = 0;
+
+    // Update bone transforms from physics
+    virtual void UpdateBoneTransforms(IKinematics* kinematics) = 0;
+
+    // Network synchronization
+    virtual void Serialize(void* packet_data, u32& size) = 0;
+    virtual void Deserialize(const void* packet_data, u32 size) = 0;
+
+    // Debugging
+    virtual void SetDebugDraw(bool enabled) = 0;
+
+    // User data
+    virtual void SetUserData(void* data) = 0;
+    virtual void* GetUserData() const = 0;
+};
+
 // World interface - main physics simulation
 class IPhysicsWorld
 {
@@ -317,6 +437,10 @@ public:
     // Character controllers
     virtual IPhysicsCharacter* CreateCharacter(float radius, float height) = 0;
     virtual void DestroyCharacter(IPhysicsCharacter* character) = 0;
+
+    // Ragdoll systems
+    virtual IPhysicsRagdoll* CreateRagdoll() = 0;
+    virtual void DestroyRagdoll(IPhysicsRagdoll* ragdoll) = 0;
 
     // Ray casting
     virtual bool RayCast(const Fvector& origin, const Fvector& direction,

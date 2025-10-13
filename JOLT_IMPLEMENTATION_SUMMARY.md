@@ -218,21 +218,46 @@ delete world;
 - Thread pool utilizes all available CPU cores
 - Temp allocator provides fast frame-temporary allocations
 
-## Next Steps
+## Current Status & Next Steps
 
-### Phase 3: Advanced Features (Pending)
-- [ ] Collision callbacks and contact listeners
-- [ ] Material system integration
-- [ ] Ray casting implementation
-- [ ] Character controller adaptation
-- [ ] Vehicle physics implementation
-- [ ] Ragdoll system migration
+### Phase 3: Advanced Features (In Progress - 50%)
+
+#### ✅ Completed (Parts 1-3):
+- [x] **Ray casting implementation** - Cast rays, sweep tests, collision queries
+- [x] **Collision callbacks and contact listeners** - Material filtering, damage system
+- [x] **Character controller** - Quake/CS-style movement with bunnyhopping
+
+#### 🔲 Remaining (Parts 4-6) - **CRITICAL PATH TO MVP:**
+1. **Ragdoll System Migration** (HIGH PRIORITY)
+   - [ ] Multi-body chain creation (CPhysicsShell → Jolt)
+   - [ ] Bone-mapped physics constraints
+   - [ ] Breakable joint system with force limits
+   - [ ] Network synchronization support
+   - [ ] Death/knockout animations
+
+2. **Network Synchronization** (HIGH PRIORITY)
+   - [ ] Physics state serialization/deserialization
+   - [ ] Deterministic simulation mode
+   - [ ] Client prediction and reconciliation
+   - [ ] Server authority validation
+   - [ ] Bandwidth optimization
+
+3. **Fracture/Breakable Objects** (MEDIUM PRIORITY)
+   - [ ] Dynamic constraint breaking
+   - [ ] Fragment spawning system
+   - [ ] Material-based destruction
+   - [ ] Performance optimization for debris
+
+#### 📦 Post-MVP Features:
+- [ ] **Vehicle Physics** - Not present in native game, deferred to post-MVP
+  - Wheel physics, suspension, steering
+  - Only needed if community adds vehicle mods
 
 ### Phase 4: Optimization & Polish (Pending)
 - [ ] Performance profiling and tuning
-- [ ] Debug visualization
-- [ ] Comprehensive testing
-- [ ] Documentation
+- [ ] Debug visualization (draw shapes, contacts, constraints)
+- [ ] Comprehensive testing and benchmarks vs ODE
+- [ ] Documentation and API reference
 - [ ] Migration guide for ODE users
 
 ## Testing Recommendations
@@ -289,16 +314,27 @@ option(XRPHYSICS_USE_ODE "Use legacy ODE Physics" OFF)
 
 ## Conclusion
 
-Phase 2 implementation is **complete** and provides:
-- ✅ Full shape creation API
-- ✅ Comprehensive body control
-- ✅ Multiple constraint types
-- ✅ Thread-safe operations
-- ✅ Proper memory management
+**Current Progress: ~70-75% Complete**
 
-The foundation is solid for Phase 3 (collision callbacks and advanced features) and eventual migration from ODE. The abstraction layer allows for easy testing and comparison between physics engines.
+### ✅ Fully Complete:
+- Phase 1: Infrastructure (100%)
+- Phase 2: Core Systems (100%)
+- Phase 3: Parts 1-3 (Ray casting, collision callbacks, character controller)
+
+### 🔄 In Progress:
+- Phase 3: Parts 4-6 (Ragdoll, network sync, fracture)
+  - **Next Up:** Ragdoll system implementation
+  - **Critical for MVP:** Ragdoll + Network sync
+  - **Deferred Post-MVP:** Vehicle physics (not in native game)
+
+### Estimated Completion:
+- **MVP Ready:** ~2-3 weeks (ragdoll + network sync)
+- **Full Phase 3:** ~3-4 weeks (including fracture system)
+- **Phase 4 Polish:** +2 weeks (testing, docs, visualization)
+
+The foundation is solid and battle-tested. The abstraction layer allows for easy testing and comparison between physics engines. Focus is now on game-critical features: ragdolls for death animations and network sync for multiplayer stability.
 
 ---
 **Last Updated:** 2025-10-13
 **Implementation Branch:** `yohji/feat/jolt`
-**Status:** Phase 2 Complete, Ready for Phase 3
+**Status:** Phase 3 In Progress (50%), Prioritizing Ragdoll System

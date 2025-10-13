@@ -55,6 +55,9 @@ public:
     IPhysicsCharacter* CreateCharacter(float radius, float height) override;
     void DestroyCharacter(IPhysicsCharacter* character) override;
 
+    IPhysicsRagdoll* CreateRagdoll() override;
+    void DestroyRagdoll(IPhysicsRagdoll* ragdoll) override;
+
     bool RayCast(const Fvector& origin, const Fvector& direction,
                 float max_distance, PhysicsRayHit& hit_out) override;
 
@@ -92,6 +95,7 @@ private:
     xr_vector<IPhysicsShape*> m_shapes;
     xr_vector<IPhysicsConstraint*> m_constraints;
     xr_vector<IPhysicsCharacter*> m_characters;
+    xr_vector<IPhysicsRagdoll*> m_ragdolls;
 };
 
 // Factory function
