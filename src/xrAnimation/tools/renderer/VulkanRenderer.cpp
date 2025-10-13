@@ -352,15 +352,6 @@ void VulkanRenderer::RenderImGui(VkCommandBuffer cmd) {
 }
 
 void VulkanRenderer::Shutdown() {
-    if (viking_room_renderer_initialized_) {
-        viking_room_renderer_.Shutdown();
-        viking_room_renderer_initialized_ = false;
-        viking_room_loaded_ = false;
-        viking_room_instances_.clear();
-        viking_room_identity_matrices_.clear();
-        viking_room_mesh_.reset();
-    }
-
     if (mesh_renderer_initialized_) {
         mesh_renderer_.Shutdown();
         mesh_renderer_initialized_ = false;
@@ -848,27 +839,23 @@ void VulkanRenderer::UpdateMeshAnimation(float delta_time_seconds) {
     }
 
     if (animate_mesh_) {
-        mesh_animation_time_ += delta_time_seconds;
+        mesh_animation_time_ += delta_time_seconds * animation_playback_speed_;
     }
 
     const float rotation_speed = mesh_rotation_speed_;
     const float angle = mesh_animation_time_ * rotation_speed;
-
     const ozz::math::Float4x4 rotation = ozz::math::Float4x4::FromAxisAngle(ozz::math::Float3::y_axis(), angle);
-    const ozz::math::Float4x4 translation = ozz::math::Float4x4::Translation(ozz::math::Float3(0.0f, -0.5f, 0.0f));
-    mesh_instances_[0].transform = translation * rotation;
 
-    // Also apply rotation to viking room test mesh
-    if (!viking_room_instances_.empty()) {
-        viking_room_instances_[0].transform = translation * rotation;
-    }
+    // Apply rotation to mesh instance transform
+    mesh_instances_[0].transform = rotation;
 
+    // Also update skeleton transforms to match
     if (skeleton_renderer_initialized_ && skeleton_loaded_) {
-        std::array<ozz::math::Float4x4, 1> transforms = { mesh_instances_[0].transform };
+        std::array<ozz::math::Float4x4, 1> transforms = { rotation };
         skeleton_renderer_.SetInstanceTransforms(ozz::make_span(transforms));
-        skeleton_world_transform_ = transforms[0];
+        skeleton_world_transform_ = rotation;
     } else {
-        skeleton_world_transform_ = mesh_instances_[0].transform;
+        skeleton_world_transform_ = rotation;
     }
 
     bool sampled_pose = false;
@@ -966,8 +953,6 @@ void VulkanRenderer::RenderScene() {
 
     RenderSkinnedMeshes(cmd);
 
-    RenderVikingRoom(cmd);
-
     if (skeleton_renderer_initialized_ && show_skeleton_lines_) {
         skeleton_renderer_.Render(cmd, camera_.GetViewProjectionMatrix());
     }
@@ -984,6 +969,12 @@ void VulkanRenderer::PopulateSkeletonDebugShapes() {
         !skeleton_pose_models_.empty() ? skeleton_pose_models_ : skeleton_rest_models_;
     const size_t pose_count = pose_models.size();
     if (pose_count == 0) {
+        return;
+    }
+
+    // Get instance transforms from skeleton renderer
+    const auto& instance_transforms = skeleton_renderer_.GetInstanceTransforms();
+    if (instance_transforms.empty()) {
         return;
     }
 
@@ -1016,82 +1007,87 @@ void VulkanRenderer::PopulateSkeletonDebugShapes() {
         return result;
     };
 
-    for (size_t bone = 0; bone < pose_count; ++bone) {
-        const ozz::math::Float4x4& pose_transform = pose_models[bone];
-        const ozz::math::Float4x4 world_transform = skeleton_world_transform_ * pose_transform;
+    // Draw skeleton for each instance in the grid
+    for (size_t instance_idx = 0; instance_idx < instance_transforms.size(); ++instance_idx) {
+        const ozz::math::Float4x4& instance_transform = instance_transforms[instance_idx];
 
-        XRay::Animation::ExtendedBoneMetadata metadata_entry;
-        if (bone < bone_metadata_.size()) {
-            metadata_entry = bone_metadata_[bone];
-        }
+        for (size_t bone = 0; bone < pose_count; ++bone) {
+            const ozz::math::Float4x4& pose_transform = pose_models[bone];
+            const ozz::math::Float4x4 world_transform = instance_transform * pose_transform;
 
-        if (metadata_entry.rest_length <= kSkeletonDebugEpsilon) {
-            metadata_entry.rest_length = compute_rest_length(static_cast<int>(bone));
-        }
-
-        if (metadata_entry.rest_length <= kSkeletonDebugEpsilon) {
-            metadata_entry.rest_length = kSkeletonDefaultRadius;
-        }
-
-        const ozz::math::Float3 bone_position = ExtractTranslation(world_transform);
-
-        const int parent_index = (bone < skeleton_parents_.size()) ? skeleton_parents_[bone] : -1;
-        if (parent_index >= 0 && static_cast<size_t>(parent_index) < pose_models.size()) {
-            const ozz::math::Float4x4 parent_world = skeleton_world_transform_ * pose_models[parent_index];
-            const ozz::math::Float3 parent_position = ExtractTranslation(parent_world);
-            debug_renderer_.DrawLine(parent_position, bone_position, link_color);
-        }
-
-        ozz::math::Float3 tail_position = bone_position;
-        bool has_child = false;
-        for (size_t child = 0; child < skeleton_parents_.size(); ++child) {
-            if (skeleton_parents_[child] == static_cast<int>(bone) && child < pose_models.size()) {
-                const ozz::math::Float4x4 child_world = skeleton_world_transform_ * pose_models[child];
-                tail_position = ExtractTranslation(child_world);
-                has_child = true;
-                break;
+            XRay::Animation::ExtendedBoneMetadata metadata_entry;
+            if (bone < bone_metadata_.size()) {
+                metadata_entry = bone_metadata_[bone];
             }
-        }
 
-        if (!has_child) {
-            ozz::math::Float3 axis;
-            ozz::math::Store3PtrU(world_transform.cols[0], &axis.x);
-            float axis_len = std::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
-            if (axis_len <= kSkeletonDebugEpsilon) {
-                axis = ozz::math::Float3::x_axis();
-                axis_len = 1.0f;
+            if (metadata_entry.rest_length <= kSkeletonDebugEpsilon) {
+                metadata_entry.rest_length = compute_rest_length(static_cast<int>(bone));
             }
-            const float target_length = (metadata_entry.rest_length > kSkeletonDebugEpsilon)
-                ? metadata_entry.rest_length
-                : kSkeletonDefaultRadius;
-            axis = ozz::math::Float3{axis.x / axis_len, axis.y / axis_len, axis.z / axis_len};
-            tail_position = ozz::math::Float3{
-                bone_position.x + axis.x * target_length,
-                bone_position.y + axis.y * target_length,
-                bone_position.z + axis.z * target_length
-            };
-        }
 
-        const float dx = tail_position.x - bone_position.x;
-        const float dy = tail_position.y - bone_position.y;
-        const float dz = tail_position.z - bone_position.z;
-        float bone_length = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (bone_length <= kSkeletonDebugEpsilon) {
-            bone_length = std::max(metadata_entry.rest_length, kSkeletonDefaultRadius);
-        }
+            if (metadata_entry.rest_length <= kSkeletonDebugEpsilon) {
+                metadata_entry.rest_length = kSkeletonDefaultRadius;
+            }
 
-        const float joint_radius = std::clamp(bone_length * 0.18f,
-            kSkeletonDefaultRadius * 0.4f, bone_length * 0.45f);
+            const ozz::math::Float3 bone_position = ExtractTranslation(world_transform);
 
-        const ozz::math::Float4 draw_color = (bone == 0) ? root_color : bone_color;
-        debug_renderer_.DrawBoneShape(bone_position, tail_position, joint_radius, draw_color);
-        debug_renderer_.DrawSphere(bone_position, joint_radius, joint_color, 24);
-        debug_renderer_.DrawSphere(tail_position, joint_radius * 0.6f, joint_color, 24);
-        if (bone == 0) {
-            debug_renderer_.DrawAxes(world_transform, metadata_entry.rest_length * 0.2f,
-                ozz::math::Float4{1.0f, 0.3f, 0.3f, 1.0f},
-                ozz::math::Float4{0.3f, 1.0f, 0.3f, 1.0f},
-                ozz::math::Float4{0.3f, 0.6f, 1.0f, 1.0f});
+            const int parent_index = (bone < skeleton_parents_.size()) ? skeleton_parents_[bone] : -1;
+            if (parent_index >= 0 && static_cast<size_t>(parent_index) < pose_models.size()) {
+                const ozz::math::Float4x4 parent_world = instance_transform * pose_models[parent_index];
+                const ozz::math::Float3 parent_position = ExtractTranslation(parent_world);
+                debug_renderer_.DrawLine(parent_position, bone_position, link_color);
+            }
+
+            ozz::math::Float3 tail_position = bone_position;
+            bool has_child = false;
+            for (size_t child = 0; child < skeleton_parents_.size(); ++child) {
+                if (skeleton_parents_[child] == static_cast<int>(bone) && child < pose_models.size()) {
+                    const ozz::math::Float4x4 child_world = instance_transform * pose_models[child];
+                    tail_position = ExtractTranslation(child_world);
+                    has_child = true;
+                    break;
+                }
+            }
+
+            if (!has_child) {
+                ozz::math::Float3 axis;
+                ozz::math::Store3PtrU(world_transform.cols[0], &axis.x);
+                float axis_len = std::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+                if (axis_len <= kSkeletonDebugEpsilon) {
+                    axis = ozz::math::Float3::x_axis();
+                    axis_len = 1.0f;
+                }
+                const float target_length = (metadata_entry.rest_length > kSkeletonDebugEpsilon)
+                    ? metadata_entry.rest_length
+                    : kSkeletonDefaultRadius;
+                axis = ozz::math::Float3{axis.x / axis_len, axis.y / axis_len, axis.z / axis_len};
+                tail_position = ozz::math::Float3{
+                    bone_position.x + axis.x * target_length,
+                    bone_position.y + axis.y * target_length,
+                    bone_position.z + axis.z * target_length
+                };
+            }
+
+            const float dx = tail_position.x - bone_position.x;
+            const float dy = tail_position.y - bone_position.y;
+            const float dz = tail_position.z - bone_position.z;
+            float bone_length = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (bone_length <= kSkeletonDebugEpsilon) {
+                bone_length = std::max(metadata_entry.rest_length, kSkeletonDefaultRadius);
+            }
+
+            const float joint_radius = std::clamp(bone_length * 0.18f,
+                kSkeletonDefaultRadius * 0.4f, bone_length * 0.45f);
+
+            const ozz::math::Float4 draw_color = (bone == 0) ? root_color : bone_color;
+            debug_renderer_.DrawBoneShape(bone_position, tail_position, joint_radius, draw_color);
+            debug_renderer_.DrawSphere(bone_position, joint_radius, joint_color, 24);
+            debug_renderer_.DrawSphere(tail_position, joint_radius * 0.6f, joint_color, 24);
+            if (bone == 0) {
+                debug_renderer_.DrawAxes(world_transform, metadata_entry.rest_length * 0.2f,
+                    ozz::math::Float4{1.0f, 0.3f, 0.3f, 1.0f},
+                    ozz::math::Float4{0.3f, 1.0f, 0.3f, 1.0f},
+                    ozz::math::Float4{0.3f, 0.6f, 1.0f, 1.0f});
+            }
         }
     }
 }
@@ -1157,77 +1153,6 @@ void VulkanRenderer::SetShowDebugOverlay(bool show) {
     show_debug_overlay_ = show;
 }
 
-void VulkanRenderer::SetShowVikingRoom(bool show) {
-    show_viking_room_ = show;
-
-    // Auto-load viking room mesh if enabled for first time
-    if (show && !viking_room_loaded_) {
-        LoadVikingRoomMesh();
-    }
-}
-
-bool VulkanRenderer::LoadVikingRoomMesh() {
-    if (viking_room_loaded_) {
-        return true;
-    }
-
-    // Initialize viking room renderer if needed
-    if (!viking_room_renderer_initialized_) {
-        viking_room_renderer_initialized_ = viking_room_renderer_.Initialize(&device_);
-        if (!viking_room_renderer_initialized_) {
-            Msg("! Failed to initialize viking room renderer");
-            return false;
-        }
-    }
-
-    // Allocate mesh
-    viking_room_mesh_ = std::make_unique<ozz::sample::Mesh>();
-
-    const std::string relative_path = "res/testdata/viking_room.obj";
-    const std::string resolved_path = xray::animation::tools::SimpleObjLoader::FindResourceFile(relative_path);
-
-    if (resolved_path.empty()) {
-        Msg("! Could not locate viking room mesh: %s", relative_path.c_str());
-        viking_room_mesh_.reset();
-        return false;
-    }
-
-    if (!xray::animation::tools::SimpleObjLoader::LoadObjFile(resolved_path, *viking_room_mesh_)) {
-        Msg("! Failed to load viking room mesh from: %s", resolved_path.c_str());
-        viking_room_mesh_.reset();
-        return false;
-    }
-
-    // Upload to GPU
-    if (!viking_room_renderer_.UploadMesh(*viking_room_mesh_)) {
-        Msg("! Failed to upload viking room mesh to GPU");
-        viking_room_mesh_.reset();
-        return false;
-    }
-
-    // Set up rendering instance (non-skinned, so single identity matrix)
-    viking_room_instances_.resize(1);
-    viking_room_instances_[0].transform = ozz::math::Float4x4::identity();
-    viking_room_instances_[0].bone_matrix_offset = 0;
-
-    // Single identity matrix for non-skinned mesh
-    viking_room_identity_matrices_.resize(1);
-    viking_room_identity_matrices_[0] = ozz::math::Float4x4::identity();
-
-    viking_room_loaded_ = true;
-    Msg("* Viking room mesh loaded successfully");
-    return true;
-}
-
-void VulkanRenderer::RenderVikingRoom(VkCommandBuffer cmd) {
-    if (!viking_room_renderer_initialized_ || !viking_room_loaded_ || !show_viking_room_) {
-        return;
-    }
-
-    viking_room_renderer_.Render(cmd, camera_.GetViewProjectionMatrix(),
-                                  viking_room_instances_, viking_room_identity_matrices_);
-}
-
 void VulkanRenderer::SetMeshRotationSpeed(float radians_per_second) {
     mesh_rotation_speed_ = radians_per_second;
 }
@@ -1261,6 +1186,29 @@ void VulkanRenderer::SetActiveAnimation(const ozz::animation::Animation* animati
         ApplyPaletteToInstances(mesh_bind_pose_palette_);
     }
     sampled_palette_ = mesh_bind_pose_palette_;
+}
+
+void VulkanRenderer::SetECSInstances(const std::vector<MeshInstanceData>& instances,
+                                      const std::vector<ozz::math::Float4x4>& bone_matrices) {
+    mesh_instances_ = instances;
+    mesh_bone_matrices_ = bone_matrices;
+}
+
+void VulkanRenderer::ClearECSInstances() {
+    if (!mesh_instances_.empty()) {
+        mesh_instances_.resize(1);
+        mesh_instances_[0].transform = ozz::math::Float4x4::identity();
+        mesh_instances_[0].bone_matrix_offset = 0;
+
+        const uint32_t bones_per_instance = mesh_renderer_.BonesPerInstance();
+        mesh_bone_matrices_.resize(bones_per_instance);
+        // Restore bind pose or current animation state
+        if (!mesh_bind_pose_palette_.empty()) {
+            for (size_t i = 0; i < bones_per_instance && i < mesh_bind_pose_palette_.size(); ++i) {
+                mesh_bone_matrices_[i] = mesh_bind_pose_palette_[i];
+            }
+        }
+    }
 }
 
 } // namespace renderer

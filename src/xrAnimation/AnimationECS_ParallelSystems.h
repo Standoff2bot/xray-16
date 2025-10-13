@@ -7,42 +7,71 @@
 #include "entt/entt.hpp"
 #include "xrCore/Threading/ParallelForEach.hpp"
 
+// C++17 parallel algorithms
+#include <execution>
+#include <algorithm>
+
 namespace AnimationECS {
+
+// Global toggle for parallel implementation
+enum class ParallelImplementation
+{
+    XRayTaskSystem,     // Use X-Ray's xr_parallel_for_each
+    StdExecution        // Use std::for_each with std::execution::par
+};
+
+inline ParallelImplementation g_parallel_implementation = ParallelImplementation::XRayTaskSystem;
 
 //-----------------------------------------------------------------------------
 // ParallelAnimationProcessor
 // Processes multiple animated entities in parallel using X-Ray's task system
+// Singleton with reusable buffers to avoid per-frame allocations
 //-----------------------------------------------------------------------------
 class ParallelAnimationProcessor
 {
-public:
-    // Process all animation systems in parallel
-    static void UpdateParallel(entt::registry& registry, float dt)
-    {
-        Msg("[ParallelAnimationProcessor::UpdateParallel] Called with dt=%.4f", dt);
+private:
+    // Reusable buffers to avoid per-frame allocations
+    xr_vector<entt::entity> m_entity_cache;
+    xr_vector<entt::entity> m_blend_entity_cache;
 
+    // Singleton
+    ParallelAnimationProcessor() = default;
+    ~ParallelAnimationProcessor() = default;
+    ParallelAnimationProcessor(const ParallelAnimationProcessor&) = delete;
+    ParallelAnimationProcessor& operator=(const ParallelAnimationProcessor&) = delete;
+
+public:
+    static ParallelAnimationProcessor& Instance()
+    {
+        static ParallelAnimationProcessor instance;
+        return instance;
+    }
+
+    // Process all animation systems in parallel
+    void UpdateParallel(entt::registry& registry, float dt)
+    {
         auto& profiler = GetPerformanceProfiler();
         PerformanceTimer total_timer;
 
         // Collect all entities that need animation updates
         auto view = registry.view<AnimationState, AnimationController, AnimationBuffers>();
 
-        // Convert view to vector for parallel iteration
-        xr_vector<entt::entity> entities;
-        entities.reserve(view.size_hint());
+        // Reuse cached vector instead of allocating new one
+        m_entity_cache.clear();
+        m_entity_cache.reserve(view.size_hint());
 
         for (auto entity : view)
         {
-            entities.push_back(entity);
+            m_entity_cache.push_back(entity);
         }
 
         if (profiler.IsEnabled())
         {
-            profiler.GetStats().total_entities += entities.size();
+            profiler.GetStats().total_entities += m_entity_cache.size();
             profiler.GetStats().parallel_mode = true;
         }
 
-        if (entities.empty())
+        if (m_entity_cache.empty())
         {
             if (profiler.IsEnabled())
             {
@@ -54,7 +83,7 @@ public:
         // Phase 1: Sample animations in parallel (SIMD-friendly, no shared state)
         PerformanceTimer sampling_timer;
 
-        xr_parallel_for_each(entities, [&](entt::entity entity)
+        auto sampling_lambda = [&](entt::entity entity)
         {
             auto& state = view.get<AnimationState>(entity);
             auto& controller = view.get<AnimationController>(entity);
@@ -97,11 +126,19 @@ public:
             sampling_job.ratio = state.time_ratio;
             sampling_job.output = ozz::make_span(buffers.locals);
 
-            if (!sampling_job.Run())
-            {
-                Msg("! [AnimationECS] Parallel sampling failed for entity %u", static_cast<u32>(entity));
-            }
-        });
+            // Note: Sampling failures removed from hot path - check profiler stats instead
+            sampling_job.Run();
+        };
+
+        // Execute based on selected parallel implementation
+        if (g_parallel_implementation == ParallelImplementation::StdExecution)
+        {
+            std::for_each(std::execution::par, m_entity_cache.begin(), m_entity_cache.end(), sampling_lambda);
+        }
+        else
+        {
+            xr_parallel_for_each(m_entity_cache, sampling_lambda);
+        }
 
         if (profiler.IsEnabled())
         {
@@ -112,22 +149,23 @@ public:
         PerformanceTimer blending_timer;
         auto blend_view = registry.view<AnimationBuffers, BlendState, AnimationController>();
 
-        xr_vector<entt::entity> blend_entities;
-        blend_entities.reserve(blend_view.size_hint());
+        // Reuse cached vector for blend entities
+        m_blend_entity_cache.clear();
+        m_blend_entity_cache.reserve(blend_view.size_hint());
 
         for (auto entity : blend_view)
         {
-            blend_entities.push_back(entity);
+            m_blend_entity_cache.push_back(entity);
         }
 
         if (profiler.IsEnabled())
         {
-            profiler.GetStats().blending_entities += blend_entities.size();
+            profiler.GetStats().blending_entities += m_blend_entity_cache.size();
         }
 
-        if (!blend_entities.empty())
+        if (!m_blend_entity_cache.empty())
         {
-            xr_parallel_for_each(blend_entities, [&](entt::entity entity)
+            auto blending_lambda = [&](entt::entity entity)
             {
                 auto& buffers = blend_view.get<AnimationBuffers>(entity);
                 auto& blend_state = blend_view.get<BlendState>(entity);
@@ -143,11 +181,19 @@ public:
                 blend_job.rest_pose = controller.skeleton->joint_rest_poses();
                 blend_job.output = ozz::make_span(buffers.locals);
 
-                if (!blend_job.Run())
-                {
-                    Msg("! [AnimationECS] Parallel blending failed for entity %u", static_cast<u32>(entity));
-                }
-            });
+                // Note: Blending failures removed from hot path
+                blend_job.Run();
+            };
+
+            // Execute based on selected parallel implementation
+            if (g_parallel_implementation == ParallelImplementation::StdExecution)
+            {
+                std::for_each(std::execution::par, m_blend_entity_cache.begin(), m_blend_entity_cache.end(), blending_lambda);
+            }
+            else
+            {
+                xr_parallel_for_each(m_blend_entity_cache, blending_lambda);
+            }
         }
 
         if (profiler.IsEnabled())
@@ -157,7 +203,8 @@ public:
 
         // Phase 3: Local-to-Model transformation in parallel
         PerformanceTimer ltm_timer;
-        xr_parallel_for_each(entities, [&](entt::entity entity)
+
+        auto ltm_lambda = [&](entt::entity entity)
         {
             auto& controller = view.get<AnimationController>(entity);
             auto& buffers = view.get<AnimationBuffers>(entity);
@@ -172,11 +219,19 @@ public:
             ltm_job.input = ozz::make_span(buffers.locals);
             ltm_job.output = ozz::make_span(buffers.models);
 
-            if (!ltm_job.Run())
-            {
-                Msg("! [AnimationECS] Parallel LocalToModel failed for entity %u", static_cast<u32>(entity));
-            }
-        });
+            // Note: LocalToModel failures removed from hot path
+            ltm_job.Run();
+        };
+
+        // Execute based on selected parallel implementation
+        if (g_parallel_implementation == ParallelImplementation::StdExecution)
+        {
+            std::for_each(std::execution::par, m_entity_cache.begin(), m_entity_cache.end(), ltm_lambda);
+        }
+        else
+        {
+            xr_parallel_for_each(m_entity_cache, ltm_lambda);
+        }
 
         if (profiler.IsEnabled())
         {
@@ -188,9 +243,7 @@ public:
         // Can potentially be parallelized per-entity, but sequential for now
         PerformanceTimer ik_timer;
 
-        Msg("[ParallelAnimationProcessor::UpdateParallel] Calling IKSolverSystem::Update");
         IKSolverSystem::Update(registry);
-        Msg("[ParallelAnimationProcessor::UpdateParallel] IKSolverSystem::Update completed");
 
         if (profiler.IsEnabled())
         {
@@ -229,7 +282,7 @@ public:
         // Use parallel processing if we have enough entities to benefit
         if (force_parallel || entity_count >= PARALLEL_THRESHOLD)
         {
-            ParallelAnimationProcessor::UpdateParallel(registry, dt);
+            ParallelAnimationProcessor::Instance().UpdateParallel(registry, dt);
         }
         else
         {

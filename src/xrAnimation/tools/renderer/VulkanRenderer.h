@@ -78,12 +78,6 @@ public:
     bool GetShowSkinnedMesh() const { return show_skinned_mesh_; }
     void SetShowDebugOverlay(bool show);
     bool GetShowDebugOverlay() const { return show_debug_overlay_; }
-    void SetShowVikingRoom(bool show);
-    bool GetShowVikingRoom() const { return show_viking_room_; }
-
-    // Viking room test mesh
-    bool LoadVikingRoomMesh();
-    bool HasVikingRoomLoaded() const { return viking_room_loaded_; }
 
     // Frame timing
     float GetFrameDeltaSeconds() const { return static_cast<float>(frame_delta_seconds_); }
@@ -98,6 +92,8 @@ public:
     void SetMeshAnimationTime(float time_seconds);
     float GetMeshAnimationTime() const { return mesh_animation_time_; }
     void SetActiveAnimation(const ozz::animation::Animation* animation);
+    void SetAnimationPlaybackSpeed(float speed) { animation_playback_speed_ = speed; }
+    float GetAnimationPlaybackSpeed() const { return animation_playback_speed_; }
 
     // Bind pose mode
     bool GetShowBindPose() const { return show_bind_pose_; }
@@ -105,11 +101,22 @@ public:
     const ozz::animation::Animation* GetActiveAnimation() const { return active_animation_; }
     bool HasActiveAnimation() const { return active_animation_ != nullptr; }
 
+    // ECS Multi-instance rendering
+    void SetECSInstances(const std::vector<MeshInstanceData>& instances, const std::vector<ozz::math::Float4x4>& bone_matrices);
+    void ClearECSInstances();
+
+    // Mesh data accessors for skinning computation
+    const std::vector<uint16_t>& GetMeshJointRemaps() const { return mesh_joint_remaps_; }
+    const std::vector<ozz::math::Float4x4>& GetMeshInverseBindPoses() const { return mesh_inverse_bind_poses_; }
+    const std::vector<ozz::math::Float4x4>& GetCurrentBoneMatrices() const { return mesh_bone_matrices_; }
+    const ozz::math::Float4x4& GetMeshWorldTransform() const {
+        return mesh_instances_.empty() ? ozz::math::Float4x4::identity() : mesh_instances_[0].transform;
+    }
+
 private:
     bool InitializeTrianglePipeline();
     bool InitializeDebugMesh();
     void RenderSkinnedMeshes(VkCommandBuffer cmd);
-    void RenderVikingRoom(VkCommandBuffer cmd);
     void UpdateMeshAnimation(float delta_time_seconds);
     bool InitializeImGui();
     void ShutdownImGui();
@@ -158,7 +165,6 @@ private:
     bool show_skeleton_lines_ = true;
     bool show_skinned_mesh_ = true;
     bool show_debug_overlay_ = false;
-    bool show_viking_room_ = false;
 
     std::vector<MeshInstanceData> mesh_instances_;
     std::vector<ozz::math::Float4x4> mesh_bone_matrices_;
@@ -195,14 +201,7 @@ private:
     bool animate_mesh_ = true;
     float mesh_animation_time_ = 0.0f;
     bool show_bind_pose_ = false;
-
-    // Viking room test mesh
-    std::unique_ptr<ozz::sample::Mesh> viking_room_mesh_;
-    InstancedMeshRenderer viking_room_renderer_;
-    bool viking_room_renderer_initialized_ = false;
-    bool viking_room_loaded_ = false;
-    std::vector<MeshInstanceData> viking_room_instances_;
-    std::vector<ozz::math::Float4x4> viking_room_identity_matrices_;
+    float animation_playback_speed_ = 1.0f;  // Animation metadata speed multiplier
 };
 
 } // namespace renderer

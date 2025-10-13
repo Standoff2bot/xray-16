@@ -80,10 +80,20 @@ Camera::Camera()
     , aspect_ratio_(16.0f / 9.0f)
     , near_plane_(0.5f)    // CRITICAL: Increased from 0.1 for better depth precision
     , far_plane_(50.0f)    // CRITICAL: Reduced from 100.0 for better depth precision
+    , distance_(3.464f)    // Default distance (sqrt(2^2 + 2^2 + 2^2))
+    , rotation_(ozz::math::Quaternion::identity())
+    , last_mouse_x_(0.0)
+    , last_mouse_y_(0.0)
+    , left_button_down_(false)
+    , middle_button_down_(false)
+    , right_button_down_(false)
     , matrices_dirty_(true) {
     // Near/far ratio of 1:100 provides much better depth buffer precision
     // than 1:1000. With scene at ~3.5 units from camera, this gives adequate
     // range while maintaining precision.
+
+    // Calculate initial rotation from current position and target
+    rotation_ = CalculateInitialRotation();
 }
 
 void Camera::Initialize(float viewport_width, float viewport_height) {
@@ -156,6 +166,200 @@ void Camera::SetNearFar(float near_plane, float far_plane) {
 void Camera::SetAspectRatio(float aspect) {
     aspect_ratio_ = aspect;
     matrices_dirty_ = true;
+}
+
+float Camera::CalculateDistance() const {
+    const ozz::math::Float3 delta = eye_position_ - look_at_target_;
+    return std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+}
+
+ozz::math::Quaternion Camera::CalculateInitialRotation() const {
+    // Calculate direction from target to camera
+    ozz::math::Float3 direction = eye_position_ - look_at_target_;
+    const float len = std::sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+    if (len > 0.0001f) {
+        direction.x /= len;
+        direction.y /= len;
+        direction.z /= len;
+    } else {
+        direction = ozz::math::Float3(0.0f, 0.0f, 1.0f);
+    }
+
+    // Calculate rotation from default forward direction (-Z) to current direction
+    const ozz::math::Float3 default_forward(0.0f, 0.0f, -1.0f);
+
+    // Cross product to get rotation axis
+    ozz::math::Float3 axis;
+    axis.x = default_forward.y * direction.z - default_forward.z * direction.y;
+    axis.y = default_forward.z * direction.x - default_forward.x * direction.z;
+    axis.z = default_forward.x * direction.y - default_forward.y * direction.x;
+
+    // Dot product to get rotation angle
+    const float dot = default_forward.x * direction.x + default_forward.y * direction.y + default_forward.z * direction.z;
+    const float angle = std::acos(std::clamp(dot, -1.0f, 1.0f));
+
+    // Handle parallel/antiparallel cases
+    const float axis_len = std::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+    if (axis_len < 0.0001f) {
+        if (dot > 0.0f) {
+            return ozz::math::Quaternion::identity();
+        } else {
+            return ozz::math::Quaternion(0.0f, 1.0f, 0.0f, 0.0f);  // 180 degree rotation around Y
+        }
+    }
+
+    // Normalize axis
+    axis.x /= axis_len;
+    axis.y /= axis_len;
+    axis.z /= axis_len;
+
+    // Create quaternion from axis-angle
+    const float half_angle = angle * 0.5f;
+    const float sin_half = std::sin(half_angle);
+    return ozz::math::Quaternion(
+        axis.x * sin_half,
+        axis.y * sin_half,
+        axis.z * sin_half,
+        std::cos(half_angle)
+    );
+}
+
+void Camera::UpdatePositionFromRotation() {
+    // Apply rotation to default forward direction (-Z)
+    const ozz::math::Float3 default_forward(0.0f, 0.0f, -1.0f);
+
+    // Rotate forward vector by quaternion
+    const float qx = rotation_.x;
+    const float qy = rotation_.y;
+    const float qz = rotation_.z;
+    const float qw = rotation_.w;
+
+    const float ix = qw * default_forward.x + qy * default_forward.z - qz * default_forward.y;
+    const float iy = qw * default_forward.y + qz * default_forward.x - qx * default_forward.z;
+    const float iz = qw * default_forward.z + qx * default_forward.y - qy * default_forward.x;
+    const float iw = -qx * default_forward.x - qy * default_forward.y - qz * default_forward.z;
+
+    ozz::math::Float3 direction;
+    direction.x = ix * qw + iw * -qx + iy * -qz - iz * -qy;
+    direction.y = iy * qw + iw * -qy + iz * -qx - ix * -qz;
+    direction.z = iz * qw + iw * -qz + ix * -qy - iy * -qx;
+
+    // Position camera at distance along direction from target
+    eye_position_.x = look_at_target_.x + direction.x * distance_;
+    eye_position_.y = look_at_target_.y + direction.y * distance_;
+    eye_position_.z = look_at_target_.z + direction.z * distance_;
+
+    matrices_dirty_ = true;
+}
+
+void Camera::SetDistance(float distance) {
+    distance_ = std::max(0.1f, distance);
+    UpdatePositionFromRotation();
+}
+
+float Camera::GetDistance() const {
+    return distance_;
+}
+
+void Camera::OnMouseButton(int button, int action, int mods, double xpos, double ypos) {
+    const bool pressed = (action == 1);  // GLFW_PRESS = 1
+
+    if (button == 0) {  // GLFW_MOUSE_BUTTON_LEFT
+        left_button_down_ = pressed;
+    } else if (button == 1) {  // GLFW_MOUSE_BUTTON_RIGHT
+        right_button_down_ = pressed;
+    } else if (button == 2) {  // GLFW_MOUSE_BUTTON_MIDDLE
+        middle_button_down_ = pressed;
+    }
+
+    if (pressed) {
+        last_mouse_x_ = xpos;
+        last_mouse_y_ = ypos;
+    }
+}
+
+void Camera::OnMouseMove(double xpos, double ypos) {
+    const double dx = xpos - last_mouse_x_;
+    const double dy = ypos - last_mouse_y_;
+
+    last_mouse_x_ = xpos;
+    last_mouse_y_ = ypos;
+
+    // Rotation (left mouse button)
+    if (left_button_down_) {
+        const float rotation_speed = 0.005f;
+
+        // Horizontal rotation (yaw) around world Y axis
+        if (std::abs(dx) > 0.001) {
+            const float yaw_angle = static_cast<float>(-dx) * rotation_speed;
+            const float sin_half = std::sin(yaw_angle * 0.5f);
+            const float cos_half = std::cos(yaw_angle * 0.5f);
+            const ozz::math::Quaternion yaw_rotation(0.0f, sin_half, 0.0f, cos_half);
+            rotation_ = yaw_rotation * rotation_;
+        }
+
+        // Vertical rotation (pitch) around local X axis
+        if (std::abs(dy) > 0.001) {
+            const float pitch_angle = static_cast<float>(-dy) * rotation_speed;
+            const float sin_half = std::sin(pitch_angle * 0.5f);
+            const float cos_half = std::cos(pitch_angle * 0.5f);
+            const ozz::math::Quaternion pitch_rotation(sin_half, 0.0f, 0.0f, cos_half);
+            rotation_ = rotation_ * pitch_rotation;
+        }
+
+        // Normalize quaternion to prevent drift
+        const float len = std::sqrt(rotation_.x * rotation_.x + rotation_.y * rotation_.y +
+                                    rotation_.z * rotation_.z + rotation_.w * rotation_.w);
+        if (len > 0.0001f) {
+            rotation_.x /= len;
+            rotation_.y /= len;
+            rotation_.z /= len;
+            rotation_.w /= len;
+        }
+
+        UpdatePositionFromRotation();
+    }
+
+    // Panning (middle mouse button or right mouse button)
+    if (middle_button_down_ || right_button_down_) {
+        const float pan_speed = 0.0001f * distance_;
+
+        // Calculate camera right and up vectors from rotation
+        const float qx = rotation_.x;
+        const float qy = rotation_.y;
+        const float qz = rotation_.z;
+        const float qw = rotation_.w;
+
+        // Right vector (rotate world X by quaternion)
+        const float rx = 1.0f - 2.0f * (qy * qy + qz * qz);
+        const float ry = 2.0f * (qx * qy + qz * qw);
+        const float rz = 2.0f * (qx * qz - qy * qw);
+
+        // Up vector (rotate world Y by quaternion)
+        const float ux = 2.0f * (qx * qy - qz * qw);
+        const float uy = 1.0f - 2.0f * (qx * qx + qz * qz);
+        const float uz = 2.0f * (qy * qz + qx * qw);
+
+        // Pan target and camera position
+        const float pan_x = static_cast<float>(-dx) * pan_speed;
+        const float pan_y = static_cast<float>(dy) * pan_speed;
+
+        look_at_target_.x += rx * pan_x + ux * pan_y;
+        look_at_target_.y += ry * pan_x + uy * pan_y;
+        look_at_target_.z += rz * pan_x + uz * pan_y;
+
+        UpdatePositionFromRotation();
+    }
+}
+
+void Camera::OnMouseScroll(double xoffset, double yoffset) {
+    const float zoom_speed = 0.1f;
+    const float zoom_factor = 1.0f - static_cast<float>(yoffset) * zoom_speed;
+
+    distance_ *= zoom_factor;
+    distance_ = std::clamp(distance_, 0.5f, 50.0f);
+
+    UpdatePositionFromRotation();
 }
 
 void Camera::UpdateMatrices() const {

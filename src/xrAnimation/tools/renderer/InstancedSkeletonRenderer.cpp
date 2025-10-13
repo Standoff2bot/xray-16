@@ -129,8 +129,10 @@ bool InstancedSkeletonRenderer::SetInstanceTransforms(ozz::span<const ozz::math:
 
     if (transforms.empty()) {
         instance_data_.assign(1, MakeIdentityInstance());
+        instance_transforms_.assign(1, ozz::math::Float4x4::identity());
     } else {
         instance_data_.resize(transforms.size());
+        instance_transforms_.assign(transforms.begin(), transforms.end());
         for (size_t i = 0; i < transforms.size(); ++i) {
             SkeletonInstanceData& dst = instance_data_[i];
             for (int col = 0; col < 4; ++col) {

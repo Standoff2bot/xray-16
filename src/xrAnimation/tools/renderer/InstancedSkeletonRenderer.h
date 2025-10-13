@@ -45,6 +45,7 @@ public:
 
     void Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_proj);
     bool IsInitialized() const { return initialized_; }
+    const std::vector<ozz::math::Float4x4>& GetInstanceTransforms() const { return instance_transforms_; }
 
 private:
     bool CreateDescriptorSetLayout();
@@ -68,6 +69,7 @@ private:
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
 
     std::vector<SkeletonInstanceData> instance_data_;
+    std::vector<ozz::math::Float4x4> instance_transforms_;
 
     uint32_t vertex_count_ = 0;
     uint32_t instance_count_ = 0;
