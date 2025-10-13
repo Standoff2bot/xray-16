@@ -47,12 +47,6 @@ public:
     bool HasMesh() const { return mesh_uploaded_; }
     uint32_t BonesPerInstance() const { return bones_per_instance_; }
 
-    // Debug mode control for SSBO-based fragment debugging
-    void SetDebugMode(uint32_t mode);
-    uint32_t GetDebugMode() const { return debug_mode_; }
-    const char* GetDebugModeName() const;
-    static constexpr uint32_t kNumDebugModes = 9;
-
 private:
     struct Vertex {
         float position[3];
@@ -83,34 +77,6 @@ private:
     bool UpdateBoneBufferData(const std::vector<ozz::math::Float4x4>& bone_matrices);
     void UpdateDescriptorSet();
 
-    // Vertex shader debug SSBO (gl_Position instrumentation)
-    bool EnsureClipDebugBuffer(size_t count);
-    void DumpClipDebugBuffer();
-
-    // Fragment shader debug SSBO
-    bool EnsureFragDebugBuffer(size_t count);
-    void ResetFragDebugBuffer(uint32_t count);
-    void DumpFragDebugBuffer();
-
-    struct ClipDebug {
-        float clip_x;
-        float clip_y;
-        float clip_z;
-        float clip_w;
-    };
-
-    struct FragDebugEntry {
-        uint32_t recorded;
-        float data[4];  // data[0] = debug_mode, data[1-3] = debug values
-    };
-
-    struct DebugSettings {
-        int32_t debug_mode = 0;
-        float debug_scale1 = 10.0f;
-        float debug_scale2 = 1.0f;
-        float padding = 0.0f;
-    };
-
     VulkanDevice* device_ = nullptr;
 
     VulkanBuffer vertex_buffer_;
@@ -118,7 +84,6 @@ private:
     VulkanBuffer instance_buffer_;
     VulkanBuffer bone_matrix_buffer_;
     VulkanBuffer uniform_buffer_;
-    VulkanBuffer debug_uniform_buffer_;
 
     VulkanPipeline pipeline_;
 
@@ -134,25 +99,6 @@ private:
     uint32_t bones_per_instance_ = 0;
     bool initialized_ = false;
     bool mesh_uploaded_ = false;
-
-    // Vertex shader gl_Position debug SSBO
-    VulkanBuffer clip_debug_buffer_;
-    uint32_t clip_debug_capacity_ = 0;
-    mutable ClipDebug clip_debug_cpu_[4];
-
-    // Fragment shader debug SSBO
-    VulkanBuffer frag_debug_buffer_;
-    uint32_t frag_debug_capacity_ = 0;
-    mutable FragDebugEntry frag_debug_cpu_[4];
-
-    // Debug vertex data for CPU-side verification
-    std::vector<Vertex> debug_vertices_;
-
-    // Debug settings
-    DebugSettings debug_settings_;
-
-    // Debug mode for shader visualization via SSBO
-    uint32_t debug_mode_ = 0;
 };
 
 } // namespace renderer

@@ -1177,63 +1177,6 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
         renderer.SetShowDebugOverlay(show_debug_overlay);
     }
 
-    // Mesh debug mode controls
-    if (renderer.GetMeshRenderer().IsInitialized() && renderer.GetMeshRenderer().HasMesh() && show_mesh) {
-        ImGui::Separator();
-        ImGui::Text("Mesh Debug Visualization:");
-
-        const char* debug_modes[] = {
-            "Normal Lighting",
-            "Face Orientation (gl_FrontFacing)",
-            "Normal Direction Visualization",
-            "Depth Visualization",
-            "UV Coordinates",
-            "Normal Z Component",
-            "Checkerboard Front/Back",
-            "Two-Sided Visualization",
-            "World Position Gradient"
-        };
-
-        uint32_t current_mode = renderer.GetMeshRenderer().GetDebugMode();
-        int mode_index = static_cast<int>(current_mode);
-        if (ImGui::Combo("Debug Mode", &mode_index, debug_modes, IM_ARRAYSIZE(debug_modes))) {
-            renderer.GetMeshRenderer().SetDebugMode(static_cast<uint32_t>(mode_index));
-        }
-
-        if (current_mode != 0) {
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 1.0f, 1.0f), "Debug Info:");
-            switch(current_mode) {
-                case 1:
-                    ImGui::TextWrapped("Green = front faces, Red = back faces");
-                    ImGui::TextWrapped("If you see red, faces are incorrectly oriented");
-                    break;
-                case 2:
-                    ImGui::TextWrapped("Normal vectors mapped to RGB colors");
-                    ImGui::TextWrapped("Shows surface orientation");
-                    break;
-                case 3:
-                    ImGui::TextWrapped("Blue = near depth, Red = far depth");
-                    break;
-                case 4:
-                    ImGui::TextWrapped("Red = U coordinate, Green = V coordinate");
-                    break;
-                case 5:
-                    ImGui::TextWrapped("White = facing camera, Black = facing away");
-                    break;
-                case 6:
-                    ImGui::TextWrapped("Checkerboard: Green=front, Red=back");
-                    break;
-                case 7:
-                    ImGui::TextWrapped("Normal shading for front faces");
-                    ImGui::TextWrapped("Pink = back faces (shouldn't see)");
-                    break;
-                case 8:
-                    ImGui::TextWrapped("Position gradients for debugging");
-                    break;
-            }
-        }
-    }
-
     ImGui::Separator();
 
     float clear_r = 0.0f;

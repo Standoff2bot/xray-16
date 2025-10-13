@@ -23,10 +23,6 @@ layout(std430, set = 0, binding = 1) readonly buffer BoneMatrices {
 
 layout(location = 0) out vec3 out_world_normal;
 layout(location = 1) out vec2 out_uv;
-layout(location = 2) out float out_world_z;
-layout(location = 3) out float out_view_z;
-layout(location = 4) out float out_clip_z;
-layout(location = 5) out float out_clip_w;
 
 mat4 accumulate_skinning(uint base_index) {
     mat4 skin_matrix = mat4(0.0);
@@ -46,6 +42,7 @@ mat4 accumulate_skinning(uint base_index) {
 
     float weight_sum = in_bone_weights.x + in_bone_weights.y + in_bone_weights.z + in_bone_weights.w;
     if (weight_sum <= 0.0) {
+        // Fallback to identity to avoid zeroed transforms on degenerate weights.
         skin_matrix = mat4(1.0);
     }
 
@@ -60,21 +57,16 @@ void main() {
         in_instance_transform_col3
     );
 
-    mat4 skin_matrix = accumulate_skinning(in_bone_matrix_offset);
+    uint base_index = in_bone_matrix_offset;
+    mat4 skin_matrix = accumulate_skinning(base_index);
 
     vec4 local_position = skin_matrix * vec4(in_position, 1.0);
-    vec3 local_normal = mat3(skin_matrix) * in_normal;
+    vec3 local_normal = (mat3(skin_matrix) * in_normal);
 
     vec4 world_position = instance_transform * local_position;
-    vec4 clip_position = camera.view_proj * world_position;
-    gl_Position = clip_position;
+    gl_Position = camera.view_proj * world_position;
 
     mat3 normal_matrix = mat3(instance_transform);
     out_world_normal = normalize(normal_matrix * local_normal);
     out_uv = in_uv;
-
-    out_world_z = world_position.z;
-    out_view_z = clip_position.z / max(clip_position.w, 1e-6);
-    out_clip_z = clip_position.z;
-    out_clip_w = clip_position.w;
 }
