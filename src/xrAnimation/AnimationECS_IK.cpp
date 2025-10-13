@@ -59,13 +59,61 @@ void IKInitializationSystem::ResolveChainAxes(
             }
         }
 
-        // Calculate stable pole vector from bind pose Y-axis
-        // This prevents IK flipping/snapping issues, especially for first-person arm rigs
-        ozz::math::SimdFloat4 pole_candidate = bind_pose_models[chain.mid].cols[1];
-        const ozz::math::SimdFloat4 pole_len_sq = ozz::math::Length3Sqr(pole_candidate);
-        if (ozz::math::AreAllTrue1(ozz::math::CmpGt(pole_len_sq, min_len)))
+        // Calculate stable pole vector from the geometry of the three joints in bind pose
+        // This is more robust than using bind pose Y-axis, especially for skeletons with twist/pole bones
+        if (chain.start >= 0 && static_cast<size_t>(chain.start) < bind_pose_models.size() &&
+            chain.end >= 0 && static_cast<size_t>(chain.end) < bind_pose_models.size())
         {
-            chain.pole_vector = ozz::math::Normalize3(pole_candidate);
+            // Get joint positions
+            const ozz::math::Float4x4& start_mat = bind_pose_models[chain.start];
+            const ozz::math::Float4x4& mid_mat = bind_pose_models[chain.mid];
+            const ozz::math::Float4x4& end_mat = bind_pose_models[chain.end];
+
+            ozz::math::SimdFloat4 start_pos = start_mat.cols[3];
+            ozz::math::SimdFloat4 mid_pos = mid_mat.cols[3];
+            ozz::math::SimdFloat4 end_pos = end_mat.cols[3];
+
+            // Calculate vectors from start to mid and start to end
+            ozz::math::SimdFloat4 start_to_mid = mid_pos - start_pos;
+            ozz::math::SimdFloat4 start_to_end = end_pos - start_pos;
+
+            // Calculate cross product to get perpendicular (the direction the elbow/knee should point)
+            ozz::math::SimdFloat4 pole_candidate = ozz::math::Cross3(start_to_mid, start_to_end);
+
+            // For arms, we want the pole to point outward (left arm = negative X, right arm = positive X)
+            // For legs, we want the pole to point forward (positive Z in most rigs)
+            if (chain.role == LimbIKChain::Role::Arm)
+            {
+                // Cross product gives us a vector perpendicular to the arm plane
+                // For consistency, ensure it points in a reasonable direction
+                pole_candidate = ozz::math::Cross3(start_to_end, start_to_mid);
+            }
+
+            const ozz::math::SimdFloat4 pole_len_sq = ozz::math::Length3Sqr(pole_candidate);
+            if (ozz::math::AreAllTrue1(ozz::math::CmpGt(pole_len_sq, min_len)))
+            {
+                chain.pole_vector = ozz::math::Normalize3(pole_candidate);
+            }
+            else
+            {
+                // Fallback to Y-axis if triangle is degenerate
+                ozz::math::SimdFloat4 y_axis_candidate = mid_mat.cols[1];
+                const ozz::math::SimdFloat4 y_len_sq = ozz::math::Length3Sqr(y_axis_candidate);
+                if (ozz::math::AreAllTrue1(ozz::math::CmpGt(y_len_sq, min_len)))
+                {
+                    chain.pole_vector = ozz::math::Normalize3(y_axis_candidate);
+                }
+            }
+        }
+        else
+        {
+            // Fallback: Calculate from bind pose Y-axis
+            ozz::math::SimdFloat4 pole_candidate = bind_pose_models[chain.mid].cols[1];
+            const ozz::math::SimdFloat4 pole_len_sq = ozz::math::Length3Sqr(pole_candidate);
+            if (ozz::math::AreAllTrue1(ozz::math::CmpGt(pole_len_sq, min_len)))
+            {
+                chain.pole_vector = ozz::math::Normalize3(pole_candidate);
+            }
         }
     }
 }
@@ -216,6 +264,15 @@ bool IKSolverSystem::SolveLimbIK(
     if (!chain.Valid() || !chain.enabled)
     {
         chain.debug_target_valid = false;
+        return false;
+    }
+
+    // Skip IK if weight is effectively zero (no contribution)
+    // This avoids numerical errors when IK isn't actually needed
+    if (weight < 1e-4f)
+    {
+        chain.debug_target_valid = false;
+        chain.reached = true;  // Trivially "reached" since we're not solving
         return false;
     }
 
@@ -371,6 +428,23 @@ void IKSolverSystem::Update(entt::registry& registry)
         {
             if (!chain.Valid() || !chain.enabled)
                 return;
+
+            // Check if target offset is effectively zero (avoid IK on trivial cases)
+            const float offset_len_sq = chain.target_offset.x * chain.target_offset.x +
+                                       chain.target_offset.y * chain.target_offset.y +
+                                       chain.target_offset.z * chain.target_offset.z;
+            const float epsilon = 1e-6f;
+
+            // For legs with ground height, always run IK even if offset is zero
+            const bool is_leg_with_ground = (chain.role == LimbIKChain::Role::Leg &&
+                                            std::abs(ik_config.foot_ground_height) > epsilon);
+
+            // Skip IK if offset is zero and no ground height (prevents numerical drift)
+            if (!is_leg_with_ground && offset_len_sq < epsilon && params.weight > 0.999f)
+            {
+                chain.reached = true;  // Trivially reached (staying at animated position)
+                return;
+            }
 
             const ozz::math::Float3 target = ComputeChainTarget(
                 chain,

@@ -28,6 +28,9 @@
 #include "../AnimationECS_IK.h"
 #include "entt/entt.hpp"
 
+// IK Gizmo interaction
+#include "IKGizmoInteraction.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -572,6 +575,13 @@ struct ViewerState {
     std::vector<MeshInstanceData> render_instance_buffer;
     std::vector<ozz::math::Float4x4> render_skeleton_transforms_buffer;
     std::vector<ozz::math::Float4x4> render_bone_matrices_buffer;
+
+    // IK Gizmo interaction
+    std::vector<IKGizmo::Gizmo> ik_gizmos;
+    bool ik_gizmos_enabled = true;
+    int dragged_gizmo_index = -1;
+    ozz::math::Float3 drag_plane_normal;
+    float drag_plane_distance = 0.0f;
 };
 
 void QueueStatus(ViewerState& state, std::string message, bool is_error) {
@@ -1296,6 +1306,225 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
     ImGui::End();
 }
 
+//=============================================================================
+// IK Gizmo Functions
+//=============================================================================
+
+// Update IK gizmo positions from model-space bone matrices
+void UpdateIKGizmos(ViewerState& state) {
+    if (!state.use_ecs_rendering || !state.ecs_animation_registry) {
+        state.ik_gizmos.clear();
+        return;
+    }
+
+    auto& registry = state.ecs_animation_registry->GetRegistry();
+    auto ik_view = registry.view<AnimationECS::IKConfiguration, AnimationECS::AnimationBuffers>();
+
+    if (ik_view.empty()) {
+        state.ik_gizmos.clear();
+        return;
+    }
+
+    // Use first entity for now (could extend to support multiple entities)
+    entt::entity entity = ik_view.front();
+    auto& ik_config = ik_view.get<AnimationECS::IKConfiguration>(entity);
+    auto& buffers = ik_view.get<AnimationECS::AnimationBuffers>(entity);
+
+    if (!ik_config.IsInitialized() || !buffers.IsInitialized()) {
+        state.ik_gizmos.clear();
+        return;
+    }
+
+    // Recreate gizmos if needed
+    const size_t expected_count = (ik_config.HasLegIK() ? 2 : 0) + (ik_config.HasArmIK() ? 2 : 0);
+    if (state.ik_gizmos.size() != expected_count) {
+        state.ik_gizmos.clear();
+
+        if (ik_config.HasLegIK()) {
+            if (ik_config.left_leg.Valid()) {
+                IKGizmo::Gizmo gizmo;
+                gizmo.type = IKGizmo::Gizmo::ChainType::LeftLeg;
+                state.ik_gizmos.push_back(gizmo);
+            }
+            if (ik_config.right_leg.Valid()) {
+                IKGizmo::Gizmo gizmo;
+                gizmo.type = IKGizmo::Gizmo::ChainType::RightLeg;
+                state.ik_gizmos.push_back(gizmo);
+            }
+        }
+
+        if (ik_config.HasArmIK()) {
+            if (ik_config.left_arm.Valid()) {
+                IKGizmo::Gizmo gizmo;
+                gizmo.type = IKGizmo::Gizmo::ChainType::LeftArm;
+                state.ik_gizmos.push_back(gizmo);
+            }
+            if (ik_config.right_arm.Valid()) {
+                IKGizmo::Gizmo gizmo;
+                gizmo.type = IKGizmo::Gizmo::ChainType::RightArm;
+                state.ik_gizmos.push_back(gizmo);
+            }
+        }
+    }
+
+    // Update gizmo positions from chain target debug data
+    for (auto& gizmo : state.ik_gizmos) {
+        AnimationECS::LimbIKChain* chain = gizmo.GetChain(ik_config);
+        if (chain && chain->Valid() && chain->debug_target_valid) {
+            gizmo.position = chain->debug_target;
+        }
+    }
+}
+
+// Render IK gizmos as interactive spheres
+void RenderIKGizmos(ViewerState& state, VulkanRenderer& renderer) {
+    if (!state.ik_gizmos_enabled || state.ik_gizmos.empty()) {
+        return;
+    }
+
+    auto& debug_renderer = renderer.GetDebugRenderer();
+
+    for (size_t i = 0; i < state.ik_gizmos.size(); ++i) {
+        const auto& gizmo = state.ik_gizmos[i];
+
+        // Color based on state
+        ozz::math::Float4 color;
+        if (gizmo.is_dragging) {
+            color = ozz::math::Float4{1.0f, 1.0f, 0.0f, 0.8f};  // Yellow when dragging
+        } else if (gizmo.is_hovered) {
+            color = ozz::math::Float4{0.0f, 1.0f, 1.0f, 0.7f};  // Cyan when hovered
+        } else {
+            // Color by type
+            switch (gizmo.type) {
+                case IKGizmo::Gizmo::ChainType::LeftLeg:
+                case IKGizmo::Gizmo::ChainType::RightLeg:
+                    color = ozz::math::Float4{0.0f, 0.8f, 0.0f, 0.6f};  // Green for legs
+                    break;
+                case IKGizmo::Gizmo::ChainType::LeftArm:
+                case IKGizmo::Gizmo::ChainType::RightArm:
+                    color = ozz::math::Float4{0.8f, 0.0f, 0.0f, 0.6f};  // Red for arms
+                    break;
+            }
+        }
+
+        debug_renderer.DrawSphere(gizmo.position, gizmo.radius, color);
+    }
+}
+
+// Handle mouse interaction with IK gizmos
+void HandleIKGizmoMouseInteraction(ViewerState& state, VulkanRenderer& renderer, Camera& camera) {
+    if (!state.ik_gizmos_enabled || state.ik_gizmos.empty()) {
+        return;
+    }
+
+    // Get mouse position
+    double mouse_x, mouse_y;
+    glfwGetCursorPos(state.window, &mouse_x, &mouse_y);
+
+    // Get viewport size
+    int viewport_width, viewport_height;
+    glfwGetFramebufferSize(state.window, &viewport_width, &viewport_height);
+
+    // Get view and projection matrices
+    const ozz::math::Float4x4 view = camera.GetViewMatrix();
+    const ozz::math::Float4x4 proj = camera.GetProjectionMatrix();
+
+    // Create ray from screen to world
+    ozz::math::Float3 ray_origin, ray_direction;
+    IKGizmo::ScreenToWorldRay(
+        static_cast<float>(mouse_x), static_cast<float>(mouse_y),
+        viewport_width, viewport_height,
+        view, proj,
+        &ray_origin, &ray_direction);
+
+    // Check for hover
+    const int hovered_index = IKGizmo::FindClosestGizmo(state.ik_gizmos, ray_origin, ray_direction);
+
+    // Update hover state
+    for (size_t i = 0; i < state.ik_gizmos.size(); ++i) {
+        state.ik_gizmos[i].is_hovered = (static_cast<int>(i) == hovered_index);
+    }
+
+    // Handle mouse button
+    const bool left_button_pressed = glfwGetMouseButton(state.window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+
+    // Check if ImGui wants mouse (don't interact with gizmos if clicking UI)
+    if (ImGui::GetIO().WantCaptureMouse) {
+        state.dragged_gizmo_index = -1;
+        for (auto& gizmo : state.ik_gizmos) {
+            gizmo.is_dragging = false;
+        }
+        return;
+    }
+
+    // Start dragging
+    if (left_button_pressed && state.dragged_gizmo_index < 0 && hovered_index >= 0) {
+        state.dragged_gizmo_index = hovered_index;
+        state.ik_gizmos[hovered_index].is_dragging = true;
+
+        // Setup drag plane (perpendicular to camera view direction)
+        const ozz::math::Float3 camera_pos = camera.GetPosition();
+        const ozz::math::Float3 camera_target = camera.GetTarget();
+        state.drag_plane_normal.x = camera_pos.x - camera_target.x;
+        state.drag_plane_normal.y = camera_pos.y - camera_target.y;
+        state.drag_plane_normal.z = camera_pos.z - camera_target.z;
+
+        // Normalize
+        const float len = std::sqrt(state.drag_plane_normal.x * state.drag_plane_normal.x +
+                                   state.drag_plane_normal.y * state.drag_plane_normal.y +
+                                   state.drag_plane_normal.z * state.drag_plane_normal.z);
+        state.drag_plane_normal.x /= len;
+        state.drag_plane_normal.y /= len;
+        state.drag_plane_normal.z /= len;
+
+        // Plane distance
+        const ozz::math::Float3& gizmo_pos = state.ik_gizmos[hovered_index].position;
+        state.drag_plane_distance = -(state.drag_plane_normal.x * gizmo_pos.x +
+                                      state.drag_plane_normal.y * gizmo_pos.y +
+                                      state.drag_plane_normal.z * gizmo_pos.z);
+    }
+
+    // Update dragging
+    if (left_button_pressed && state.dragged_gizmo_index >= 0) {
+        ozz::math::Float3 intersection;
+        if (IKGizmo::RayPlaneIntersection(ray_origin, ray_direction, state.drag_plane_normal,
+                                         state.drag_plane_distance, &intersection)) {
+            // Update gizmo position
+            state.ik_gizmos[state.dragged_gizmo_index].position = intersection;
+
+            // Apply to IK chain
+            if (state.ecs_animation_registry) {
+                auto& registry = state.ecs_animation_registry->GetRegistry();
+                auto ik_view = registry.view<AnimationECS::IKConfiguration, AnimationECS::AnimationBuffers>();
+
+                if (!ik_view.empty()) {
+                    entt::entity entity = ik_view.front();
+                    auto& ik_config = ik_view.get<AnimationECS::IKConfiguration>(entity);
+                    auto& buffers = ik_view.get<AnimationECS::AnimationBuffers>(entity);
+
+                    auto& gizmo = state.ik_gizmos[state.dragged_gizmo_index];
+                    AnimationECS::LimbIKChain* chain = gizmo.GetChain(ik_config);
+
+                    if (chain && chain->Valid()) {
+                        // Apply dragged target (updates chain->target_offset)
+                        AnimationECS::IKSolverSystem::ApplyDraggedTarget(
+                            *chain, intersection, ozz::make_span(buffers.models));
+
+                        // Enable the chain so IK actually runs
+                        chain->enabled = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Stop dragging
+    if (!left_button_pressed && state.dragged_gizmo_index >= 0) {
+        state.ik_gizmos[state.dragged_gizmo_index].is_dragging = false;
+        state.dragged_gizmo_index = -1;
+    }
+}
+
 void DrawIKPanel(ViewerState& state, VulkanRenderer& renderer) {
     if (!state.show_ik_panel) return;
 
@@ -1336,6 +1565,16 @@ void DrawIKPanel(ViewerState& state, VulkanRenderer& renderer) {
         ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "IK System: Not Initialized");
         ImGui::End();
         return;
+    }
+
+    // Gizmo control
+    ImGui::Checkbox("Show Interactive Gizmos", &state.ik_gizmos_enabled);
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::Text("Click and drag colored spheres to move IK targets");
+        ImGui::Text("Green = Legs, Red = Arms");
+        ImGui::Text("Cyan = Hovered, Yellow = Dragging");
+        ImGui::EndTooltip();
     }
 
     ImGui::Separator();
@@ -2388,6 +2627,9 @@ int main(int argc, const char** argv) {
         if (state.use_ecs_rendering && state.instance_count >= 1 && state.ecs_animation_registry) {
             // Run ECS animation systems for all instances (uses ParallelAnimationOrchestrator)
             state.ecs_animation_registry->Update(dt);
+
+            // Update IK gizmo positions from IK chain targets
+            UpdateIKGizmos(state);
         } else if (!state.use_ecs_rendering && state.instance_count > 1) {
             // Run regular per-instance animation updates (sequential)
             UpdateRegularInstanceAnimations(state, dt);
@@ -2403,6 +2645,11 @@ int main(int argc, const char** argv) {
         }
         // Single instance mode with regular rendering - UpdateMeshAnimation() handles this automatically
 
+        // Handle IK gizmo mouse interaction (before ImGui so we can check WantCaptureMouse)
+        if (state.use_ecs_rendering && state.instance_count >= 1) {
+            HandleIKGizmoMouseInteraction(state, renderer, renderer.GetCamera());
+        }
+
         if (renderer.IsImGuiInitialized()) {
             ImGui::SetCurrentContext(renderer.GetImGuiContext());
             RenderDockspace(state);
@@ -2416,6 +2663,11 @@ int main(int argc, const char** argv) {
             if (state.show_demo_window) {
                 ImGui::ShowDemoWindow(&state.show_demo_window);
             }
+        }
+
+        // Render IK gizmos (before RenderScene so they draw with debug renderer)
+        if (state.use_ecs_rendering && state.instance_count >= 1) {
+            RenderIKGizmos(state, renderer);
         }
 
         renderer.RenderScene();
