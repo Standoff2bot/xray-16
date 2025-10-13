@@ -37,6 +37,7 @@
 #include "JoltPhysicsShape.h"
 #include "JoltPhysicsBody.h"
 #include "JoltPhysicsConstraint.h"
+#include "JoltPhysicsCharacter.h"
 #include "xrMaterialSystem/GameMtlLib.h"
 
 // Layer that objects can be in, determines which other objects it can collide with
@@ -490,6 +491,13 @@ void JoltPhysicsWorld::Shutdown()
         xr_delete(constraint);
     }
     m_constraints.clear();
+
+    // Clean up characters
+    for (auto character : m_characters)
+    {
+        xr_delete(character);
+    }
+    m_characters.clear();
 
     // Clean up Jolt
     xr_delete(m_contact_listener);
@@ -1160,6 +1168,41 @@ void JoltPhysicsWorld::SetThreadCount(u32 count)
 u32 JoltPhysicsWorld::GetThreadCount() const
 {
     return m_thread_count;
+}
+
+IPhysicsCharacter* JoltPhysicsWorld::CreateCharacter(float radius, float height)
+{
+    if (!m_initialized || !m_physics_system)
+    {
+        Msg("! JoltPhysicsWorld::CreateCharacter: World not initialized");
+        return nullptr;
+    }
+
+    // Create character with Quake-style movement physics
+    JoltPhysicsCharacter* character = new JoltPhysicsCharacter(this, radius, height);
+    m_characters.push_back(character);
+
+    Msg("* JoltPhysicsWorld: Created character controller (radius=%.2f, height=%.2f)", radius, height);
+
+    return character;
+}
+
+void JoltPhysicsWorld::DestroyCharacter(IPhysicsCharacter* character)
+{
+    if (!character)
+    {
+        return;
+    }
+
+    // Remove from tracking vector
+    auto it = std::find(m_characters.begin(), m_characters.end(), character);
+    if (it != m_characters.end())
+    {
+        m_characters.erase(it);
+    }
+
+    // Delete the character
+    xr_delete(character);
 }
 
 // Factory function

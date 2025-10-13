@@ -52,6 +52,9 @@ public:
                                           IPhysicsBody* body2) override;
     void DestroyConstraint(IPhysicsConstraint* constraint) override;
 
+    IPhysicsCharacter* CreateCharacter(float radius, float height) override;
+    void DestroyCharacter(IPhysicsCharacter* character) override;
+
     bool RayCast(const Fvector& origin, const Fvector& direction,
                 float max_distance, PhysicsRayHit& hit_out) override;
 
@@ -88,6 +91,7 @@ private:
     xr_vector<IPhysicsBody*> m_bodies;
     xr_vector<IPhysicsShape*> m_shapes;
     xr_vector<IPhysicsConstraint*> m_constraints;
+    xr_vector<IPhysicsCharacter*> m_characters;
 };
 
 // Factory function

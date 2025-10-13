@@ -216,6 +216,68 @@ struct PhysicsRayHit
     void* user_data;
 };
 
+// Character movement state
+enum class CharacterMovementState
+{
+    OnGround,
+    InAir,
+    OnLadder
+};
+
+// Character controller interface
+// Provides high-level character movement with ground detection, jumping, and air control
+class IPhysicsCharacter
+{
+public:
+    virtual ~IPhysicsCharacter() = default;
+
+    // Transform
+    virtual void GetPosition(Fvector& pos) const = 0;
+    virtual void SetPosition(const Fvector& pos) = 0;
+    virtual void GetVelocity(Fvector& vel) const = 0;
+    virtual void SetVelocity(const Fvector& vel) = 0;
+
+    // Movement input (normalized direction in XZ plane)
+    virtual void SetMovementDirection(const Fvector& direction) = 0;
+    virtual void SetMaxSpeed(float speed) = 0;
+    virtual float GetMaxSpeed() const = 0;
+
+    // Jumping
+    virtual void Jump(float jump_velocity) = 0;
+    virtual bool CanJump() const = 0;
+    virtual bool IsJumping() const = 0;
+
+    // Ground detection
+    virtual CharacterMovementState GetMovementState() const = 0;
+    virtual bool IsOnGround() const = 0;
+    virtual void GetGroundNormal(Fvector& normal) const = 0;
+    virtual float GetGroundDistance() const = 0;
+
+    // Physics properties
+    virtual void SetMass(float mass) = 0;
+    virtual float GetMass() const = 0;
+    virtual void SetCapsuleSize(float radius, float height) = 0;
+    virtual void GetCapsuleSize(float& radius, float& height) const = 0;
+
+    // Movement tuning (for Quake-style physics)
+    virtual void SetGroundAcceleration(float accel) = 0;
+    virtual void SetAirAcceleration(float accel) = 0;
+    virtual void SetGroundFriction(float friction) = 0;
+    virtual void SetStopSpeed(float speed) = 0;
+    virtual void SetMaxAirSpeed(float speed) = 0; // For bunnyhopping control
+
+    // Step/slope handling
+    virtual void SetMaxStepHeight(float height) = 0;
+    virtual void SetMaxSlopeAngle(float angle_degrees) = 0;
+
+    // User data
+    virtual void SetUserData(void* data) = 0;
+    virtual void* GetUserData() const = 0;
+
+    // Update (called each physics step)
+    virtual void Update(float dt) = 0;
+};
+
 // World interface - main physics simulation
 class IPhysicsWorld
 {
@@ -251,6 +313,10 @@ public:
                                                    IPhysicsBody* body1,
                                                    IPhysicsBody* body2) = 0;
     virtual void DestroyConstraint(IPhysicsConstraint* constraint) = 0;
+
+    // Character controllers
+    virtual IPhysicsCharacter* CreateCharacter(float radius, float height) = 0;
+    virtual void DestroyCharacter(IPhysicsCharacter* character) = 0;
 
     // Ray casting
     virtual bool RayCast(const Fvector& origin, const Fvector& direction,
