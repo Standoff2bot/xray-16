@@ -16,22 +16,55 @@
 
 ## Current Status
 
-### ✅ Completed - Basic ECS IK Foundation
+### ✅ Completed - Basic ECS IK Foundation + Interactive Testing UI
 
 **AnimationECS_IK Module:**
 - `LimbIKChain` component (data-only, two-bone IK)
 - `IKConfiguration` component (container for all chains)
-- `IKInitializationSystem` - Auto-detects and initializes IK chains
-- `IKSolverSystem` - Solves basic two-bone IK
+- `IKInitializationSystem` - Auto-detects and initializes IK chains with left/right detection
+- `IKSolverSystem` - Solves basic two-bone IK with per-limb rebuild strategy
 - `IKDebugSystem` - Placeholder for debug visualization
 - Build system integration with xrAnimation library
-- ozz_animation_viewer partial integration
+- **ozz_animation_viewer full IK panel integration (October 2025)**
 
 **Current Capabilities:**
 - Basic two-bone IK for legs and arms
 - Pole vector support (fixes first-person arm bending)
+- **Multi-limb simultaneous IK (all 4 limbs independently controlled)**
+- **Per-limb model-space rebuild (handles skeleton hierarchy dependencies)**
+- **Left/right limb auto-detection (prevents label swapping)**
+- **ImGui IK panel with real-time parameter adjustment**
 - ECS-based architecture ready for expansion
 - Single source of truth between viewer and game
+
+**ozz_animation_viewer IK Panel (NEW - October 2025):**
+- Individual limb enable/disable controls (Left Leg, Right Leg, Left Arm, Right Arm)
+- Enable All / Disable All buttons for legs and arms
+- Real-time target offset adjustment (X, Y, Z sliders)
+- IK parameter tuning (weight, soften, twist angle)
+- Status feedback (target reached / out of reach)
+- Panel visibility toggle via View menu
+
+### 🔧 Technical Implementation Notes
+
+**Per-Limb Rebuild Strategy (October 2025):**
+The current IK solver uses a per-limb rebuild approach (4 LocalToModelJob calls per frame) to handle skeleton hierarchy dependencies:
+
+**Why Not Single Rebuild?**
+- Skeleton hierarchy: Right leg (joints 3-5) shares pelvis parent with left leg (joints 7-9)
+- If we solve all limbs then rebuild once, later limbs see ANIMATED parent transforms, not IK-modified ones
+- Example: Right leg IK moves pelvis → Left leg's IK solution is now wrong (assumed old pelvis)
+
+**Per-Limb Solution:**
+1. Left leg solves → Rebuild from joint 7 → models[] updated
+2. Right leg solves (sees IK-modified pelvis) → Rebuild from joint 3 → models[] updated
+3. Left arm solves (sees IK-modified spine) → Rebuild from joint 34 → models[] updated
+4. Right arm solves (sees all IK) → Rebuild from joint 21 → models[] updated
+
+**Cost:** 4 LocalToModelJob calls per entity per frame (~0.02ms each = ~0.08ms total per character)
+**Benefit:** Correct multi-limb IK with proper hierarchy propagation
+
+**Future Optimization:** Could reduce to 2 rebuilds (legs group, arms group) if limbs within groups are truly independent (requires skeleton structure analysis).
 
 ### 🚧 Limitations of Current Implementation
 

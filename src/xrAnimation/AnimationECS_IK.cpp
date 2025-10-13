@@ -132,7 +132,20 @@ void IKInitializationSystem::Initialize(
         { "bip01_r_forearm", "r_forearm", "right_forearm", "bip01_r_elbow" },
         { "bip01_r_hand", "r_hand", "right_hand", "bip01_r_wrist" });
 
-    // Auto-detect left/right swap based on X position of hands in bind pose
+    // Auto-detect left/right swap based on X position in bind pose
+    // For legs: left foot should have SMALLER X than right foot (left is negative X, right is positive X)
+    if (ik_config.left_leg.Valid() && ik_config.right_leg.Valid() && !bind_pose_models.empty())
+    {
+        const float left_x = ozz::math::GetX(bind_pose_models[ik_config.left_leg.end].cols[3]);
+        const float right_x = ozz::math::GetX(bind_pose_models[ik_config.right_leg.end].cols[3]);
+        if (left_x > right_x)
+        {
+            std::swap(ik_config.left_leg, ik_config.right_leg);
+            Msg("[AnimationECS IK] Swapped left/right legs (left_x=%.2f > right_x=%.2f)", left_x, right_x);
+        }
+    }
+
+    // For arms: left hand should have SMALLER X than right hand
     if (ik_config.left_arm.Valid() && ik_config.right_arm.Valid() && !bind_pose_models.empty())
     {
         const float left_x = ozz::math::GetX(bind_pose_models[ik_config.left_arm.end].cols[3]);
@@ -140,6 +153,7 @@ void IKInitializationSystem::Initialize(
         if (left_x > right_x)
         {
             std::swap(ik_config.left_arm, ik_config.right_arm);
+            Msg("[AnimationECS IK] Swapped left/right arms (left_x=%.2f > right_x=%.2f)", left_x, right_x);
         }
     }
 
@@ -308,8 +322,6 @@ void IKSolverSystem::ApplyDraggedTarget(
 
 void IKSolverSystem::Update(entt::registry& registry)
 {
-    Msg("[IKSolverSystem::Update] Called");
-
     // NOTE: Currently this IK system does NOT calculate ground collision targets like the legacy IKLimb system!
     // The legacy system (see xrGame/ik/IKLimb.cpp):
     //   - Uses m_foot.Collide() to raycast for ground surfaces
@@ -327,14 +339,8 @@ void IKSolverSystem::Update(entt::registry& registry)
     // Process all entities with IK configuration
     auto view = registry.view<IKConfiguration, AnimationBuffers>();
 
-    const size_t entity_count = view.size_hint();
-    Msg("[IKSolverSystem::Update] Found %zu entities with IKConfiguration + AnimationBuffers", entity_count);
-
-    if (entity_count == 0)
-    {
-        Msg("[IKSolverSystem::Update] No entities to process - returning early");
+    if (view.size_hint() == 0)
         return;
-    }
 
     for (auto entity : view)
     {
@@ -344,93 +350,79 @@ void IKSolverSystem::Update(entt::registry& registry)
         if (!ik_config.IsInitialized() || !buffers.IsInitialized())
             continue;
 
-        // Build local-to-model transforms first (IK works in model space)
-        // This should be done by the LocalToModelSystem before calling IK
-        // For now, we assume models[] is already up-to-date
+        // Get controller for skeleton access (needed for LocalToModel rebuilds)
+        auto* controller = registry.try_get<AnimationController>(entity);
+        if (!controller || !controller->skeleton)
+            continue;
 
         int min_dirty_joint = static_cast<int>(buffers.models.size());
 
-        // Solve leg IK
-        if (ik_config.leg_ik_available)
+        // PER-LIMB REBUILD APPROACH
+        // Problem: Skeleton hierarchy dependencies!
+        // - Right leg (joints 3,4,5) modifies pelvis/spine
+        // - Left leg (joints 7,8,9) shares pelvis as parent
+        // - When we rebuild from joint 3, joint 7's parent changes!
+        // - Left leg's IK assumed ANIMATED parent, not IK-modified parent
+        //
+        // Solution: Rebuild after EACH limb so next limb sees updated hierarchy
+        // Cost: 4 rebuilds per entity (acceptable for correctness)
+
+        auto solve_and_rebuild_limb = [&](LimbIKChain& chain, const IKConfiguration::IKParams& params)
         {
-            auto solve_leg = [&](LimbIKChain& chain)
+            if (!chain.Valid() || !chain.enabled)
+                return;
+
+            const ozz::math::Float3 target = ComputeChainTarget(
+                chain,
+                ozz::make_span(buffers.models),
+                ik_config.foot_ground_height,
+                ik_config.crouch_offset,
+                ik_config.crouch_affects_arms);
+
+            int chain_dirty = static_cast<int>(buffers.models.size());
+            bool success = SolveLimbIK(
+                chain,
+                target,
+                params.weight,
+                params.soften,
+                params.twist_angle,
+                ozz::make_span(buffers.models),
+                ozz::make_span(buffers.locals),
+                &chain_dirty);
+
+            if (success && chain_dirty < static_cast<int>(buffers.models.size()))
             {
-                if (!chain.Valid() || !chain.enabled)
-                    return;
-
-                const ozz::math::Float3 target = ComputeChainTarget(
-                    chain,
-                    ozz::make_span(buffers.models),
-                    ik_config.foot_ground_height,
-                    ik_config.crouch_offset,
-                    ik_config.crouch_affects_arms);
-
-                SolveLimbIK(
-                    chain,
-                    target,
-                    ik_config.leg_params.weight,
-                    ik_config.leg_params.soften,
-                    ik_config.leg_params.twist_angle,
-                    ozz::make_span(buffers.models),
-                    ozz::make_span(buffers.locals),
-                    &min_dirty_joint);
-            };
-
-            solve_leg(ik_config.left_leg);
-            solve_leg(ik_config.right_leg);
-        }
-
-        // Solve arm IK
-        if (ik_config.arm_ik_available)
-        {
-            auto solve_arm = [&](LimbIKChain& chain)
-            {
-                if (!chain.Valid() || !chain.enabled)
-                    return;
-
-                const ozz::math::Float3 target = ComputeChainTarget(
-                    chain,
-                    ozz::make_span(buffers.models),
-                    ik_config.foot_ground_height,
-                    ik_config.crouch_offset,
-                    ik_config.crouch_affects_arms);
-
-                SolveLimbIK(
-                    chain,
-                    target,
-                    ik_config.arm_params.weight,
-                    ik_config.arm_params.soften,
-                    ik_config.arm_params.twist_angle,
-                    ozz::make_span(buffers.models),
-                    ozz::make_span(buffers.locals),
-                    &min_dirty_joint);
-            };
-
-            solve_arm(ik_config.left_arm);
-            solve_arm(ik_config.right_arm);
-        }
-
-        // Rebuild model transforms after IK modified locals
-        // IK solver modifies local-space transforms, so we must rebuild model-space matrices
-        // from the affected joints onwards
-        if (min_dirty_joint < static_cast<int>(buffers.models.size()))
-        {
-            // Get controller for skeleton access
-            auto* controller = registry.try_get<AnimationController>(entity);
-            if (controller && controller->skeleton && buffers.IsInitialized())
-            {
-                // Rebuild local-to-model from the first affected joint onwards
+                // CRITICAL: Rebuild immediately so next limb sees updated hierarchy
                 ozz::animation::LocalToModelJob ltm_job;
                 ltm_job.skeleton = controller->skeleton;
-                ltm_job.from = min_dirty_joint;  // Start from first IK-modified joint
+                ltm_job.from = chain_dirty;
                 ltm_job.input = ozz::make_span(buffers.locals);
                 ltm_job.output = ozz::make_span(buffers.models);
 
                 if (!ltm_job.Run())
                 {
-                    Msg("! [IKSolverSystem] Failed to rebuild model transforms after IK for entity %u", static_cast<u32>(entity));
+                    Msg("! [IKSolverSystem] LocalToModel rebuild failed for entity %u", static_cast<u32>(entity));
+                }
+
+                // Track minimum dirty joint
+                if (chain_dirty < min_dirty_joint)
+                {
+                    min_dirty_joint = chain_dirty;
                 }
             }
+        };
+
+        // Solve each limb with immediate rebuild
+        if (ik_config.leg_ik_available)
+        {
+            solve_and_rebuild_limb(ik_config.left_leg, ik_config.leg_params);
+            solve_and_rebuild_limb(ik_config.right_leg, ik_config.leg_params);
+        }
+
+        if (ik_config.arm_ik_available)
+        {
+            solve_and_rebuild_limb(ik_config.left_arm, ik_config.arm_params);
+            solve_and_rebuild_limb(ik_config.right_arm, ik_config.arm_params);
         }
     }
 }

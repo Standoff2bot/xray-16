@@ -25,6 +25,7 @@
 #include "../AnimationECS_Components.h"
 #include "../AnimationECS_Registry.h"
 #include "../AnimationECS_ParallelSystems.h"
+#include "../AnimationECS_IK.h"
 #include "entt/entt.hpp"
 
 #include <algorithm>
@@ -546,6 +547,13 @@ struct ViewerState {
 
     bool show_demo_window = false;
 
+    // Window visibility toggles
+    bool show_bundle_inspector = true;
+    bool show_rendering_panel = true;
+    bool show_animation_panel = true;
+    bool show_ik_panel = true;
+    bool show_performance_panel = true;
+
     // ECS Multi-instance rendering
     AnimationECS::AnimationRegistry* ecs_animation_registry = nullptr;
     std::vector<entt::entity> instance_entities;
@@ -1043,8 +1051,10 @@ void RenderDockspace(ViewerState& state) {
     ImGui::PopStyleVar(3);
 }
 
-void DrawPerformancePanel(const ViewerState& state) {
-    if (!ImGui::Begin("Performance")) {
+void DrawPerformancePanel(ViewerState& state) {
+    if (!state.show_performance_panel) return;
+
+    if (!ImGui::Begin("Performance", &state.show_performance_panel)) {
         ImGui::End();
         return;
     }
@@ -1067,7 +1077,9 @@ void DrawPerformancePanel(const ViewerState& state) {
 }
 
 void DrawAnimationPanel(ViewerState& state, VulkanRenderer& renderer) {
-    if (!ImGui::Begin("Animation Controls")) {
+    if (!state.show_animation_panel) return;
+
+    if (!ImGui::Begin("Animation Controls", &state.show_animation_panel)) {
         ImGui::End();
         return;
     }
@@ -1152,7 +1164,9 @@ void DrawAnimationPanel(ViewerState& state, VulkanRenderer& renderer) {
 }
 
 void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
-    if (!ImGui::Begin("Rendering")) {
+    if (!state.show_rendering_panel) return;
+
+    if (!ImGui::Begin("Rendering", &state.show_rendering_panel)) {
         ImGui::End();
         return;
     }
@@ -1282,6 +1296,183 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
     ImGui::End();
 }
 
+void DrawIKPanel(ViewerState& state, VulkanRenderer& renderer) {
+    if (!state.show_ik_panel) return;
+
+    if (!ImGui::Begin("IK Controls", &state.show_ik_panel)) {
+        ImGui::End();
+        return;
+    }
+
+    // Only show IK controls when using ECS and have at least one instance
+    if (!state.use_ecs_rendering || state.instance_count < 1 || !state.ecs_animation_registry) {
+        ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "IK requires ECS mode with instances");
+        ImGui::Text("Enable 'Use ECS' in Rendering panel");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::SeparatorText("IK System Status");
+
+    // Get first entity's IK configuration (or create UI to select entity)
+    auto& registry = state.ecs_animation_registry->GetRegistry();
+    auto ik_view = registry.view<AnimationECS::IKConfiguration>();
+
+    if (ik_view.empty()) {
+        ImGui::TextColored(ImVec4(1.f, 0.5f, 0.f, 1.f), "No IK configurations found");
+        ImGui::Text("IK will auto-initialize when skeleton is loaded");
+        ImGui::End();
+        return;
+    }
+
+    // For now, use first entity with IK
+    entt::entity selected_entity = ik_view.front();
+    auto& ik_config = registry.get<AnimationECS::IKConfiguration>(selected_entity);
+
+    // Status display
+    if (ik_config.IsInitialized()) {
+        ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "IK System: Initialized");
+    } else {
+        ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "IK System: Not Initialized");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Separator();
+
+    // Leg IK Section
+    if (ik_config.HasLegIK()) {
+        ImGui::SeparatorText("Leg IK");
+
+        // Quick enable/disable all legs
+        if (ImGui::Button("Enable All Legs")) {
+            ik_config.left_leg.enabled = true;
+            ik_config.right_leg.enabled = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Disable All Legs")) {
+            ik_config.left_leg.enabled = false;
+            ik_config.right_leg.enabled = false;
+        }
+
+        ImGui::Separator();
+        ImGui::SliderFloat("Leg IK Weight", &ik_config.leg_params.weight, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Leg Soften", &ik_config.leg_params.soften, 0.0f, 0.999f, "%.3f");
+        ImGui::SliderFloat("Leg Twist", &ik_config.leg_params.twist_angle, -3.14f, 3.14f, "%.2f rad");
+
+        ImGui::Separator();
+        ImGui::Text("Left Leg:");
+        ImGui::Indent();
+        if (ik_config.left_leg.Valid()) {
+            ImGui::Text("Chain: %s -> %s -> %s",
+                ik_config.left_leg.start_name.c_str(),
+                ik_config.left_leg.mid_name.c_str(),
+                ik_config.left_leg.end_name.c_str());
+            ImGui::Checkbox("Enable##LeftLeg", &ik_config.left_leg.enabled);
+            ImGui::DragFloat3("Target Offset##LeftLeg", &ik_config.left_leg.target_offset.x, 0.01f, -2.0f, 2.0f);
+            if (ik_config.left_leg.reached) {
+                ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "Target Reached");
+            } else {
+                ImGui::TextColored(ImVec4(1.f, 0.5f, 0.f, 1.f), "Target Out of Reach");
+            }
+        } else {
+            ImGui::TextDisabled("Not configured");
+        }
+        ImGui::Unindent();
+
+        ImGui::Separator();
+        ImGui::Text("Right Leg:");
+        ImGui::Indent();
+        if (ik_config.right_leg.Valid()) {
+            ImGui::Text("Chain: %s -> %s -> %s",
+                ik_config.right_leg.start_name.c_str(),
+                ik_config.right_leg.mid_name.c_str(),
+                ik_config.right_leg.end_name.c_str());
+            ImGui::Checkbox("Enable##RightLeg", &ik_config.right_leg.enabled);
+            ImGui::DragFloat3("Target Offset##RightLeg", &ik_config.right_leg.target_offset.x, 0.01f, -2.0f, 2.0f);
+            if (ik_config.right_leg.reached) {
+                ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "Target Reached");
+            } else {
+                ImGui::TextColored(ImVec4(1.f, 0.5f, 0.f, 1.f), "Target Out of Reach");
+            }
+        } else {
+            ImGui::TextDisabled("Not configured");
+        }
+        ImGui::Unindent();
+
+        ImGui::Separator();
+        ImGui::SliderFloat("Foot Ground Height", &ik_config.foot_ground_height, -1.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Crouch Offset", &ik_config.crouch_offset, -1.0f, 0.0f, "%.2f");
+    }
+
+    ImGui::Separator();
+
+    // Arm IK Section
+    if (ik_config.HasArmIK()) {
+        ImGui::SeparatorText("Arm IK");
+
+        // Quick enable/disable all arms
+        if (ImGui::Button("Enable All Arms")) {
+            ik_config.left_arm.enabled = true;
+            ik_config.right_arm.enabled = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Disable All Arms")) {
+            ik_config.left_arm.enabled = false;
+            ik_config.right_arm.enabled = false;
+        }
+
+        ImGui::Separator();
+        ImGui::SliderFloat("Arm IK Weight", &ik_config.arm_params.weight, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Arm Soften", &ik_config.arm_params.soften, 0.0f, 0.999f, "%.3f");
+        ImGui::SliderFloat("Arm Twist", &ik_config.arm_params.twist_angle, -3.14f, 3.14f, "%.2f rad");
+
+        ImGui::Separator();
+        ImGui::Text("Left Arm:");
+        ImGui::Indent();
+        if (ik_config.left_arm.Valid()) {
+            ImGui::Text("Chain: %s -> %s -> %s",
+                ik_config.left_arm.start_name.c_str(),
+                ik_config.left_arm.mid_name.c_str(),
+                ik_config.left_arm.end_name.c_str());
+            ImGui::Checkbox("Enable##LeftArm", &ik_config.left_arm.enabled);
+            ImGui::DragFloat3("Target Offset##LeftArm", &ik_config.left_arm.target_offset.x, 0.01f, -2.0f, 2.0f);
+            if (ik_config.left_arm.reached) {
+                ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "Target Reached");
+            } else {
+                ImGui::TextColored(ImVec4(1.f, 0.5f, 0.f, 1.f), "Target Out of Reach");
+            }
+        } else {
+            ImGui::TextDisabled("Not configured");
+        }
+        ImGui::Unindent();
+
+        ImGui::Separator();
+        ImGui::Text("Right Arm:");
+        ImGui::Indent();
+        if (ik_config.right_arm.Valid()) {
+            ImGui::Text("Chain: %s -> %s -> %s",
+                ik_config.right_arm.start_name.c_str(),
+                ik_config.right_arm.mid_name.c_str(),
+                ik_config.right_arm.end_name.c_str());
+            ImGui::Checkbox("Enable##RightArm", &ik_config.right_arm.enabled);
+            ImGui::DragFloat3("Target Offset##RightArm", &ik_config.right_arm.target_offset.x, 0.01f, -2.0f, 2.0f);
+            if (ik_config.right_arm.reached) {
+                ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "Target Reached");
+            } else {
+                ImGui::TextColored(ImVec4(1.f, 0.5f, 0.f, 1.f), "Target Out of Reach");
+            }
+        } else {
+            ImGui::TextDisabled("Not configured");
+        }
+        ImGui::Unindent();
+
+        ImGui::Checkbox("Crouch Affects Arms", &ik_config.crouch_affects_arms);
+    }
+
+    ImGui::End();
+}
+
 void DrawMenuBar(ViewerState& state, VulkanRenderer& renderer) {
     ImGuiIO& io = ImGui::GetIO();
     const bool ctrl_reload = io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R, false);
@@ -1308,6 +1499,13 @@ void DrawMenuBar(ViewerState& state, VulkanRenderer& renderer) {
     }
 
     if (ImGui::BeginMenu("View")) {
+        ImGui::SeparatorText("Panels");
+        ImGui::MenuItem("Bundle Inspector", nullptr, &state.show_bundle_inspector);
+        ImGui::MenuItem("Rendering", nullptr, &state.show_rendering_panel);
+        ImGui::MenuItem("Animation Controls", nullptr, &state.show_animation_panel);
+        ImGui::MenuItem("IK Controls", nullptr, &state.show_ik_panel);
+        ImGui::MenuItem("Performance", nullptr, &state.show_performance_panel);
+        ImGui::Separator();
         ImGui::MenuItem("Dear ImGui Demo", nullptr, &state.show_demo_window);
         ImGui::EndMenu();
     }
@@ -1339,7 +1537,9 @@ void DrawMenuBar(ViewerState& state, VulkanRenderer& renderer) {
 }
 
 void DrawBundleInspector(ViewerState& state, VulkanRenderer& renderer, double now_seconds) {
-    if (!ImGui::Begin("Bundle Inspector")) {
+    if (!state.show_bundle_inspector) return;
+
+    if (!ImGui::Begin("Bundle Inspector", &state.show_bundle_inspector)) {
         ImGui::End();
         return;
     }
@@ -1746,10 +1946,18 @@ void InitializeECSInstances(ViewerState& state) {
         entt::entity entity = state.ecs_animation_registry->CreateAnimatedEntity();
         state.instance_entities.push_back(entity);
 
-        // Initialize AnimationBuffers
+        // Initialize AnimationBuffers and compute bind pose for IK initialization
         auto* buffers = state.ecs_animation_registry->GetComponent<AnimationECS::AnimationBuffers>(entity);
+        bool ik_init_ready = false;
         if (buffers) {
             buffers->Initialize(&state.skeleton);
+
+            // Compute bind pose to initialize IK with proper transforms
+            ozz::animation::LocalToModelJob ltm_job;
+            ltm_job.skeleton = &state.skeleton;
+            ltm_job.input = state.skeleton.joint_rest_poses();
+            ltm_job.output = ozz::make_span(buffers->models);
+            ik_init_ready = ltm_job.Run();
         }
 
         // Determine which animation this instance should play
@@ -1784,6 +1992,29 @@ void InitializeECSInstances(ViewerState& state) {
                 const float duration = state.animations[animation_index].duration();
                 std::uniform_real_distribution<float> time_dist(0.0f, duration);
                 anim_state->current_time = time_dist(gen);
+            }
+        }
+
+        // Initialize IK system for this entity (using bind pose computed earlier)
+        if (ik_init_ready && buffers) {
+            auto& registry = state.ecs_animation_registry->GetRegistry();
+
+            // Initialize IK configuration with bind pose
+            AnimationECS::IKInitializationSystem::Initialize(
+                registry,
+                entity,
+                state.skeleton.joint_names(),
+                ozz::make_span(buffers->models));
+
+            // Debug: Check if IK was initialized
+            auto* ik_config = registry.try_get<AnimationECS::IKConfiguration>(entity);
+            if (ik_config && ik_config->IsInitialized()) {
+                Msg("* IK initialized for entity %d (legs: %s, arms: %s)",
+                    static_cast<int>(entity),
+                    ik_config->HasLegIK() ? "yes" : "no",
+                    ik_config->HasArmIK() ? "yes" : "no");
+            } else {
+                Msg("! IK initialization failed for entity %d", static_cast<int>(entity));
             }
         }
     }
@@ -2180,6 +2411,7 @@ int main(int argc, const char** argv) {
             DrawBundleInspector(state, renderer, now_seconds);
             DrawRenderingPanel(state, renderer);
             DrawAnimationPanel(state, renderer);
+            DrawIKPanel(state, renderer);
             DrawPerformancePanel(state);
             if (state.show_demo_window) {
                 ImGui::ShowDemoWindow(&state.show_demo_window);
