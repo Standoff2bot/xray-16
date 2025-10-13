@@ -79,6 +79,16 @@ public:
      */
     [[nodiscard]] IPLSource GetSource() const { return m_source; }
 
+    struct DirectMetrics
+    {
+        float occlusion[3]{};
+        float transmission[3]{};
+        float distanceAttenuation{ 1.0f };
+        bool valid{ false };
+    };
+
+    [[nodiscard]] const DirectMetrics& GetDirectMetrics() const { return m_directMetrics; }
+
 private:
     // Steam Audio handles
     IPLContext m_context{};
@@ -100,6 +110,8 @@ private:
     // Settings
     IPLAudioSettings m_audioSettings{};
     int m_numChannels{ 1 };
+
+    DirectMetrics m_directMetrics{};
 };
 
 } // namespace SteamAudio

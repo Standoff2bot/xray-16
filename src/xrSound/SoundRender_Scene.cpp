@@ -12,7 +12,10 @@
 #ifdef USE_STEAMAUDIO
 #include "SteamAudio/SteamAudioScene.h"
 #include "SteamAudio/SteamAudioContext.h"
+#include "SteamAudio/SteamAudioSource.h"
 #endif
+
+#include <algorithm>
 
 CSoundRender_Scene::CSoundRender_Scene()
 {
@@ -331,6 +334,41 @@ float CSoundRender_Scene::get_occlusion_to(const Fvector& hear_pt, const Fvector
     ZoneScoped;
 
     float occ_value = 1.f;
+
+#ifdef USE_STEAMAUDIO
+    if (psSoundFlags.test(ss_UseSteamAudio) && m_steamAudioScene && m_steamAudioScene->IsValid())
+    {
+        const float matchRadiusSq = 0.05f * 0.05f;
+
+        for (const auto emitter : s_emitters)
+        {
+            if (!emitter)
+                continue;
+            if (emitter->is_2D())
+                continue;
+            if (!emitter->GetSteamAudioSource() || !emitter->GetSteamAudioSource()->IsValid())
+                continue;
+
+            const auto distSq = emitter->p_source.position.distance_to_sqr(snd_pt);
+            if (distSq > matchRadiusSq)
+                continue;
+
+            const auto& metrics = emitter->GetSteamAudioSource()->GetDirectMetrics();
+            if (!metrics.valid)
+                continue;
+
+            const float averageOcclusion = std::clamp((metrics.occlusion[0] + metrics.occlusion[1] + metrics.occlusion[2]) / 3.0f, 0.0f, 1.0f);
+            const float averageTransmission = std::clamp((metrics.transmission[0] + metrics.transmission[1] + metrics.transmission[2]) / 3.0f, 0.0f, 1.0f);
+            const float occStrength = std::clamp(psSteamAudioOcclusionStrength, 0.0f, 5.0f);
+            const float transStrength = std::clamp(psSteamAudioTransmissionStrength, 0.0f, 5.0f);
+            const float weightedOcclusion = std::clamp(averageOcclusion * occStrength, 0.0f, 1.0f);
+            const float weightedTransmission = std::clamp(averageTransmission * transStrength, 0.0f, 1.0f);
+            const float effectiveOcclusion = weightedOcclusion * (1.0f - weightedTransmission);
+            const float scaled = 1.0f - (effectiveOcclusion * psSoundOcclusionScale);
+            return std::clamp(scaled, 0.0f, 1.0f);
+        }
+    }
+#endif
 
     if (nullptr != geom_SOM)
     {

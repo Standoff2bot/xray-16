@@ -39,6 +39,12 @@ XRSOUND_API float psSoundVFactor = 1.0f;
 XRSOUND_API float psSoundVMusic = 1.f;
 XRSOUND_API int psSoundCacheSizeMB = 32;
 
+#ifdef USE_STEAMAUDIO
+XRSOUND_API float psSteamAudioOcclusionStrength = 1.0f;
+XRSOUND_API float psSteamAudioTransmissionStrength = 1.0f;
+XRSOUND_API float psSteamAudioDistanceBlend = 1.0f;
+#endif
+
 CSoundRender_Core* SoundRender = nullptr;
 
 CSoundRender_Core::CSoundRender_Core(CSoundManager& p)

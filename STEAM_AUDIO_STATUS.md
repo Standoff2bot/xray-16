@@ -212,7 +212,7 @@ None.
   - [x] Add `snd_steam_audio_hrtf` console variable
 
 - [ ] **3.2** Occlusion replacement
-  - [ ] Use `IPLDirectEffect` for occlusion
+  - [x] Use `IPLDirectEffect` for occlusion
   - [ ] Replace `CSoundRender_Scene::get_occlusion_to()`
   - [ ] Preserve `psSoundOcclusionScale` compatibility
   - [ ] Handle partial occlusion
@@ -236,6 +236,9 @@ None.
 - Per-emitter Steam Audio inputs now refresh every frame, feeding the simulator with up-to-date position/orientation data.
 - Mono emitters run through Steam Audio's binaural effect before OpenAL playback when `ss_SteamAudio_HRTF` is enabled, yielding stereo output.
 - Added runtime console toggles (`snd_steamaudio`, `snd_steamaudio_hrtf`) for quick A/B testing without recompiling.
+- Steam Audio direct occlusion now drives per-emitter attenuation; legacy raycast occlusion is only used as a fallback when Steam Audio data is unavailable.
+- Steam Audio transmission and distance attenuation metrics now inform emitter volume and AI occlusion queries, keeping non-audio systems in sync with the simulator.
+- Added tuning consoles `snd_steamaudio_occ_strength`, `snd_steamaudio_trans_strength`, and `snd_steamaudio_distance_blend` for runtime balancing of Steam Audio direct sound parameters.
 
 ### Testing Checklist
 

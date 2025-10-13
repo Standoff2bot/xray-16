@@ -6,6 +6,13 @@
 #include "SoundRender_Source.h"
 #include "SoundRender_Target.h"
 
+#ifdef USE_STEAMAUDIO
+#include "SteamAudio/SteamAudioSource.h"
+#endif
+
+#include <algorithm>
+#include <cmath>
+
 XRSOUND_API extern float psSoundCull;
 
 inline u32 calc_cursor(const float& fTimeStarted, float& fTime, const float& fTimeTotal, const float& fFreq, const SoundDataInfo& info) //--#SM+#--
@@ -367,9 +374,26 @@ bool CSoundRender_Emitter::update_culling(float dt)
             return FALSE;
         }
 
-        // Calc attenuated volume
-        float att = p_source.min_distance / (psSoundRolloff * dist);
-        clamp(att, 0.f, 1.f);
+        const float legacyAttBase = p_source.min_distance / (psSoundRolloff * dist);
+        float att = std::clamp(legacyAttBase, 0.0f, 1.0f);
+
+#ifdef USE_STEAMAUDIO
+        const SteamAudio::CSteamAudioSource::DirectMetrics* directMetrics = nullptr;
+        if (psSoundFlags.test(ss_UseSteamAudio) && m_steamAudioSource && m_steamAudioSource->IsValid() && !is_2D())
+        {
+            const auto& metrics = m_steamAudioSource->GetDirectMetrics();
+            if (metrics.valid)
+                directMetrics = &metrics;
+        }
+
+        if (directMetrics)
+        {
+            const float steamAtt = std::clamp(directMetrics->distanceAttenuation, 0.0f, 1.0f);
+            const float blend = std::clamp(psSteamAudioDistanceBlend, 0.0f, 1.0f);
+            att = std::clamp(std::lerp(att, steamAtt, blend), 0.0f, 1.0f);
+        }
+#endif
+
         const float fade_scale =
             bStopping || (att * p_source.base_volume * p_source.volume *
                                  (owner_data->s_type == st_Effect ? psSoundVEffects * psSoundVFactor : psSoundVMusic) <
@@ -378,10 +402,27 @@ bool CSoundRender_Emitter::update_culling(float dt)
             1.f;
         fade_volume += dt * 10.f * fade_scale;
 
-        // Update occlusion
-        const float occ = (owner_data->g_type == SOUND_TYPE_WORLD_AMBIENT) ?
-            1.0f :
-            scene->get_occlusion(p_source.position, .2f, occluder);
+        float occ = 1.0f;
+#ifdef USE_STEAMAUDIO
+        if (directMetrics && owner_data->g_type != SOUND_TYPE_WORLD_AMBIENT)
+        {
+            const float averageOcclusion = std::clamp((directMetrics->occlusion[0] + directMetrics->occlusion[1] + directMetrics->occlusion[2]) / 3.0f, 0.0f, 1.0f);
+            const float averageTransmission = std::clamp((directMetrics->transmission[0] + directMetrics->transmission[1] + directMetrics->transmission[2]) / 3.0f, 0.0f, 1.0f);
+            const float occStrength = std::clamp(psSteamAudioOcclusionStrength, 0.0f, 5.0f);
+            const float transStrength = std::clamp(psSteamAudioTransmissionStrength, 0.0f, 5.0f);
+            const float weightedOcclusion = std::clamp(averageOcclusion * occStrength, 0.0f, 1.0f);
+            const float weightedTransmission = std::clamp(averageTransmission * transStrength, 0.0f, 1.0f);
+            const float effectiveOcclusion = weightedOcclusion * (1.0f - weightedTransmission);
+            const float scaled = 1.0f - (effectiveOcclusion * psSoundOcclusionScale);
+            occ = std::clamp(scaled, 0.0f, 1.0f);
+        }
+        else
+#endif
+        {
+            occ = (owner_data->g_type == SOUND_TYPE_WORLD_AMBIENT) ?
+                1.0f :
+                scene->get_occlusion(p_source.position, .2f, occluder);
+        }
         volume_lerp(occluder_volume, occ, 1.f, dt);
         clamp(occluder_volume, 0.f, 1.f);
     }

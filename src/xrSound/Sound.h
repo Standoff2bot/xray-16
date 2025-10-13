@@ -52,6 +52,12 @@ XRSOUND_API extern int psSoundTargets;
 XRSOUND_API extern int psSoundCacheSizeMB;
 XRSOUND_API extern u32 snd_device_id;
 
+#ifdef USE_STEAMAUDIO
+XRSOUND_API extern float psSteamAudioOcclusionStrength;
+XRSOUND_API extern float psSteamAudioTransmissionStrength;
+XRSOUND_API extern float psSteamAudioDistanceBlend;
+#endif
+
 XRSOUND_API extern ISoundScene* DefaultSoundScene;
 
 // Flags

@@ -874,6 +874,9 @@ void CCC_Register()
 #ifdef USE_STEAMAUDIO
     CMD3(CCC_Mask, "snd_steamaudio", &psSoundFlags, ss_UseSteamAudio);
     CMD3(CCC_Mask, "snd_steamaudio_hrtf", &psSoundFlags, ss_SteamAudio_HRTF);
+    CMD4(CCC_Float, "snd_steamaudio_occ_strength", &psSteamAudioOcclusionStrength, 0.0f, 5.0f);
+    CMD4(CCC_Float, "snd_steamaudio_trans_strength", &psSteamAudioTransmissionStrength, 0.0f, 5.0f);
+    CMD4(CCC_Float, "snd_steamaudio_distance_blend", &psSteamAudioDistanceBlend, 0.0f, 1.0f);
 #endif
     CMD4(CCC_Integer, "snd_targets", &psSoundTargets, 4, 256);
     CMD4(CCC_Integer, "snd_cache_size", &psSoundCacheSizeMB, 4, 64);

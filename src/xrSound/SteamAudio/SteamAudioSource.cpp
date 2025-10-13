@@ -145,6 +145,8 @@ void CSteamAudioSource::UpdateInputs(const Fvector& position, const Fvector& ahe
 
 void CSteamAudioSource::ApplyDirectEffect(float* inputBuffer, float* outputBuffer, int numSamples)
 {
+    m_directMetrics.valid = false;
+
     if (!m_directEffect || !m_source)
     {
         // No processing available, just copy input to output
@@ -163,6 +165,12 @@ void CSteamAudioSource::ApplyDirectEffect(float* inputBuffer, float* outputBuffe
         IPL_DIRECTEFFECTFLAGS_APPLYTRANSMISSION
     );
     iplSourceGetOutputs(m_source, IPL_SIMULATIONFLAGS_DIRECT, &outputs);
+
+    // Cache direct metrics for other systems (occlusion / transmission)
+    m_directMetrics.valid = true;
+    m_directMetrics.distanceAttenuation = outputs.direct.distanceAttenuation;
+    std::memcpy(m_directMetrics.occlusion, outputs.direct.occlusion, sizeof(m_directMetrics.occlusion));
+    std::memcpy(m_directMetrics.transmission, outputs.direct.transmission, sizeof(m_directMetrics.transmission));
 
     // Deinterleave input buffer
     iplAudioBufferDeinterleave(m_context, inputBuffer, &m_inputBuffer);
