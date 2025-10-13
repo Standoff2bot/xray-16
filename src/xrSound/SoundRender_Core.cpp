@@ -86,11 +86,24 @@ void CSoundRender_Core::_initialize()
             Msg("* SOUND: SteamAudio: Initialized successfully (sample rate: %d, frame size: %d, latency: %.1fms)",
                 sampleRate, frameSize, (frameSize * 1000.0f) / sampleRate);
 
-            // Initialize material database
-            m_steamAudioMaterials = xr_new<SteamAudio::CSteamAudioMaterials>();
-
-            // Try to load custom materials from config (falls back to defaults if not found)
-            m_steamAudioMaterials->LoadFromConfig("sounds\\steam_audio_materials.ltx");
+            const bool useCustomMaterials = strstr(Core.Params, "-steamaudio_custom_materials") != nullptr;
+            if (useCustomMaterials)
+            {
+                m_steamAudioMaterials = xr_new<SteamAudio::CSteamAudioMaterials>();
+                if (m_steamAudioMaterials->LoadFromConfig("sounds\\steam_audio_materials.ltx"))
+                {
+                    Msg("* SOUND: SteamAudio: Loaded material overrides from steam_audio_materials.ltx");
+                }
+                else
+                {
+                    Msg("~ SOUND: SteamAudio: steam_audio_materials.ltx not found, reverting to xrMaterialSystem acoustics");
+                    xr_delete(m_steamAudioMaterials);
+                }
+            }
+            else
+            {
+                Msg("* SOUND: SteamAudio: Using xrMaterialSystem acoustics (enable -steamaudio_custom_materials for overrides)");
+            }
         }
     }
 #endif

@@ -152,7 +152,7 @@ None.
 - [x] **2.2** Material system implementation ✅ **COMPLETE**
   - [x] **Created `CSteamAudioMaterials` class** (`src/xrSound/SteamAudio/SteamAudioMaterials.h/cpp`)
   - [x] **Default material properties**: 9 common materials (concrete, metal, wood, glass, earth, etc.)
-  - [x] **Config file parsing**: Loads from `sounds/steam_audio_materials.ltx`
+  - [x] **Config file parsing**: Opt-in via `-steamaudio_custom_materials`, loads `sounds/steam_audio_materials.ltx`
   - [x] **Material lookup**: Maps X-Ray material names to Steam Audio properties
   - [x] **Fallback system**: Falls back to GMLib acoustics if material not found in database
   - [x] **Example config created**: `gamedata/sounds/steam_audio_materials.ltx`
@@ -175,9 +175,9 @@ None.
 **✅ Material System** (`CSteamAudioMaterials`):
 - **Purpose**: Maps X-Ray material names to Steam Audio acoustic properties
 - **Default materials**: Concrete, metal, wood, glass, earth, fabric, brick, asphalt, anomaly (9 materials)
-- **Configurable**: Loads custom materials from `sounds/steam_audio_materials.ltx`
+- **Configurable**: When `-steamaudio_custom_materials` is supplied, loads overrides from `sounds/steam_audio_materials.ltx`
 - **Fallback**: Uses GMLib acoustics if material not in database
-- **Integration**: Passed from `CSoundRender_Core` → `CSoundRender_Scene` → `CSteamAudioScene::LoadGeometry()`
+- **Integration**: Passed from `CSoundRender_Core` → `CSoundRender_Scene` → `CSteamAudioScene::LoadGeometry()` whenever overrides are enabled
 
 **Material Properties**:
 - Low/Mid/High frequency absorption (0.0-1.0)
@@ -558,10 +558,10 @@ snd_steam_audio_reflections 1  // Enable reflections
 - **MAJOR**: Phase 2 Geometry Integration **COMPLETE** (100%)
 - **NEW**: Created `CSteamAudioMaterials` class for acoustic material management
   - Default materials: 9 common materials (concrete, metal, wood, glass, earth, fabric, brick, asphalt, anomaly)
-  - Config file parser for `sounds/steam_audio_materials.ltx`
+  - Optional config parser (requires `-steamaudio_custom_materials`) for `sounds/steam_audio_materials.ltx`
   - Fallback system to GMLib acoustics
   - Material lookup by name with inheritance
-- **NEW**: Example config file created at `gamedata/sounds/steam_audio_materials.ltx`
+- **NEW**: Example override config at `gamedata/sounds/steam_audio_materials.ltx`
 - **INTEGRATION**: Materials passed from Core → Scene → Geometry loading
 - Updated CSteamAudioScene::LoadGeometry() to use material database
 - Updated CSoundRender_Scene::set_geometry_occ() to pass materials and check path baking flag
