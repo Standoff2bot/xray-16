@@ -310,6 +310,23 @@ void InstancedMeshRenderer::Render(VkCommandBuffer cmd,
         return;
     }
 
+    // Debug logging for multi-instance rendering (only log first time or when count changes)
+    static uint32_t last_logged_instance_count = 0;
+    if (instances.size() > 1 && instances.size() != last_logged_instance_count) {
+        Msg("=== InstancedMeshRenderer::Render Debug ===");
+        Msg("Instance count: %zu", instances.size());
+        Msg("Bone matrices: %zu (expected %zu per instance)", bone_matrices.size(), static_cast<size_t>(bones_per_instance_));
+        for (size_t i = 0; i < std::min(size_t(4), instances.size()); ++i) {
+            const auto& inst = instances[i];
+            Msg("Instance %zu: transform pos=[%.2f, %.2f, %.2f], bone_offset=%u", i,
+                ozz::math::GetX(inst.transform.cols[3]),
+                ozz::math::GetY(inst.transform.cols[3]),
+                ozz::math::GetZ(inst.transform.cols[3]),
+                inst.bone_matrix_offset);
+        }
+        last_logged_instance_count = static_cast<uint32_t>(instances.size());
+    }
+
     device_->WaitIdle();
 
     UpdateUniforms(view_proj);

@@ -60,6 +60,19 @@ constexpr double kStatusMessageDuration = 6.0;
 // Global flag to block camera input while dragging gizmos
 static bool g_is_dragging_gizmo = false;
 
+// Helper function: Transform a point from model space to world space
+inline ozz::math::Float3 TransformPoint(const ozz::math::Float4x4& transform,
+                                        const ozz::math::Float3& point) {
+    ozz::math::SimdFloat4 p = ozz::math::simd_float4::Load(
+        point.x, point.y, point.z, 1.0f);
+    ozz::math::SimdFloat4 result = transform * p;
+    return ozz::math::Float3{
+        ozz::math::GetX(result),
+        ozz::math::GetY(result),
+        ozz::math::GetZ(result)
+    };
+}
+
 // Forward declarations
 struct ViewerState;
 void InitializeECSInstances(ViewerState& state);
@@ -1644,6 +1657,9 @@ void RenderECSIKGizmos(ViewerState& state, VulkanRenderer& renderer) {
             continue;
         }
 
+        // Get the instance transform for this entity (for multi-instance rendering)
+        const ozz::math::Float4x4& instance_transform = gizmo_state.instance_transform;
+
         // Helper to render a single gizmo
         auto render_gizmo = [&](const AnimationECS::IKGizmoState::ChainGizmo& gizmo,
                                const AnimationECS::LimbIKChain& chain,
@@ -1668,7 +1684,10 @@ void RenderECSIKGizmos(ViewerState& state, VulkanRenderer& renderer) {
                     ozz::math::Float4{0.8f, 0.0f, 0.0f, 0.6f};   // Red for arms
             }
 
-            debug_renderer.DrawSphere(gizmo.position, gizmo.radius, color);
+            // Transform gizmo position from model space to world space using instance transform
+            ozz::math::Float3 world_position = TransformPoint(instance_transform, gizmo.position);
+
+            debug_renderer.DrawSphere(world_position, gizmo.radius, color);
         };
 
         // Render all gizmos for this entity
@@ -2410,6 +2429,9 @@ void InitializeECSInstances(ViewerState& state) {
                 const float duration = state.animations[animation_index].duration();
                 std::uniform_real_distribution<float> time_dist(0.0f, duration);
                 anim_state->current_time = time_dist(gen);
+            } else {
+                // IMPORTANT: Reset to 0 when not randomizing (don't keep old value)
+                anim_state->current_time = 0.0f;
             }
         }
 
@@ -2471,8 +2493,10 @@ void RenderECSInstances(ViewerState& state, VulkanRenderer& renderer) {
     state.render_skeleton_transforms_buffer.resize(state.instance_count);
     state.render_bone_matrices_buffer.resize(state.instance_count * bones_per_instance);
 
-    // Get the mesh world transform (includes rotation from UpdateMeshAnimation)
-    const ozz::math::Float4x4 mesh_world_transform = renderer.GetMeshWorldTransform();
+    // For ECS multi-instance rendering, we don't use mesh_world_transform for positioning
+    // Grid positioning is absolute, not relative to a base transform
+    // Only use identity (or rotation if needed in the future)
+    const ozz::math::Float4x4 mesh_world_transform = ozz::math::Float4x4::identity();
 
     // Get mesh data for skinning (read-only, thread-safe)
     const auto& joint_remaps = renderer.GetMeshJointRemaps();
@@ -2510,6 +2534,12 @@ void RenderECSInstances(ViewerState& state, VulkanRenderer& renderer) {
         // Get buffers for this instance from ECS
         auto entity = state.instance_entities[i];
         auto* buffers = state.ecs_animation_registry->GetComponent<AnimationECS::AnimationBuffers>(entity);
+
+        // Store instance transform in IKGizmoState for multi-instance gizmo rendering
+        auto* gizmo_state = state.ecs_animation_registry->GetComponent<AnimationECS::IKGizmoState>(entity);
+        if (gizmo_state) {
+            gizmo_state->instance_transform = instance_transform;
+        }
 
         if (buffers && buffers->IsInitialized()) {
             // Add instance data at indexed position
@@ -2549,6 +2579,23 @@ void RenderECSInstances(ViewerState& state, VulkanRenderer& renderer) {
         xr_vector<int> indices(state.instance_count);
         std::iota(indices.begin(), indices.end(), 0);
         xr_parallel_for_each(indices, render_prep_lambda);
+    }
+
+    // Debug logging for instance transforms (only log first time or when count changes)
+    static int last_logged_count = 0;
+    if (state.instance_count != last_logged_count && state.instance_count > 1) {
+        Msg("=== RenderECSInstances Debug ===");
+        Msg("Instance count: %d", state.instance_count);
+        Msg("Transform buffer size: %zu", state.render_skeleton_transforms_buffer.size());
+        for (int i = 0; i < std::min(4, (int)state.render_instance_buffer.size()); ++i) {
+            const auto& inst = state.render_instance_buffer[i];
+            const auto& xform = state.render_skeleton_transforms_buffer[i];
+            Msg("Instance %d transform: [%.2f, %.2f, %.2f]", i,
+                ozz::math::GetX(xform.cols[3]),
+                ozz::math::GetY(xform.cols[3]),
+                ozz::math::GetZ(xform.cols[3]));
+        }
+        last_logged_count = state.instance_count;
     }
 
     // Pass ECS instances to VulkanRenderer to be rendered

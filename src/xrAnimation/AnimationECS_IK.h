@@ -115,6 +115,9 @@ struct IKGizmoState
     ChainGizmo left_arm_gizmo;
     ChainGizmo right_arm_gizmo;
 
+    // Instance transform (for multi-instance rendering)
+    ozz::math::Float4x4 instance_transform{ozz::math::Float4x4::identity()};
+
     // Global dragging state for this entity
     int dragged_chain_index{-1};  // -1=none, 0=left_leg, 1=right_leg, 2=left_arm, 3=right_arm
     ozz::math::Float3 drag_start_offset{0.f, 0.f, 0.f};
