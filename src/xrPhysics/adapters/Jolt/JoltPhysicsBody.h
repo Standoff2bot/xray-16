@@ -1,22 +1,26 @@
 #pragma once
 
 #include "../IPhysicsAdapter.h"
+#include "xrCommon/xr_vector.h"
 
 #ifdef XRPHYSICS_JOLT
 
 namespace JPH
 {
-    class Body;
     class BodyID;
+    class PhysicsSystem;
 }
+
+class JoltPhysicsWorld;
+class JoltPhysicsShape;
 
 class JoltPhysicsBody : public IPhysicsBody
 {
 public:
-    JoltPhysicsBody();
+    JoltPhysicsBody(JoltPhysicsWorld* world, const JPH::BodyID& body_id, PhysicsBodyType type);
     virtual ~JoltPhysicsBody();
 
-    // IPhysicsBody implementation - stubs for now
+    // IPhysicsBody implementation
     PhysicsBodyType GetType() const override;
     void SetType(PhysicsBodyType type) override;
 
@@ -69,10 +73,18 @@ public:
     void SetGravityEnabled(bool enabled) override;
     bool IsGravityEnabled() const override;
 
+    // Internal accessors
+    const JPH::BodyID& GetBodyID() const { return m_body_id; }
+
 private:
-    JPH::Body* m_body;
+    JoltPhysicsWorld* m_world;
+    JPH::BodyID m_body_id;
+    PhysicsBodyType m_type;
     void* m_user_data;
     ICollisionCallback* m_collision_callback;
+    xr_vector<IPhysicsShape*> m_shapes;
+    float m_friction;
+    float m_restitution;
 };
 
 #endif // XRPHYSICS_JOLT

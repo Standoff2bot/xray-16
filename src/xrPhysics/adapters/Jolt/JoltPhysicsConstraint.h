@@ -4,10 +4,22 @@
 
 #ifdef XRPHYSICS_JOLT
 
+namespace JPH
+{
+    class Constraint;
+    class TwoBodyConstraint;
+}
+
+class JoltPhysicsWorld;
+
 class JoltPhysicsConstraint : public IPhysicsConstraint
 {
 public:
-    JoltPhysicsConstraint();
+    JoltPhysicsConstraint(JoltPhysicsWorld* world,
+                          JPH::TwoBodyConstraint* constraint,
+                          PhysicsConstraintType type,
+                          IPhysicsBody* body1,
+                          IPhysicsBody* body2);
     virtual ~JoltPhysicsConstraint();
 
     PhysicsConstraintType GetType() const override;
@@ -36,12 +48,24 @@ public:
     void Disable() override;
     bool IsEnabled() const override;
 
+    // Internal accessors
+    JPH::TwoBodyConstraint* GetJoltConstraint() const { return m_constraint; }
+
 private:
+    JoltPhysicsWorld* m_world;
+    JPH::TwoBodyConstraint* m_constraint;
     PhysicsConstraintType m_type;
     IPhysicsBody* m_body1;
     IPhysicsBody* m_body2;
     bool m_enabled;
-    bool m_broken;
+    float m_break_force;
+    float m_break_torque;
+
+    // Cached parameters (Jolt constraints are immutable after creation for many properties)
+    Fvector m_anchor;
+    Fvector m_axis[3];
+    float m_limits_low[3];
+    float m_limits_high[3];
 };
 
 #endif // XRPHYSICS_JOLT
