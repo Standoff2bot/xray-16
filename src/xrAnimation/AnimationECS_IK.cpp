@@ -427,7 +427,7 @@ void IKSolverSystem::Update(entt::registry& registry)
 
         auto solve_and_rebuild_limb = [&](LimbIKChain& chain, const IKConfiguration::IKParams& params)
         {
-            if (!chain.Valid() || !chain.enabled)
+            if (!chain.Valid())
                 return;
 
             // Compute target position first
@@ -438,9 +438,13 @@ void IKSolverSystem::Update(entt::registry& registry)
                 ik_config.crouch_offset,
                 ik_config.crouch_affects_arms);
 
-            // Always set debug target so gizmos work properly
+            // Always set debug target so gizmos work properly (even when disabled)
             chain.debug_target = target;
             chain.debug_target_valid = true;
+
+            // If chain is disabled, don't actually solve IK
+            if (!chain.enabled)
+                return;
 
             // Check if target offset is effectively zero (avoid IK on trivial cases)
             const float offset_len_sq = chain.target_offset.x * chain.target_offset.x +
@@ -523,6 +527,329 @@ void IKDebugSystem::RenderDebugInfo(const IKConfiguration& ik_config,
 {
     // TODO: Implement debug rendering
     // This would draw gizmos for IK targets, chains, etc.
+}
+
+//=============================================================================
+// IKGizmoSystem Implementation
+//=============================================================================
+
+void IKGizmoSystem::UpdateGizmoPositions(entt::registry& registry)
+{
+    // Update gizmo positions from IK chain debug targets
+    auto view = registry.view<IKConfiguration, IKGizmoState>();
+
+    for (auto entity : view)
+    {
+        auto& ik_config = view.get<IKConfiguration>(entity);
+        auto& gizmo_state = view.get<IKGizmoState>(entity);
+
+        if (!gizmo_state.enabled || !ik_config.IsInitialized())
+            continue;
+
+        // Update each chain's gizmo position from debug target
+        auto update_chain_gizmo = [](const LimbIKChain& chain, IKGizmoState::ChainGizmo& gizmo)
+        {
+            if (chain.Valid() && chain.debug_target_valid)
+            {
+                gizmo.position = chain.debug_target;
+            }
+        };
+
+        update_chain_gizmo(ik_config.left_leg, gizmo_state.left_leg_gizmo);
+        update_chain_gizmo(ik_config.right_leg, gizmo_state.right_leg_gizmo);
+        update_chain_gizmo(ik_config.left_arm, gizmo_state.left_arm_gizmo);
+        update_chain_gizmo(ik_config.right_arm, gizmo_state.right_arm_gizmo);
+    }
+}
+
+bool IKGizmoSystem::HandleMouseInteraction(
+    entt::registry& registry,
+    float mouse_x, float mouse_y,
+    int viewport_width, int viewport_height,
+    const ozz::math::Float4x4& view_matrix,
+    const ozz::math::Float4x4& proj_matrix,
+    bool mouse_button_down,
+    bool imgui_wants_mouse)
+{
+    // Skip if ImGui wants the mouse
+    if (imgui_wants_mouse)
+        return false;
+
+    // Helper: Screen to world ray
+    auto screen_to_world_ray = [&](ozz::math::Float3* out_origin, ozz::math::Float3* out_direction)
+    {
+        const float ndc_x = (2.0f * mouse_x) / viewport_width - 1.0f;
+        const float ndc_y = (2.0f * mouse_y) / viewport_height - 1.0f;
+
+        const ozz::math::Float4x4 view_proj = proj_matrix * view_matrix;
+        const ozz::math::Float4x4 inv_view_proj = ozz::math::Invert(view_proj);
+
+        ozz::math::SimdFloat4 near_ndc = ozz::math::simd_float4::Load(ndc_x, ndc_y, 0.0f, 1.0f);
+        ozz::math::SimdFloat4 far_ndc = ozz::math::simd_float4::Load(ndc_x, ndc_y, 1.0f, 1.0f);
+
+        ozz::math::SimdFloat4 near_world_h = inv_view_proj * near_ndc;
+        ozz::math::SimdFloat4 far_world_h = inv_view_proj * far_ndc;
+
+        const float near_w = ozz::math::GetW(near_world_h);
+        const float far_w = ozz::math::GetW(far_world_h);
+        const float safe_near_w = (std::abs(near_w) < 1e-6f) ? 1.0f : near_w;
+        const float safe_far_w = (std::abs(far_w) < 1e-6f) ? 1.0f : far_w;
+
+        ozz::math::Float3 near_world{
+            ozz::math::GetX(near_world_h) / safe_near_w,
+            ozz::math::GetY(near_world_h) / safe_near_w,
+            ozz::math::GetZ(near_world_h) / safe_near_w
+        };
+
+        ozz::math::Float3 far_world{
+            ozz::math::GetX(far_world_h) / safe_far_w,
+            ozz::math::GetY(far_world_h) / safe_far_w,
+            ozz::math::GetZ(far_world_h) / safe_far_w
+        };
+
+        *out_origin = near_world;
+        out_direction->x = far_world.x - near_world.x;
+        out_direction->y = far_world.y - near_world.y;
+        out_direction->z = far_world.z - near_world.z;
+
+        const float len = std::sqrt(out_direction->x * out_direction->x +
+                                   out_direction->y * out_direction->y +
+                                   out_direction->z * out_direction->z);
+        if (len > 1e-6f) {
+            out_direction->x /= len;
+            out_direction->y /= len;
+            out_direction->z /= len;
+        }
+    };
+
+    // Helper: Ray-sphere intersection
+    auto ray_sphere_intersection = [](
+        const ozz::math::Float3& ray_origin,
+        const ozz::math::Float3& ray_direction,
+        const ozz::math::Float3& sphere_center,
+        float sphere_radius,
+        float* out_distance = nullptr) -> bool
+    {
+        ozz::math::Float3 oc;
+        oc.x = ray_origin.x - sphere_center.x;
+        oc.y = ray_origin.y - sphere_center.y;
+        oc.z = ray_origin.z - sphere_center.z;
+
+        const float a = ray_direction.x * ray_direction.x +
+                       ray_direction.y * ray_direction.y +
+                       ray_direction.z * ray_direction.z;
+        const float b = 2.0f * (oc.x * ray_direction.x +
+                               oc.y * ray_direction.y +
+                               oc.z * ray_direction.z);
+        const float c = oc.x * oc.x + oc.y * oc.y + oc.z * oc.z - sphere_radius * sphere_radius;
+
+        const float discriminant = b * b - 4.0f * a * c;
+        if (discriminant < 0.0f)
+            return false;
+
+        const float sqrt_disc = std::sqrt(discriminant);
+        float t = (-b - sqrt_disc) / (2.0f * a);
+        if (t < 0.0f)
+            t = (-b + sqrt_disc) / (2.0f * a);
+
+        if (t < 0.0f)
+            return false;
+
+        if (out_distance)
+            *out_distance = t;
+        return true;
+    };
+
+    // Compute ray
+    ozz::math::Float3 ray_origin, ray_direction;
+    screen_to_world_ray(&ray_origin, &ray_direction);
+
+    bool any_interaction = false;
+
+    // Process all entities with IK gizmos
+    auto view = registry.view<IKConfiguration, IKGizmoState, AnimationBuffers>();
+
+    for (auto entity : view)
+    {
+        auto& ik_config = view.get<IKConfiguration>(entity);
+        auto& gizmo_state = view.get<IKGizmoState>(entity);
+        auto& buffers = view.get<AnimationBuffers>(entity);
+
+        if (!gizmo_state.enabled || !ik_config.IsInitialized())
+            continue;
+
+        // Reset hover states
+        gizmo_state.left_leg_gizmo.is_hovered = false;
+        gizmo_state.right_leg_gizmo.is_hovered = false;
+        gizmo_state.left_arm_gizmo.is_hovered = false;
+        gizmo_state.right_arm_gizmo.is_hovered = false;
+
+        // If currently dragging, handle drag update
+        if (gizmo_state.dragged_chain_index >= 0 && mouse_button_down)
+        {
+            // Find the chain being dragged
+            LimbIKChain* chain = nullptr;
+            switch (gizmo_state.dragged_chain_index) {
+                case 0: chain = &ik_config.left_leg; break;
+                case 1: chain = &ik_config.right_leg; break;
+                case 2: chain = &ik_config.left_arm; break;
+                case 3: chain = &ik_config.right_arm; break;
+            }
+
+            if (chain && chain->Valid())
+            {
+                // Project ray to drag plane
+                ozz::math::Float3 new_pos;
+                new_pos.x = ray_origin.x + ray_direction.x * gizmo_state.drag_distance_from_camera;
+                new_pos.y = ray_origin.y + ray_direction.y * gizmo_state.drag_distance_from_camera;
+                new_pos.z = ray_origin.z + ray_direction.z * gizmo_state.drag_distance_from_camera;
+
+                // Apply drag offset
+                new_pos.x += gizmo_state.drag_start_offset.x;
+                new_pos.y += gizmo_state.drag_start_offset.y;
+                new_pos.z += gizmo_state.drag_start_offset.z;
+
+                // Update target offset
+                IKSolverSystem::ApplyDraggedTarget(*chain, new_pos, ozz::make_span(buffers.models));
+
+                any_interaction = true;
+            }
+        }
+        else if (mouse_button_down)
+        {
+            // Start drag - find closest gizmo
+            struct GizmoHit {
+                int index;
+                float distance;
+                IKGizmoState::ChainGizmo* gizmo;
+                LimbIKChain* chain;
+            };
+
+            GizmoHit closest_hit{-1, std::numeric_limits<float>::max(), nullptr, nullptr};
+
+            auto check_gizmo = [&](int index, IKGizmoState::ChainGizmo& gizmo, LimbIKChain& chain)
+            {
+                // Allow interaction with any valid chain (even if disabled) so users can enable by dragging
+                if (!chain.Valid() || !chain.debug_target_valid)
+                    return;
+
+                float distance;
+                if (ray_sphere_intersection(ray_origin, ray_direction, gizmo.position, gizmo.radius, &distance))
+                {
+                    if (distance < closest_hit.distance)
+                    {
+                        closest_hit.index = index;
+                        closest_hit.distance = distance;
+                        closest_hit.gizmo = &gizmo;
+                        closest_hit.chain = &chain;
+                    }
+                }
+            };
+
+            check_gizmo(0, gizmo_state.left_leg_gizmo, ik_config.left_leg);
+            check_gizmo(1, gizmo_state.right_leg_gizmo, ik_config.right_leg);
+            check_gizmo(2, gizmo_state.left_arm_gizmo, ik_config.left_arm);
+            check_gizmo(3, gizmo_state.right_arm_gizmo, ik_config.right_arm);
+
+            if (closest_hit.index >= 0)
+            {
+                // Start dragging
+                gizmo_state.dragged_chain_index = closest_hit.index;
+                gizmo_state.drag_distance_from_camera = closest_hit.distance;
+                gizmo_state.drag_start_offset = {0.f, 0.f, 0.f}; // No offset initially
+
+                closest_hit.gizmo->is_dragging = true;
+
+                // Enable the chain when dragging starts (allows users to enable IK by dragging)
+                if (closest_hit.chain && !closest_hit.chain->enabled) {
+                    closest_hit.chain->enabled = true;
+                }
+
+                any_interaction = true;
+            }
+        }
+        else
+        {
+            // Released - stop dragging
+            if (gizmo_state.dragged_chain_index >= 0)
+            {
+                auto* gizmo = gizmo_state.GetChainGizmo(gizmo_state.dragged_chain_index);
+                if (gizmo)
+                    gizmo->is_dragging = false;
+
+                gizmo_state.dragged_chain_index = -1;
+            }
+
+            // Just hovering - check which gizmo is under mouse
+            auto check_hover = [&](IKGizmoState::ChainGizmo& gizmo, const LimbIKChain& chain)
+            {
+                // Allow hovering over any valid chain (even if disabled) to show it's interactive
+                if (!chain.Valid() || !chain.debug_target_valid)
+                    return;
+
+                if (ray_sphere_intersection(ray_origin, ray_direction, gizmo.position, gizmo.radius))
+                {
+                    gizmo.is_hovered = true;
+                    any_interaction = true;
+                }
+            };
+
+            check_hover(gizmo_state.left_leg_gizmo, ik_config.left_leg);
+            check_hover(gizmo_state.right_leg_gizmo, ik_config.right_leg);
+            check_hover(gizmo_state.left_arm_gizmo, ik_config.left_arm);
+            check_hover(gizmo_state.right_arm_gizmo, ik_config.right_arm);
+        }
+    }
+
+    return any_interaction;
+}
+
+void IKGizmoSystem::RenderGizmos(entt::registry& registry, void* debug_renderer_ptr)
+{
+    if (!debug_renderer_ptr)
+        return;
+
+    // Forward declare DebugRenderer to avoid header dependency
+    // Actual rendering must be done by the application (e.g., viewer)
+    // that has access to the DebugRenderer type
+
+    // This function signature uses void* to keep the ECS system independent
+    // of rendering implementation details. The calling code should cast
+    // debug_renderer_ptr to the appropriate type (e.g., DebugRenderer*)
+    // and call the appropriate rendering functions.
+
+    // See ozz_animation_viewer.cpp for example usage:
+    // IKGizmoSystem::RenderGizmos(registry, &renderer.GetDebugRenderer());
+}
+
+//=============================================================================
+// SkeletonDebugSystem Implementation
+//=============================================================================
+
+void SkeletonDebugSystem::RenderSkeletons(entt::registry& registry, void* debug_renderer_ptr)
+{
+    if (!debug_renderer_ptr)
+        return;
+
+    // This is a stub implementation - actual rendering must be done by the application
+    // The application should:
+    // 1. Cast debug_renderer_ptr to the appropriate type
+    // 2. Iterate over entities with SkeletonDebugState and AnimationBuffers
+    // 3. Use the debug renderer to draw skeleton lines based on the component settings
+    //
+    // See ozz_animation_viewer.cpp RenderECSSkeletonDebug() for example usage
+}
+
+void SkeletonDebugSystem::UpdateGlobalSettings(entt::registry& registry, bool show_skeleton_lines)
+{
+    // Update all entities with SkeletonDebugState
+    auto view = registry.view<SkeletonDebugState>();
+
+    for (auto entity : view)
+    {
+        auto& debug_state = view.get<SkeletonDebugState>(entity);
+        debug_state.show_skeleton_lines = show_skeleton_lines;
+    }
 }
 
 } // namespace AnimationECS

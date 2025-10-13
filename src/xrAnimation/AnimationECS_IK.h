@@ -95,6 +95,68 @@ struct IKConfiguration
     bool HasArmIK() const { return arm_ik_available; }
 };
 
+//-----------------------------------------------------------------------------
+// IKGizmoState Component
+// Per-entity gizmo interaction state for IK targets
+//-----------------------------------------------------------------------------
+struct IKGizmoState
+{
+    // Gizmo visual state per chain
+    struct ChainGizmo
+    {
+        ozz::math::Float3 position{0.f, 0.f, 0.f};  // World-space position
+        float radius{0.08f};                         // Visual radius
+        bool is_hovered{false};                      // Mouse hovering over gizmo
+        bool is_dragging{false};                     // Currently being dragged
+    };
+
+    ChainGizmo left_leg_gizmo;
+    ChainGizmo right_leg_gizmo;
+    ChainGizmo left_arm_gizmo;
+    ChainGizmo right_arm_gizmo;
+
+    // Global dragging state for this entity
+    int dragged_chain_index{-1};  // -1=none, 0=left_leg, 1=right_leg, 2=left_arm, 3=right_arm
+    ozz::math::Float3 drag_start_offset{0.f, 0.f, 0.f};
+    float drag_distance_from_camera{0.f};
+
+    // Settings
+    bool enabled{true};  // Master enable/disable for this entity's gizmos
+
+    ChainGizmo* GetChainGizmo(int index)
+    {
+        switch (index) {
+            case 0: return &left_leg_gizmo;
+            case 1: return &right_leg_gizmo;
+            case 2: return &left_arm_gizmo;
+            case 3: return &right_arm_gizmo;
+            default: return nullptr;
+        }
+    }
+};
+
+//-----------------------------------------------------------------------------
+// SkeletonDebugState Component
+// Per-entity skeleton visualization state
+//-----------------------------------------------------------------------------
+struct SkeletonDebugState
+{
+    // Visualization settings
+    bool show_skeleton_lines{true};     // Show bone hierarchy as lines
+    bool show_joint_positions{false};   // Show joint positions as spheres
+    bool show_bone_names{false};        // Show bone names as text labels
+    bool show_bone_axes{false};         // Show local axes at each bone
+
+    // Visual parameters
+    float line_width{2.0f};             // Width of skeleton lines
+    float joint_radius{0.02f};          // Radius of joint spheres
+    ozz::math::Float4 line_color{1.0f, 1.0f, 1.0f, 1.0f};   // RGBA color for skeleton lines
+    ozz::math::Float4 joint_color{1.0f, 0.5f, 0.0f, 1.0f};  // RGBA color for joints
+
+    // Master enable/disable
+    bool enabled{true};                 // Master toggle for this entity's debug visualization
+};
+
 //=============================================================================
 // IK SYSTEMS (Logic operating on components)
 //=============================================================================
@@ -204,6 +266,76 @@ public:
     /// </summary>
     static void RenderDebugInfo(const IKConfiguration& ik_config,
                                 ozz::span<const ozz::math::Float4x4> models);
+};
+
+//-----------------------------------------------------------------------------
+// IKGizmoSystem
+// Interactive gizmo system for IK target manipulation
+//-----------------------------------------------------------------------------
+class IKGizmoSystem
+{
+public:
+    /// <summary>
+    /// Update gizmo positions from IK chain targets (call after IK solving)
+    /// </summary>
+    /// <param name="registry">ECS registry</param>
+    static void UpdateGizmoPositions(entt::registry& registry);
+
+    /// <summary>
+    /// Handle mouse interaction with gizmos (hover, click, drag)
+    /// </summary>
+    /// <param name="registry">ECS registry</param>
+    /// <param name="mouse_x">Mouse X in screen coordinates</param>
+    /// <param name="mouse_y">Mouse Y in screen coordinates</param>
+    /// <param name="viewport_width">Viewport width</param>
+    /// <param name="viewport_height">Viewport height</param>
+    /// <param name="view_matrix">Camera view matrix</param>
+    /// <param name="proj_matrix">Camera projection matrix</param>
+    /// <param name="mouse_button_down">Is mouse button pressed</param>
+    /// <param name="imgui_wants_mouse">Does ImGui want to capture mouse</param>
+    /// <returns>True if gizmo is being interacted with</returns>
+    static bool HandleMouseInteraction(
+        entt::registry& registry,
+        float mouse_x, float mouse_y,
+        int viewport_width, int viewport_height,
+        const ozz::math::Float4x4& view_matrix,
+        const ozz::math::Float4x4& proj_matrix,
+        bool mouse_button_down,
+        bool imgui_wants_mouse);
+
+    /// <summary>
+    /// Render gizmos for all entities (call before scene rendering)
+    /// </summary>
+    /// <param name="registry">ECS registry</param>
+    /// <param name="debug_renderer">Debug renderer for drawing</param>
+    static void RenderGizmos(entt::registry& registry, void* debug_renderer);
+};
+
+//-----------------------------------------------------------------------------
+// SkeletonDebugSystem
+// Skeleton visualization system for debugging
+//-----------------------------------------------------------------------------
+class SkeletonDebugSystem
+{
+public:
+    /// <summary>
+    /// Render skeleton debug visualization for all entities
+    /// </summary>
+    /// <param name="registry">ECS registry</param>
+    /// <param name="debug_renderer">Debug renderer for drawing (application-specific)</param>
+    /// <remarks>
+    /// This is a stub that should be implemented at the application level.
+    /// The debug_renderer parameter should be cast to the appropriate type
+    /// (e.g., DebugRenderer* in ozz_animation_viewer).
+    /// </remarks>
+    static void RenderSkeletons(entt::registry& registry, void* debug_renderer);
+
+    /// <summary>
+    /// Update skeleton debug state from global settings
+    /// </summary>
+    /// <param name="registry">ECS registry</param>
+    /// <param name="show_skeleton_lines">Global setting for skeleton lines</param>
+    static void UpdateGlobalSettings(entt::registry& registry, bool show_skeleton_lines);
 };
 
 } // namespace AnimationECS

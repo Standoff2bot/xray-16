@@ -63,8 +63,6 @@ static bool g_is_dragging_gizmo = false;
 // Forward declarations
 struct ViewerState;
 void InitializeECSInstances(ViewerState& state);
-void InitializeRegularInstances(ViewerState& state);
-void UpdateRegularInstanceAnimations(ViewerState& state, float dt);
 
 struct AnimationInterval {
     float start = 0.0f;
@@ -492,29 +490,7 @@ std::vector<SkeletonLinePoint> BuildSkeletonLinePoints(const ozz::animation::Ske
 }
 
 // Per-instance animation state for regular (non-ECS) rendering
-struct RegularInstanceState {
-    int animation_index = -1;
-    float current_time = 0.0f;
-    float playback_speed = 1.0f;
-
-    // Animation buffers (similar to ECS AnimationBuffers)
-    ozz::animation::SamplingJob::Context context;
-    ozz::vector<ozz::math::SoaTransform> locals;
-    ozz::vector<ozz::math::Float4x4> models;
-
-    void Initialize(const ozz::animation::Skeleton* skeleton) {
-        if (!skeleton) return;
-        const int num_joints = skeleton->num_joints();
-        const int num_soa_joints = skeleton->num_soa_joints();
-        locals.resize(num_soa_joints);
-        models.resize(num_joints);
-        context.Resize(num_joints);
-    }
-
-    bool IsInitialized() const {
-        return !locals.empty() && !models.empty();
-    }
-};
+// RegularInstanceState removed - ECS is now the only multi-instance path
 
 struct ViewerState {
     GLFWwindow* window = nullptr;
@@ -560,13 +536,9 @@ struct ViewerState {
     bool show_ik_panel = true;
     bool show_performance_panel = true;
 
-    // ECS Multi-instance rendering
+    // ECS Multi-instance rendering (used when use_ecs_rendering = true)
     AnimationECS::AnimationRegistry* ecs_animation_registry = nullptr;
     std::vector<entt::entity> instance_entities;
-
-    // Regular (non-ECS) multi-instance rendering
-    // Use unique_ptr because SamplingJob::Context is non-copyable
-    xr_vector<xr_unique_ptr<RegularInstanceState>> regular_instances;
 
     int instance_count = 1;
     float instance_grid_spacing = 2.0f;
@@ -949,10 +921,9 @@ bool LoadBundleFromPath(const std::filesystem::path& bundle_path, ViewerState& s
     renderer.SetShowDebugOverlay(debug_ready);
     renderer.SetShowSkeletonLines(!debug_ready);
 
-    // Initialize multi-instance systems (both ECS and regular)
+    // Initialize ECS multi-instance system (used when use_ecs_rendering = true)
     if (state.skeleton.num_joints() > 0) {
         InitializeECSInstances(state);
-        InitializeRegularInstances(state);
     }
 
     return true;
@@ -1145,19 +1116,45 @@ void DrawAnimationPanel(ViewerState& state, VulkanRenderer& renderer) {
     ImGui::Separator();
 
     // Bind Pose / Play Animation toggle
+    // When using ECS, this controls AnimationState::is_playing
+    // When using VulkanRenderer, this controls show_bind_pose_
     bool show_bind_pose = renderer.GetShowBindPose();
     const char* button_label = show_bind_pose ? "Play Animation" : "Show Bind Pose";
     if (ImGui::Button(button_label, ImVec2(140, 0))) {
-        renderer.SetShowBindPose(!show_bind_pose);
+        bool new_bind_pose = !show_bind_pose;
+        renderer.SetShowBindPose(new_bind_pose);
+
+        // Update ECS entities to show/hide bind pose
+        if (state.use_ecs_rendering && state.ecs_animation_registry) {
+            auto& registry = state.ecs_animation_registry->GetRegistry();
+            auto state_view = registry.view<AnimationECS::AnimationState>();
+            for (auto entity : state_view) {
+                auto& anim_state = state_view.get<AnimationECS::AnimationState>(entity);
+                anim_state.is_playing = !new_bind_pose;  // Bind pose = stop playing
+            }
+        }
     }
 
     ImGui::Separator();
 
     // Play/Pause animation (also controllable via space bar)
+    // When using ECS, this controls AnimationState::is_playing
+    // When using VulkanRenderer, this controls animate_mesh_
     bool animate_mesh = renderer.GetAnimateMesh();
     const char* play_pause_label = animate_mesh ? "Pause (Space)" : "Play (Space)";
     if (ImGui::Button(play_pause_label, ImVec2(140, 0))) {
-        renderer.SetAnimateMesh(!animate_mesh);
+        bool new_animate = !animate_mesh;
+        renderer.SetAnimateMesh(new_animate);
+
+        // Update ECS entities to play/pause
+        if (state.use_ecs_rendering && state.ecs_animation_registry) {
+            auto& registry = state.ecs_animation_registry->GetRegistry();
+            auto state_view = registry.view<AnimationECS::AnimationState>();
+            for (auto entity : state_view) {
+                auto& anim_state = state_view.get<AnimationECS::AnimationState>(entity);
+                anim_state.is_playing = new_animate;
+            }
+        }
     }
 
 
@@ -1165,7 +1162,7 @@ void DrawAnimationPanel(ViewerState& state, VulkanRenderer& renderer) {
     if (ImGui::SliderFloat("Animation Speed", &animation_speed, 0.f, 6.0f, "%.2f")) {
         renderer.SetAnimationPlaybackSpeed(animation_speed);
 
-        // Also update ECS animation controllers if using ECS rendering
+        // Update ECS animation controllers to match
         if (state.use_ecs_rendering && state.ecs_animation_registry) {
             auto& registry = state.ecs_animation_registry->GetRegistry();
             auto controller_view = registry.view<AnimationECS::AnimationController>();
@@ -1205,6 +1202,12 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
     bool show_skeleton = renderer.GetShowSkeletonLines();
     if (ImGui::Checkbox("Show skeleton lines", &show_skeleton)) {
         renderer.SetShowSkeletonLines(show_skeleton);
+
+        // Update ECS skeleton debug state for all entities
+        if (state.ecs_animation_registry) {
+            auto& registry = state.ecs_animation_registry->GetRegistry();
+            AnimationECS::SkeletonDebugSystem::UpdateGlobalSettings(registry, show_skeleton);
+        }
     }
 
     bool show_mesh = renderer.GetShowSkinnedMesh();
@@ -1246,10 +1249,9 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
     if (state.instance_count > 1 && state.animations.size() > 1) {
         if (ImGui::Checkbox("Randomize animations per instance", &state.randomize_instance_animations)) {
             Msg("[ozz_animation_viewer] Randomize animations: %s", state.randomize_instance_animations ? "enabled" : "disabled");
-            // Reinitialize instances when toggling to apply changes
+            // Reinitialize ECS instances when toggling to apply changes
             if (state.skeleton.num_joints() > 0) {
                 InitializeECSInstances(state);
-                InitializeRegularInstances(state);
             }
         }
 
@@ -1267,10 +1269,9 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
     bool prev_ecs_mode = state.use_ecs_rendering;
     if (ImGui::Checkbox("Use ECS Animation System", &state.use_ecs_rendering)) {
         Msg("[ozz_animation_viewer] Rendering mode changed to: %s", state.use_ecs_rendering ? "ECS" : "Regular");
-        // Reinitialize instances when toggling mode to keep sync
+        // Reinitialize ECS instances when toggling mode to keep sync
         if (state.skeleton.num_joints() > 0) {
             InitializeECSInstances(state);
-            InitializeRegularInstances(state);
         }
     }
 
@@ -1328,7 +1329,8 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
 
 // Update IK gizmo positions from model-space bone matrices
 void UpdateIKGizmos(ViewerState& state) {
-    if (!state.use_ecs_rendering || !state.ecs_animation_registry) {
+    // IK gizmos only work with single instance for now
+    if (!state.use_ecs_rendering || !state.ecs_animation_registry || state.instance_count != 1) {
         state.ik_gizmos.clear();
         return;
     }
@@ -1622,6 +1624,61 @@ void HandleIKGizmoMouseInteraction(ViewerState& state, VulkanRenderer& renderer,
     }
 }
 
+// Render IK gizmos using ECS components
+void RenderECSIKGizmos(ViewerState& state, VulkanRenderer& renderer) {
+    if (!state.ik_gizmos_enabled || !state.ecs_animation_registry) {
+        return;
+    }
+
+    auto& registry = state.ecs_animation_registry->GetRegistry();
+    auto& debug_renderer = renderer.GetDebugRenderer();
+
+    // Iterate over all entities with IKGizmoState and IKConfiguration
+    auto view = registry.view<AnimationECS::IKGizmoState, AnimationECS::IKConfiguration>();
+
+    for (auto entity : view) {
+        const auto& gizmo_state = view.get<AnimationECS::IKGizmoState>(entity);
+        const auto& ik_config = view.get<AnimationECS::IKConfiguration>(entity);
+
+        if (!gizmo_state.enabled || !ik_config.IsInitialized()) {
+            continue;
+        }
+
+        // Helper to render a single gizmo
+        auto render_gizmo = [&](const AnimationECS::IKGizmoState::ChainGizmo& gizmo,
+                               const AnimationECS::LimbIKChain& chain,
+                               bool is_leg) {
+            if (!chain.Valid() || !chain.debug_target_valid) {
+                return;
+            }
+
+            // Color based on state
+            ozz::math::Float4 color;
+            if (gizmo.is_dragging) {
+                color = ozz::math::Float4{1.0f, 1.0f, 0.0f, 0.8f};  // Yellow when dragging
+            } else if (gizmo.is_hovered) {
+                color = ozz::math::Float4{0.0f, 1.0f, 1.0f, 0.7f};  // Cyan when hovered
+            } else if (!chain.enabled) {
+                // Disabled chains render with lower opacity (gray/faded)
+                color = ozz::math::Float4{0.5f, 0.5f, 0.5f, 0.3f};  // Gray, semi-transparent
+            } else {
+                // Color by type
+                color = is_leg ?
+                    ozz::math::Float4{0.0f, 0.8f, 0.0f, 0.6f} :  // Green for legs
+                    ozz::math::Float4{0.8f, 0.0f, 0.0f, 0.6f};   // Red for arms
+            }
+
+            debug_renderer.DrawSphere(gizmo.position, gizmo.radius, color);
+        };
+
+        // Render all gizmos for this entity
+        render_gizmo(gizmo_state.left_leg_gizmo, ik_config.left_leg, true);
+        render_gizmo(gizmo_state.right_leg_gizmo, ik_config.right_leg, true);
+        render_gizmo(gizmo_state.left_arm_gizmo, ik_config.left_arm, false);
+        render_gizmo(gizmo_state.right_arm_gizmo, ik_config.right_arm, false);
+    }
+}
+
 void DrawIKPanel(ViewerState& state, VulkanRenderer& renderer) {
     if (!state.show_ik_panel) return;
 
@@ -1630,13 +1687,21 @@ void DrawIKPanel(ViewerState& state, VulkanRenderer& renderer) {
         return;
     }
 
-    // Only show IK controls when using ECS and have at least one instance
+    // Only show IK controls when using ECS
     if (!state.use_ecs_rendering || state.instance_count < 1 || !state.ecs_animation_registry) {
-        ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "IK requires ECS mode with instances");
-        ImGui::Text("Enable 'Use ECS' in Rendering panel");
+        if (!state.use_ecs_rendering) {
+            ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "IK requires ECS mode");
+            ImGui::Text("Enable 'Use ECS' in Rendering panel");
+        } else if (state.instance_count < 1) {
+            ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "IK requires at least one instance");
+        } else {
+            ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "IK initialization failed");
+        }
         ImGui::End();
         return;
     }
+
+    // Note: Multi-instance IK is now supported via per-entity IKGizmoState components!
 
     ImGui::SeparatorText("IK System Status");
 
@@ -1856,6 +1921,12 @@ void DrawMenuBar(ViewerState& state, VulkanRenderer& renderer) {
         bool show_skeleton = renderer.GetShowSkeletonLines();
         if (ImGui::MenuItem("Show Skeleton Lines", nullptr, &show_skeleton, renderer.HasSkeletonLoaded())) {
             renderer.SetShowSkeletonLines(show_skeleton);
+
+            // Update ECS skeleton debug state for all entities
+            if (state.ecs_animation_registry) {
+                auto& registry = state.ecs_animation_registry->GetRegistry();
+                AnimationECS::SkeletonDebugSystem::UpdateGlobalSettings(registry, show_skeleton);
+            }
         }
 
         bool show_mesh = renderer.GetShowSkinnedMesh();
@@ -2360,9 +2431,18 @@ void InitializeECSInstances(ViewerState& state) {
                     static_cast<int>(entity),
                     ik_config->HasLegIK() ? "yes" : "no",
                     ik_config->HasArmIK() ? "yes" : "no");
+
+                // Add IKGizmoState component for interactive IK control
+                auto& gizmo_state = registry.emplace<AnimationECS::IKGizmoState>(entity);
+                gizmo_state.enabled = true;  // Enable gizmos by default
             } else {
                 Msg("! IK initialization failed for entity %d", static_cast<int>(entity));
             }
+
+            // Add SkeletonDebugState component for debug visualization
+            auto& debug_state = registry.emplace<AnimationECS::SkeletonDebugState>(entity);
+            debug_state.show_skeleton_lines = true;  // Match global default
+            debug_state.enabled = true;
         }
     }
 
@@ -2370,176 +2450,9 @@ void InitializeECSInstances(ViewerState& state) {
     Msg("* Initialized %d ECS instances", state.instance_count);
 }
 
-void InitializeRegularInstances(ViewerState& state) {
-    // Clear existing instances
-    state.regular_instances.clear();
-    state.regular_instances.reserve(state.instance_count);
-
-    // Setup random number generator for randomized animations
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> anim_dist(0, std::max(0, static_cast<int>(state.animations.size()) - 1));
-
-    for (int i = 0; i < state.instance_count; ++i) {
-        auto instance = xr_make_unique<RegularInstanceState>();
-
-        // Initialize animation buffers
-        instance->Initialize(&state.skeleton);
-
-        // Determine which animation this instance should play
-        instance->animation_index = state.current_animation_index;
-        if (state.randomize_instance_animations && !state.animations.empty()) {
-            instance->animation_index = anim_dist(gen);
-        }
-
-        // Set playback speed from metadata
-        if (instance->animation_index >= 0 && instance->animation_index < static_cast<int>(state.animation_metadata.size())) {
-            instance->playback_speed = state.animation_metadata[instance->animation_index].speed;
-        }
-
-        // Randomize starting time if enabled
-        if (state.randomize_instance_animations && instance->animation_index >= 0 &&
-            instance->animation_index < static_cast<int>(state.animations.size())) {
-            const float duration = state.animations[instance->animation_index].duration();
-            std::uniform_real_distribution<float> time_dist(0.0f, duration);
-            instance->current_time = time_dist(gen);
-        }
-
-        state.regular_instances.push_back(std::move(instance));
-    }
-
-    state.current_instance_count = state.instance_count;
-    Msg("* Initialized %d regular instances", state.instance_count);
-}
-
-void UpdateRegularInstanceAnimations(ViewerState& state, float dt) {
-    if (state.regular_instances.size() != static_cast<size_t>(state.instance_count)) {
-        return;
-    }
-
-    // Update each instance's animation
-    for (int i = 0; i < state.instance_count; ++i) {
-        auto& instance = *state.regular_instances[i];
-
-        if (instance.animation_index < 0 ||
-            instance.animation_index >= static_cast<int>(state.animations.size()) ||
-            !instance.IsInitialized()) {
-            continue;
-        }
-
-        const auto& animation = state.animations[instance.animation_index];
-
-        // Update time
-        instance.current_time += dt * instance.playback_speed;
-
-        // Calculate time ratio and handle looping
-        const float duration = animation.duration();
-        float time_ratio = 0.0f;
-        if (duration > 0.0f) {
-            time_ratio = instance.current_time / duration;
-            if (time_ratio > 1.0f) {
-                // Loop
-                instance.current_time = fmodf(instance.current_time, duration);
-                time_ratio = fmodf(time_ratio, 1.0f);
-            }
-        }
-
-        // Sample animation
-        ozz::animation::SamplingJob sampling_job;
-        sampling_job.animation = &animation;
-        sampling_job.context = &instance.context;
-        sampling_job.ratio = time_ratio;
-        sampling_job.output = ozz::make_span(instance.locals);
-        sampling_job.Run();
-
-        // Local-to-Model transformation
-        ozz::animation::LocalToModelJob ltm_job;
-        ltm_job.skeleton = &state.skeleton;
-        ltm_job.input = ozz::make_span(instance.locals);
-        ltm_job.output = ozz::make_span(instance.models);
-        ltm_job.Run();
-    }
-}
-
-void RenderRegularInstances(ViewerState& state, VulkanRenderer& renderer) {
-    if (state.instance_count <= 1 || !renderer.HasMeshLoaded()) {
-        return;
-    }
-
-    // Calculate grid dimensions (square grid)
-    const int grid_size = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(state.instance_count))));
-    const float spacing = state.instance_grid_spacing;
-
-    // Get the mesh to know how many bones per instance
-    const size_t bones_per_instance = renderer.GetMeshRenderer().BonesPerInstance();
-
-    // Pre-allocate buffers to exact sizes
-    state.render_instance_buffer.resize(state.instance_count);
-    state.render_skeleton_transforms_buffer.resize(state.instance_count);
-    state.render_bone_matrices_buffer.resize(state.instance_count * bones_per_instance);
-
-    // Get the mesh world transform (includes rotation from UpdateMeshAnimation)
-    const ozz::math::Float4x4 mesh_world_transform = renderer.GetMeshWorldTransform();
-
-    // Get mesh data for skinning (read-only, thread-safe)
-    const auto& joint_remaps = renderer.GetMeshJointRemaps();
-    const auto& inverse_bind_poses = renderer.GetMeshInverseBindPoses();
-
-    // Process each instance
-    for (int i = 0; i < state.instance_count; ++i) {
-        const int row = i / grid_size;
-        const int col = i % grid_size;
-        const float offset_x = (col - grid_size / 2.0f) * spacing;
-        const float offset_z = (row - grid_size / 2.0f) * spacing;
-
-        // Create instance transform with rotation
-        const ozz::math::Float4x4 translation = ozz::math::Float4x4::Translation(
-            ozz::math::simd_float4::Load(offset_x, 0.0f, offset_z, 1.0f)
-        );
-        // Apply rotation first, then translation
-        const ozz::math::Float4x4 instance_transform = translation * mesh_world_transform;
-
-        state.render_skeleton_transforms_buffer[i] = instance_transform;
-
-        // Add instance data
-        state.render_instance_buffer[i].transform = instance_transform;
-        state.render_instance_buffer[i].bone_matrix_offset = static_cast<uint32_t>(i * bones_per_instance);
-
-        // Compute skinning matrices from per-instance animation data
-        if (i < static_cast<int>(state.regular_instances.size())) {
-            const auto& instance = *state.regular_instances[i];
-            if (instance.IsInitialized()) {
-                const size_t bone_base_offset = i * bones_per_instance;
-
-                for (size_t bone_idx = 0; bone_idx < bones_per_instance && bone_idx < joint_remaps.size(); ++bone_idx) {
-                    const uint16_t joint = joint_remaps[bone_idx];
-                    const size_t write_idx = bone_base_offset + bone_idx;
-
-                    if (joint < instance.models.size()) {
-                        const ozz::math::Float4x4& model_space = instance.models[joint];
-                        const ozz::math::Float4x4& inv_bind_pose = inverse_bind_poses[bone_idx];
-
-                        // Skinning matrix = model_space * inverse_bind_pose
-                        state.render_bone_matrices_buffer[write_idx] = model_space * inv_bind_pose;
-                    } else {
-                        // Fallback to identity if joint index is out of range
-                        state.render_bone_matrices_buffer[write_idx] = ozz::math::Float4x4::identity();
-                    }
-                }
-            }
-        }
-    }
-
-    // Pass regular instances to VulkanRenderer
-    if (!state.render_instance_buffer.empty() && renderer.GetMeshRenderer().IsInitialized()) {
-        renderer.SetECSInstances(state.render_instance_buffer, state.render_bone_matrices_buffer);
-    }
-
-    // Update skeleton instance transforms for debug overlay
-    if (!state.render_skeleton_transforms_buffer.empty() && renderer.GetSkeletonRenderer().IsInitialized()) {
-        renderer.GetSkeletonRenderer().SetInstanceTransforms(ozz::make_span(state.render_skeleton_transforms_buffer));
-    }
-}
+// InitializeRegularInstances, UpdateRegularInstanceAnimations, and RenderRegularInstances removed
+// ECS is now the only multi-instance path when use_ecs_rendering = true
+// When use_ecs_rendering = false, VulkanRenderer handles single-instance animation directly
 
 void RenderECSInstances(ViewerState& state, VulkanRenderer& renderer) {
     if (state.instance_count < 1 || !state.ecs_animation_registry || !renderer.HasMeshLoaded()) {
@@ -2737,38 +2650,50 @@ int main(int argc, const char** argv) {
         // Check if instance count changed - reinitialize if needed
         if (state.instance_count != state.current_instance_count && state.skeleton.num_joints() > 0) {
             InitializeECSInstances(state);
-            InitializeRegularInstances(state);
-            // When changing instance count, clear any ECS instance data from renderer
-            renderer.ClearECSInstances();
+            // Note: Don't call renderer.ClearECSInstances() here
+            // SetECSInstances() will be called in RenderECSInstances() which will replace the data
         }
 
         const float dt = renderer.GetFrameDeltaSeconds();
 
-        // Use ECS animation path when enabled
+        // Animation update paths:
+        // - use_ecs_rendering = true: Run ECS animation systems (single or multi-instance)
+        // - use_ecs_rendering = false: VulkanRenderer::UpdateMeshAnimation() handles it (single instance only)
         if (state.use_ecs_rendering && state.instance_count >= 1 && state.ecs_animation_registry) {
             // Run ECS animation systems for all instances (uses ParallelAnimationOrchestrator)
             state.ecs_animation_registry->Update(dt);
 
-            // Update IK gizmo positions from IK chain targets
-            UpdateIKGizmos(state);
-        } else if (!state.use_ecs_rendering && state.instance_count > 1) {
-            // Run regular per-instance animation updates (sequential)
-            UpdateRegularInstanceAnimations(state, dt);
-        }
+            // Update IK gizmo positions from IK chain targets (ECS system)
+            auto& registry = state.ecs_animation_registry->GetRegistry();
+            AnimationECS::IKGizmoSystem::UpdateGizmoPositions(registry);
 
-        // Prepare instanced rendering data
-        if (state.use_ecs_rendering && state.instance_count >= 1 && state.ecs_animation_registry) {
-            // Use ECS rendering (single or multi-instance)
+            // Prepare instanced rendering data (ECS path)
             RenderECSInstances(state, renderer);
-        } else if (!state.use_ecs_rendering && state.instance_count > 1) {
-            // Use regular multi-instance rendering with per-instance animations
-            RenderRegularInstances(state, renderer);
         }
-        // Single instance mode with regular rendering - UpdateMeshAnimation() handles this automatically
+        // When use_ecs_rendering = false, VulkanRenderer::UpdateMeshAnimation() handles single-instance animation in BeginFrame()
 
         // Handle IK gizmo mouse interaction (before ImGui so we can check WantCaptureMouse)
-        if (state.use_ecs_rendering && state.instance_count >= 1) {
-            HandleIKGizmoMouseInteraction(state, renderer, renderer.GetCamera());
+        if (state.use_ecs_rendering && state.instance_count >= 1 && state.ecs_animation_registry) {
+            auto& registry = state.ecs_animation_registry->GetRegistry();
+            Camera& camera = renderer.GetCamera();
+
+            // Get mouse state
+            double mouse_x, mouse_y;
+            glfwGetCursorPos(window, &mouse_x, &mouse_y);
+            bool mouse_button_down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            bool imgui_wants_mouse = renderer.IsImGuiInitialized() && ImGui::GetIO().WantCaptureMouse;
+
+            // Get viewport size
+            int viewport_width, viewport_height;
+            glfwGetFramebufferSize(window, &viewport_width, &viewport_height);
+
+            // Call ECS system for mouse interaction
+            AnimationECS::IKGizmoSystem::HandleMouseInteraction(
+                registry,
+                static_cast<float>(mouse_x), static_cast<float>(mouse_y),
+                viewport_width, viewport_height,
+                camera.GetViewMatrix(), camera.GetProjectionMatrix(),
+                mouse_button_down, imgui_wants_mouse);
         }
 
         if (renderer.IsImGuiInitialized()) {
@@ -2787,8 +2712,8 @@ int main(int argc, const char** argv) {
         }
 
         // Render IK gizmos (before RenderScene so they draw with debug renderer)
-        if (state.use_ecs_rendering && state.instance_count >= 1) {
-            RenderIKGizmos(state, renderer);
+        if (state.use_ecs_rendering && state.instance_count >= 1 && state.ecs_animation_registry) {
+            RenderECSIKGizmos(state, renderer);
         }
 
         renderer.RenderScene();
