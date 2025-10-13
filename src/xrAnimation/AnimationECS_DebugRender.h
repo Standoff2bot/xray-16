@@ -7,18 +7,11 @@
 #include "entt/entt.hpp"
 #include "IDebugDrawContext.h"
 #include "ExtendedBoneMetadata.h"
+#include "AnimationECS_Components.h"
+#include "AnimationECS_IK.h"
 #include <vector>
 
 namespace AnimationECS {
-
-// Forward declarations
-struct SkeletonDebugState;
-struct AnimationBuffers;
-struct InstanceTransform;
-struct SkeletonMetadata;
-struct IKGizmoState;
-struct IKConfiguration;
-struct LimbIKChain;
 
 //=============================================================================
 // SKELETON DEBUG RENDERING SYSTEM
@@ -66,6 +59,13 @@ public:
     /// The ctx implementation is responsible for batching/queuing commands.
     /// </remarks>
     static void Render(entt::registry& registry, IDebugDrawContext& ctx);
+
+    /// <summary>
+    /// Update skeleton debug state from global settings.
+    /// </summary>
+    /// <param name="registry">ECS registry</param>
+    /// <param name="show_skeleton_lines">Global setting for skeleton lines</param>
+    static void UpdateGlobalSettings(entt::registry& registry, bool show_skeleton_lines);
 
 private:
     /// <summary>

@@ -289,6 +289,18 @@ float SkeletonDebugRenderSystem::DistanceBetween(
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+void SkeletonDebugRenderSystem::UpdateGlobalSettings(entt::registry& registry, bool show_skeleton_lines)
+{
+    // Update all entities with SkeletonDebugState
+    auto view = registry.view<SkeletonDebugState>();
+
+    for (auto entity : view)
+    {
+        auto& debug_state = view.get<SkeletonDebugState>(entity);
+        debug_state.show_skeleton_lines = show_skeleton_lines;
+    }
+}
+
 //=============================================================================
 // IKGizmoRenderSystem Implementation
 //=============================================================================

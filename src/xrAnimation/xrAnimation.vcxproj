@@ -319,6 +319,8 @@
   <ItemGroup>
     <ClInclude Include="AnimationECS_Components.h" />
     <ClInclude Include="AnimationECS_IK.h" />
+    <ClInclude Include="AnimationECS_DebugRender.h" />
+    <ClInclude Include="IDebugDrawContext.h" />
     <ClInclude Include="AnimationECS_Registry.h" />
     <ClInclude Include="AnimationECS_Systems.h" />
     <ClInclude Include="AnimationECS_ParallelSystems.h" />
@@ -336,6 +338,7 @@
     <ClInclude Include="xrAnimation.h" />
   </ItemGroup>  <ItemGroup>
     <ClCompile Include="AnimationECS_IK.cpp" />
+    <ClCompile Include="AnimationECS_DebugRender.cpp" />
     <ClCompile Include="LegacyOgfConverter.cpp" />
     <ClCompile Include="LegacyOmfConverter.cpp" />
     <ClCompile Include="OzzBundle.cpp" />

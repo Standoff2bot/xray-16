@@ -139,6 +139,15 @@ struct IKGizmoState
 };
 
 //-----------------------------------------------------------------------------
+// InstanceTransform Component
+// Per-entity world transform for multi-instance rendering
+//-----------------------------------------------------------------------------
+struct InstanceTransform
+{
+    ozz::math::Float4x4 world_transform{ozz::math::Float4x4::identity()};
+};
+
+//-----------------------------------------------------------------------------
 // SkeletonDebugState Component
 // Per-entity skeleton visualization state
 //-----------------------------------------------------------------------------
@@ -312,33 +321,6 @@ public:
     /// <param name="registry">ECS registry</param>
     /// <param name="debug_renderer">Debug renderer for drawing</param>
     static void RenderGizmos(entt::registry& registry, void* debug_renderer);
-};
-
-//-----------------------------------------------------------------------------
-// SkeletonDebugSystem
-// Skeleton visualization system for debugging
-//-----------------------------------------------------------------------------
-class SkeletonDebugSystem
-{
-public:
-    /// <summary>
-    /// Render skeleton debug visualization for all entities
-    /// </summary>
-    /// <param name="registry">ECS registry</param>
-    /// <param name="debug_renderer">Debug renderer for drawing (application-specific)</param>
-    /// <remarks>
-    /// This is a stub that should be implemented at the application level.
-    /// The debug_renderer parameter should be cast to the appropriate type
-    /// (e.g., DebugRenderer* in ozz_animation_viewer).
-    /// </remarks>
-    static void RenderSkeletons(entt::registry& registry, void* debug_renderer);
-
-    /// <summary>
-    /// Update skeleton debug state from global settings
-    /// </summary>
-    /// <param name="registry">ECS registry</param>
-    /// <param name="show_skeleton_lines">Global setting for skeleton lines</param>
-    static void UpdateGlobalSettings(entt::registry& registry, bool show_skeleton_lines);
 };
 
 } // namespace AnimationECS

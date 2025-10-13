@@ -7,7 +7,6 @@
 #include "../Externals/ozz-animation/samples/framework/utils.h"
 #include <algorithm>
 #include <cstring>
-
 // NOTE: Debug visualization removed from this low-level library to avoid dependencies on xrGame.
 // Debug drawing should be implemented at the application level (e.g., in xrGame or viewer tools)
 // where DBG_Draw functions are available. See IK_CURRENT_LIMITATIONS.md for details.
@@ -820,36 +819,6 @@ void IKGizmoSystem::RenderGizmos(entt::registry& registry, void* debug_renderer_
 
     // See ozz_animation_viewer.cpp for example usage:
     // IKGizmoSystem::RenderGizmos(registry, &renderer.GetDebugRenderer());
-}
-
-//=============================================================================
-// SkeletonDebugSystem Implementation
-//=============================================================================
-
-void SkeletonDebugSystem::RenderSkeletons(entt::registry& registry, void* debug_renderer_ptr)
-{
-    if (!debug_renderer_ptr)
-        return;
-
-    // This is a stub implementation - actual rendering must be done by the application
-    // The application should:
-    // 1. Cast debug_renderer_ptr to the appropriate type
-    // 2. Iterate over entities with SkeletonDebugState and AnimationBuffers
-    // 3. Use the debug renderer to draw skeleton lines based on the component settings
-    //
-    // See ozz_animation_viewer.cpp RenderECSSkeletonDebug() for example usage
-}
-
-void SkeletonDebugSystem::UpdateGlobalSettings(entt::registry& registry, bool show_skeleton_lines)
-{
-    // Update all entities with SkeletonDebugState
-    auto view = registry.view<SkeletonDebugState>();
-
-    for (auto entity : view)
-    {
-        auto& debug_state = view.get<SkeletonDebugState>(entity);
-        debug_state.show_skeleton_lines = show_skeleton_lines;
-    }
 }
 
 } // namespace AnimationECS

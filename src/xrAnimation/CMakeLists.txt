@@ -48,6 +48,9 @@ set(SOURCES
     AnimationECS_Performance.h
     AnimationECS_IK.h
     AnimationECS_IK.cpp
+    AnimationECS_DebugRender.h
+    AnimationECS_DebugRender.cpp
+    IDebugDrawContext.h
     ../../Externals/ozz-animation/samples/framework/mesh.cc
     ../../Externals/ozz-animation/samples/framework/utils.cc
 )

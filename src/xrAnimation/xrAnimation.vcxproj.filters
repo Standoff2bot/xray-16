@@ -63,6 +63,12 @@
     <ClInclude Include="AnimationECS_IK.h">
       <Filter>Animation System</Filter>
     </ClInclude>
+    <ClInclude Include="AnimationECS_DebugRender.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
+    <ClInclude Include="IDebugDrawContext.h">
+      <Filter>Animation System</Filter>
+    </ClInclude>
     <ClInclude Include="AnimationECS_Registry.h">
       <Filter>Animation System</Filter>
     </ClInclude>
@@ -117,6 +123,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="AnimationECS_IK.cpp">
+      <Filter>Animation System</Filter>
+    </ClCompile>
+    <ClCompile Include="AnimationECS_DebugRender.cpp">
       <Filter>Animation System</Filter>
     </ClCompile>
     <ClCompile Include="OzzKinematics.cpp">

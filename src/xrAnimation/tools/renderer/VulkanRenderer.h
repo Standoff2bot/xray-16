@@ -77,8 +77,6 @@ public:
     bool GetShowSkeletonLines() const { return show_skeleton_lines_; }
     void SetShowSkinnedMesh(bool show);
     bool GetShowSkinnedMesh() const { return show_skinned_mesh_; }
-    void SetShowDebugOverlay(bool show);
-    bool GetShowDebugOverlay() const { return show_debug_overlay_; }
 
     // Frame timing
     float GetFrameDeltaSeconds() const { return static_cast<float>(frame_delta_seconds_); }
@@ -105,10 +103,6 @@ public:
     // ECS Multi-instance rendering
     void SetECSInstances(const std::vector<MeshInstanceData>& instances, const std::vector<ozz::math::Float4x4>& bone_matrices);
     void ClearECSInstances();
-
-    // Populate skeleton debug shapes from external pose models (for ECS mode)
-    void PopulateSkeletonDebugShapesFromPose(const std::vector<ozz::math::Float4x4>& pose_models,
-                                              const ozz::math::Float4x4& instance_transform);
 
     // IDebugDrawContext implementation (adapter pattern - forwards to DebugRenderer)
     void DrawLine(const ozz::math::Float3& start,
@@ -156,7 +150,6 @@ private:
     void HandleKeyEvent(int key, int scancode, int action, int mods);
     void HandleCursorEnter(int entered);
     void HandleWindowFocus(int focused);
-    void PopulateSkeletonDebugShapes();
     void RenderDebugPrimitives(VkCommandBuffer cmd);
     void ApplyPaletteToInstances(const std::vector<ozz::math::Float4x4>& palette);
 
@@ -190,7 +183,6 @@ private:
     bool show_triangle_ = true;
     bool show_skeleton_lines_ = true;
     bool show_skinned_mesh_ = true;
-    bool show_debug_overlay_ = false;
 
     std::vector<MeshInstanceData> mesh_instances_;
     std::vector<ozz::math::Float4x4> mesh_bone_matrices_;
