@@ -8,6 +8,7 @@
 #include "DebugRenderer.h"
 
 #include "../../ExtendedBoneMetadata.h"
+#include "../../IDebugDrawContext.h"
 
 #include <ozz/animation/runtime/animation.h>
 #include <ozz/animation/runtime/sampling_job.h>
@@ -33,7 +34,7 @@ namespace animation {
 namespace renderer {
 
 // Main Vulkan renderer - coordinates all rendering
-class VulkanRenderer {
+class VulkanRenderer : public AnimationECS::IDebugDrawContext {
 public:
     VulkanRenderer();
     ~VulkanRenderer();
@@ -104,6 +105,31 @@ public:
     // ECS Multi-instance rendering
     void SetECSInstances(const std::vector<MeshInstanceData>& instances, const std::vector<ozz::math::Float4x4>& bone_matrices);
     void ClearECSInstances();
+
+    // Populate skeleton debug shapes from external pose models (for ECS mode)
+    void PopulateSkeletonDebugShapesFromPose(const std::vector<ozz::math::Float4x4>& pose_models,
+                                              const ozz::math::Float4x4& instance_transform);
+
+    // IDebugDrawContext implementation (adapter pattern - forwards to DebugRenderer)
+    void DrawLine(const ozz::math::Float3& start,
+                  const ozz::math::Float3& end,
+                  const ozz::math::Float4& color) override;
+
+    void DrawSphere(const ozz::math::Float3& center,
+                    float radius,
+                    const ozz::math::Float4& color,
+                    int segments = 12) override;
+
+    void DrawBoneShape(const ozz::math::Float3& head,
+                       const ozz::math::Float3& tail,
+                       float radius,
+                       const ozz::math::Float4& color) override;
+
+    void DrawAxes(const ozz::math::Float4x4& transform,
+                  float scale,
+                  const ozz::math::Float4& color_x,
+                  const ozz::math::Float4& color_y,
+                  const ozz::math::Float4& color_z) override;
 
     // Mesh data accessors for skinning computation
     const std::vector<uint16_t>& GetMeshJointRemaps() const { return mesh_joint_remaps_; }
