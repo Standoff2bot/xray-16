@@ -12,10 +12,15 @@ namespace JPH
     class BroadPhaseLayerInterface;
     class ObjectVsBroadPhaseLayerFilter;
     class ObjectLayerPairFilter;
+    class ContactListener;
 }
+
+class JoltContactListener;
 
 class JoltPhysicsWorld : public IPhysicsWorld
 {
+    friend class JoltContactListener;
+
 public:
     JoltPhysicsWorld();
     virtual ~JoltPhysicsWorld();
@@ -73,6 +78,7 @@ private:
     JPH::BroadPhaseLayerInterface* m_broad_phase_layer;
     JPH::ObjectVsBroadPhaseLayerFilter* m_object_vs_broad_phase_filter;
     JPH::ObjectLayerPairFilter* m_object_layer_pair_filter;
+    JPH::ContactListener* m_contact_listener;
 
     Fvector m_gravity;
     bool m_initialized;

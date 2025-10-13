@@ -29,6 +29,9 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseQuery.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/CollisionDispatch.h>
+#include <Jolt/Physics/Collision/ManifoldBetweenTwoFaces.h>
 
 #include "xrCore/xrCore.h"
 #include "JoltPhysicsShape.h"
@@ -167,6 +170,136 @@ private:
     std::atomic<uint> m_top;
 };
 
+// Contact listener implementation
+class JoltContactListener : public JPH::ContactListener
+{
+public:
+    JoltContactListener(JoltPhysicsWorld* world)
+        : m_world(world)
+    {
+    }
+
+    virtual JPH::ValidateResult OnContactValidate(const JPH::Body& inBody1, const JPH::Body& inBody2,
+                                                   JPH::RVec3Arg inBaseOffset,
+                                                   const JPH::CollideShapeResult& inCollisionResult) override
+    {
+        // Allow all contacts by default
+        // This can be extended to check material properties, etc.
+        return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+    }
+
+    virtual void OnContactAdded(const JPH::Body& inBody1, const JPH::Body& inBody2,
+                               const JPH::ContactManifold& inManifold,
+                               JPH::ContactSettings& ioSettings) override
+    {
+        // Find wrapper bodies
+        IPhysicsBody* physics_body1 = FindBodyWrapper(inBody1.GetID());
+        IPhysicsBody* physics_body2 = FindBodyWrapper(inBody2.GetID());
+
+        if (!physics_body1 || !physics_body2)
+            return;
+
+        // Get collision callbacks
+        ICollisionCallback* callback1 = physics_body1->GetCollisionCallback();
+        ICollisionCallback* callback2 = physics_body2->GetCollisionCallback();
+
+        if (!callback1 && !callback2)
+            return;
+
+        // Get first contact point from manifold
+        if (inManifold.mRelativeContactPointsOn1.size() == 0)
+            return;
+
+        JPH::Vec3 contact_point1 = inManifold.mRelativeContactPointsOn1[0];
+        JPH::Vec3 world_contact_point = inManifold.mBaseOffset + contact_point1;
+
+        // Build PhysicsContact structure
+        PhysicsContact contact;
+        contact.position.set(world_contact_point.GetX(), world_contact_point.GetY(), world_contact_point.GetZ());
+        contact.normal.set(inManifold.mWorldSpaceNormal.GetX(),
+                          inManifold.mWorldSpaceNormal.GetY(),
+                          inManifold.mWorldSpaceNormal.GetZ());
+        contact.depth = inManifold.mPenetrationDepth;
+        contact.body1 = physics_body1;
+        contact.body2 = physics_body2;
+        contact.material1 = nullptr; // TODO: Get from body user data
+        contact.material2 = nullptr; // TODO: Get from body user data
+        contact.user_data1 = physics_body1->GetUserData();
+        contact.user_data2 = physics_body2->GetUserData();
+
+        // Call callbacks
+        bool allow_collision = true;
+
+        if (callback1)
+        {
+            bool result = callback1->OnCollision(contact);
+            allow_collision = allow_collision && result;
+        }
+
+        if (callback2)
+        {
+            // Flip contact for body2's callback
+            PhysicsContact contact2 = contact;
+            contact2.body1 = physics_body2;
+            contact2.body2 = physics_body1;
+            contact2.normal = contact2.normal.mul(-1.0f);
+            contact2.material1 = contact.material2;
+            contact2.material2 = contact.material1;
+            contact2.user_data1 = contact.user_data2;
+            contact2.user_data2 = contact.user_data1;
+
+            bool result = callback2->OnCollision(contact2);
+            allow_collision = allow_collision && result;
+        }
+
+        // If callback returned false, disable collision
+        if (!allow_collision)
+        {
+            ioSettings.mCombinedRestitution = 0.0f;
+            ioSettings.mCombinedFriction = 0.0f;
+        }
+    }
+
+    virtual void OnContactPersisted(const JPH::Body& inBody1, const JPH::Body& inBody2,
+                                    const JPH::ContactManifold& inManifold,
+                                    JPH::ContactSettings& ioSettings) override
+    {
+        // Similar to OnContactAdded, but for persistent contacts
+        // For now, we'll just call the same logic as OnContactAdded
+        OnContactAdded(inBody1, inBody2, inManifold, ioSettings);
+    }
+
+    virtual void OnContactRemoved(const JPH::SubShapeIDPair& inSubShapePair) override
+    {
+        // Contact removed - could notify game code here if needed
+        // For now, we don't track contact removal
+    }
+
+private:
+    IPhysicsBody* FindBodyWrapper(const JPH::BodyID& body_id)
+    {
+        JPH::PhysicsSystem* physics_system = m_world->GetPhysicsSystem();
+        if (!physics_system)
+            return nullptr;
+
+        // Get body count and iterate through bodies
+        u32 body_count = m_world->GetBodyCount();
+        for (u32 i = 0; i < body_count; ++i)
+        {
+            IPhysicsBody* body = m_world->m_bodies[i];
+            JoltPhysicsBody* jolt_body = static_cast<JoltPhysicsBody*>(body);
+            if (jolt_body->GetBodyID() == body_id)
+            {
+                return body;
+            }
+        }
+
+        return nullptr;
+    }
+
+    JoltPhysicsWorld* m_world;
+};
+
 JoltPhysicsWorld::JoltPhysicsWorld()
     : m_physics_system(nullptr)
     , m_job_system(nullptr)
@@ -174,6 +307,7 @@ JoltPhysicsWorld::JoltPhysicsWorld()
     , m_broad_phase_layer(nullptr)
     , m_object_vs_broad_phase_filter(nullptr)
     , m_object_layer_pair_filter(nullptr)
+    , m_contact_listener(nullptr)
     , m_gravity(0.0f, -9.81f, 0.0f)
     , m_initialized(false)
     , m_debug_draw_enabled(false)
@@ -249,6 +383,10 @@ bool JoltPhysicsWorld::Initialize()
     // Set gravity
     m_physics_system->SetGravity(JPH::Vec3(m_gravity.x, m_gravity.y, m_gravity.z));
 
+    // Create and register contact listener
+    m_contact_listener = new JoltContactListener(this);
+    m_physics_system->SetContactListener(m_contact_listener);
+
     m_initialized = true;
     Msg("* JoltPhysicsWorld: Initialized successfully");
     Msg("  - Max bodies: %u", cMaxBodies);
@@ -290,6 +428,7 @@ void JoltPhysicsWorld::Shutdown()
     m_constraints.clear();
 
     // Clean up Jolt
+    xr_delete(m_contact_listener);
     xr_delete(m_physics_system);
     xr_delete(m_job_system);
     xr_delete(m_temp_allocator);
