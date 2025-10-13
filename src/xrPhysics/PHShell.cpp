@@ -55,6 +55,10 @@ CPHShell::CPHShell()
     m_object_in_root.identity();
     m_active_count = 0;
     m_pPhysicsShellAnimatorC = nullptr;
+#ifdef XRPHYSICS_JOLT
+    m_jolt_ragdoll = nullptr;
+    m_jolt_net_state.buffer.clear();
+#endif
 }
 
 void CPHShell::EnableObject(CPHObject* obj)
@@ -88,6 +92,14 @@ void CPHShell::Disable()
 }
 void CPHShell::DisableCollision() { CPHObject::collision_disable(); }
 void CPHShell::EnableCollision() { CPHObject::collision_enable(); }
+#ifdef XRPHYSICS_JOLT
+void CPHShell::SetJoltRagdoll(IPhysicsRagdoll* ragdoll)
+{
+    m_jolt_ragdoll = ragdoll;
+    if (!m_jolt_ragdoll)
+        m_jolt_net_state.buffer.clear();
+}
+#endif
 void CPHShell::ReanableObject()
 {
     // if(b_contacts_saved) dJointGroupEmpty(m_saved_contacts);

@@ -428,6 +428,8 @@ if(XRPHYSICS_USE_JOLT)
         adapters/Jolt/JoltPhysicsShape.cpp
         adapters/Jolt/JoltPhysicsConstraint.h
         adapters/Jolt/JoltPhysicsConstraint.cpp
+        adapters/Jolt/JoltNetworkSync.h
+        adapters/Jolt/JoltNetworkSync.cpp
     )
 endif()
 

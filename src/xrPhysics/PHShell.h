@@ -6,6 +6,11 @@
 #include "PHShellSplitter.h"
 #include "PHMoveStorage.h"
 
+#ifdef XRPHYSICS_JOLT
+#include "adapters/IPhysicsAdapter.h"
+#include "adapters/Jolt/JoltNetworkSync.h"
+#endif
+
 class CPHShellSplitterHolder;
 class CPhysicsShellAnimator;
 
@@ -26,6 +31,10 @@ class CPHShell : public CPhysicsShell, public CPHObject
     CPHMoveStorage m_traced_geoms;
 
     CPhysicsShellAnimator* m_pPhysicsShellAnimatorC;
+#ifdef XRPHYSICS_JOLT
+    IPhysicsRagdoll* m_jolt_ragdoll;
+    JoltIntegration::RagdollNetState m_jolt_net_state;
+#endif
 
 private:
 #ifdef DEBUG
@@ -84,6 +93,11 @@ private:
     void activate(bool disable);
 
 public:
+#ifdef XRPHYSICS_JOLT
+    void SetJoltRagdoll(IPhysicsRagdoll* ragdoll);
+    IPhysicsRagdoll* GetJoltRagdoll() const { return m_jolt_ragdoll; }
+    bool HasJoltRagdoll() const { return m_jolt_ragdoll != nullptr; }
+#endif
     virtual void Build(bool disable = false);
     virtual void RunSimulation(bool place_current_forms = true);
     virtual void net_Import(NET_Packet& P);

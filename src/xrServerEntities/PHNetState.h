@@ -4,6 +4,10 @@
 #include "xrCore/_quaternion.h"
 #include "xrCommon/xr_vector.h"
 
+#ifdef XRPHYSICS_JOLT
+#include "xrPhysics/adapters/Jolt/JoltNetworkSync.h"
+#endif
+
 class NET_Packet;
 
 struct XRPHYSICS_API SPHNetState
@@ -49,6 +53,10 @@ struct XRPHYSICS_API SPHBonesData
     u64 bones_mask;
     u16 root_bone;
     PHNETSTATE_VECTOR bones;
+#ifdef XRPHYSICS_JOLT
+    bool has_jolt_state;
+    JoltIntegration::RagdollNetState jolt_state;
+#endif
     Fvector m_min;
     Fvector m_max;
 
@@ -59,4 +67,9 @@ struct XRPHYSICS_API SPHBonesData
     void set_min_max(const Fvector& _min, const Fvector& _max);
     const Fvector& get_min() const { return m_min; }
     const Fvector& get_max() const { return m_max; }
+#ifdef XRPHYSICS_JOLT
+    void CaptureRagdoll(IPhysicsRagdoll& ragdoll);
+    void ApplyRagdoll(IPhysicsRagdoll& ragdoll) const;
+    bool HasJoltState() const { return has_jolt_state && !jolt_state.buffer.empty(); }
+#endif
 };

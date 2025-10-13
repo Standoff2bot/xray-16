@@ -147,6 +147,9 @@ SPHBonesData::SPHBonesData()
 {
     bones_mask = u64(-1);
     root_bone = 0;
+#ifdef XRPHYSICS_JOLT
+    has_jolt_state = false;
+#endif
 
     Fvector _mn, _mx;
 
@@ -158,6 +161,12 @@ void SPHBonesData::net_Save(NET_Packet& P)
 {
     P.w_u64(bones_mask);
     P.w_u16(root_bone);
+#ifdef XRPHYSICS_JOLT
+    const bool write_jolt = HasJoltState();
+    P.w_u8(write_jolt ? 1 : 0);
+    if (write_jolt)
+        jolt_state.Write(P);
+#endif
 
     P.w_vec3(get_min());
     P.w_vec3(get_max());
@@ -180,6 +189,12 @@ void SPHBonesData::net_Load(NET_Packet& P)
 
     bones_mask = P.r_u64();
     root_bone = P.r_u16();
+#ifdef XRPHYSICS_JOLT
+    const u8 jolt_flag = P.r_u8();
+    has_jolt_state = (jolt_flag != 0);
+    if (has_jolt_state)
+        jolt_state.Read(P);
+#endif
     Fvector _mn, _mx;
     P.r_vec3(_mn);
     P.r_vec3(_mx);
@@ -200,3 +215,17 @@ void SPHBonesData::set_min_max(const Fvector& _min, const Fvector& _max)
     m_min = _min;
     m_max = _max;
 }
+
+#ifdef XRPHYSICS_JOLT
+void SPHBonesData::CaptureRagdoll(IPhysicsRagdoll& ragdoll)
+{
+    jolt_state.Capture(ragdoll);
+    has_jolt_state = !jolt_state.buffer.empty();
+}
+
+void SPHBonesData::ApplyRagdoll(IPhysicsRagdoll& ragdoll) const
+{
+    if (HasJoltState())
+        jolt_state.Apply(ragdoll);
+}
+#endif
