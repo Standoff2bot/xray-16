@@ -28,6 +28,10 @@ void CSoundRender_Emitter::update(float fTime, float dt)
     VERIFY2(!!(owner_data) || (!(owner_data) && (m_current_state == stStopped)), "owner");
     VERIFY2(owner_data ? *(int*)(&owner_data->feedback) : 1, "owner");
 
+#ifdef USE_STEAMAUDIO
+    UpdateSteamAudioInputs();
+#endif
+
     if (bRewind)
     {
         wait_prefill();

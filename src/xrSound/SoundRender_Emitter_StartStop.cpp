@@ -57,6 +57,8 @@ void CSoundRender_Emitter::start(const ref_sound& _owner, u32 flags, float delay
         // Create RAII wrapper (automatically manages all Steam Audio resources)
         m_steamAudioSource = xr_new<SteamAudio::CSteamAudioSource>(
             context, simulator, audioSettings, hrtf, data_info.channels);
+
+        UpdateSteamAudioInputs();
     }
 #endif
 }

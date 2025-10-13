@@ -47,6 +47,9 @@ public:
 #ifdef USE_STEAMAUDIO
 private:
     SteamAudio::CSteamAudioSource* m_steamAudioSource{};
+    xr_vector<float> m_steamAudioBinauralBuffer{};
+
+    void UpdateSteamAudioInputs();
 
 public:
     [[nodiscard]]

@@ -2,7 +2,7 @@
 
 This document tracks the implementation progress of Steam Audio integration into OpenXRay's xrSound library.
 
-**Last Updated**: 2025-10-13
+**Last Updated**: 2025-10-14
 **Branch**: `feature/steamaudio`
 **Status**: Architecture Rework Complete - Phase 1 & Early Phase 3
 
@@ -206,9 +206,9 @@ None.
 ### Tasks
 
 - [ ] **3.1** HRTF integration
-  - [ ] Add `IPLHRTFEffect` to rendering pipeline
-  - [ ] Convert emitter position to Steam Audio source
-  - [ ] Apply HRTF before OpenAL playback
+  - [x] Add `IPLHRTFEffect` to rendering pipeline
+  - [x] Convert emitter position to Steam Audio source
+  - [x] Apply HRTF before OpenAL playback
   - [ ] Add `snd_steam_audio_hrtf` console variable
 
 - [ ] **3.2** Occlusion replacement
@@ -231,6 +231,10 @@ None.
   - [ ] Console variables for HRTF, occlusion
   - [ ] Quality settings (low/medium/high)
   - [ ] A/B testing mode
+
+**Recent Progress (2025-10-14)**:
+- Per-emitter Steam Audio inputs now refresh every frame, feeding the simulator with up-to-date position/orientation data.
+- Mono emitters run through Steam Audio's binaural effect before OpenAL playback when `ss_SteamAudio_HRTF` is enabled, yielding stereo output.
 
 ### Testing Checklist
 

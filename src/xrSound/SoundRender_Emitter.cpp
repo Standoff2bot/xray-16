@@ -28,6 +28,10 @@ void CSoundRender_Emitter::set_position(const Fvector& pos)
         p_source.position.set(0, 0, 0);
 
     bMoved = true;
+
+#ifdef USE_STEAMAUDIO
+    UpdateSteamAudioInputs();
+#endif
 }
 
 void CSoundRender_Emitter::set_frequency(float scale)
@@ -69,6 +73,38 @@ CSoundRender_Emitter::~CSoundRender_Emitter()
     Event_ReleaseOwner();
     wait_prefill();
 }
+
+#ifdef USE_STEAMAUDIO
+void CSoundRender_Emitter::UpdateSteamAudioInputs()
+{
+    if (!m_steamAudioSource || !psSoundFlags.test(ss_EFX) || !psSoundFlags.test(ss_UseSteamAudio) || is_2D())
+        return;
+
+    Fvector ahead;
+    ahead.sub(SoundRender->listener_position(), p_source.position);
+    if (ahead.square_magnitude() < EPS_S)
+        ahead.set(0.f, 0.f, 1.f);
+    else
+        ahead.normalize();
+
+    Fvector up{ 0.f, 1.f, 0.f };
+    if (_abs(ahead.dotproduct(up)) > 0.999f)
+        up.set(0.f, 0.f, 1.f);
+
+    Fvector right;
+    right.crossproduct(up, ahead);
+    if (right.square_magnitude() < EPS_S)
+        right.set(1.f, 0.f, 0.f);
+    else
+        right.normalize();
+
+    up.crossproduct(ahead, right);
+    up.normalize();
+    right.normalize();
+
+    m_steamAudioSource->UpdateInputs(p_source.position, ahead, up, right);
+}
+#endif
 
 //////////////////////////////////////////////////////////////////////
 void CSoundRender_Emitter::Event_ReleaseOwner()
@@ -259,19 +295,41 @@ std::pair<u8*, size_t> CSoundRender_Emitter::obtain_block()
     --filled_blocks;
 #ifdef USE_STEAMAUDIO
     // Apply Steam Audio direct effect (occlusion, distance, transmission) using RAII wrapper
-    if (psSoundFlags.test(ss_EFX) && m_steamAudioSource && !is_2D())
+    if (psSoundFlags.test(ss_EFX) && psSoundFlags.test(ss_UseSteamAudio) && m_steamAudioSource && !is_2D())
     {
         const auto data_info = source()->data_info();
         const int numSamples = result.second / (data_info.channels * sizeof(float));
+        float* directBuffer = reinterpret_cast<float*>(result.first);
 
         // Wrapper handles deinterleaving, effect application, and reinterleaving
-        m_steamAudioSource->ApplyDirectEffect(
-            (float*)result.first,
-            (float*)result.first,
-            numSamples);
+        m_steamAudioSource->ApplyDirectEffect(directBuffer, directBuffer, numSamples);
+
+        const bool canApplyHRTF =
+            psSoundFlags.test(ss_SteamAudio_HRTF) &&
+            data_info.format == SoundFormat::Float32 &&
+            data_info.channels == 1;
+
+        if (canApplyHRTF)
+        {
+            const auto listener = SoundRender->listener_params();
+            const size_t stereoSamples = static_cast<size_t>(numSamples) * 2;
+            m_steamAudioBinauralBuffer.resize(stereoSamples);
+
+            m_steamAudioSource->ApplyBinauralEffect(
+                directBuffer,
+                m_steamAudioBinauralBuffer.data(),
+                listener.orientation[0],
+                listener.orientation[1],
+                listener.orientation[2]);
+
+            return {
+                reinterpret_cast<u8*>(m_steamAudioBinauralBuffer.data()),
+                stereoSamples * sizeof(float)
+            };
+        }
     }
 #endif
-    return std::move(result);
+    return result;
 }
 
 void CSoundRender_Emitter::fill_all_blocks()

@@ -16,6 +16,10 @@ class CSoundRender_TargetA : public CSoundRender_Target
     float cache_gain{};
     float cache_pitch{ 1.0f };
 
+#ifdef USE_STEAMAUDIO
+    bool m_usesSteamAudioHRTF{};
+#endif
+
     void submit_buffer(ALuint BufferID) const;
     void submit_all_buffers() const;
 
