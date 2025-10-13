@@ -57,6 +57,9 @@ using xray::animation::renderer::MeshInstanceData;
 
 constexpr double kStatusMessageDuration = 6.0;
 
+// Global flag to block camera input while dragging gizmos
+static bool g_is_dragging_gizmo = false;
+
 // Forward declarations
 struct ViewerState;
 void InitializeECSInstances(ViewerState& state);
@@ -580,8 +583,8 @@ struct ViewerState {
     std::vector<IKGizmo::Gizmo> ik_gizmos;
     bool ik_gizmos_enabled = true;
     int dragged_gizmo_index = -1;
-    ozz::math::Float3 drag_plane_normal;
-    float drag_plane_distance = 0.0f;
+    ozz::math::Float3 drag_start_offset;  // Offset from ray to gizmo at drag start
+    float drag_distance_from_camera = 0.0f;  // Distance along view ray when drag started
 };
 
 void QueueStatus(ViewerState& state, std::string message, bool is_error) {
@@ -1150,14 +1153,27 @@ void DrawAnimationPanel(ViewerState& state, VulkanRenderer& renderer) {
 
     ImGui::Separator();
 
+    // Play/Pause animation (also controllable via space bar)
     bool animate_mesh = renderer.GetAnimateMesh();
-    if (ImGui::Checkbox("Auto-rotate mesh", &animate_mesh)) {
-        renderer.SetAnimateMesh(animate_mesh);
+    const char* play_pause_label = animate_mesh ? "Pause (Space)" : "Play (Space)";
+    if (ImGui::Button(play_pause_label, ImVec2(140, 0))) {
+        renderer.SetAnimateMesh(!animate_mesh);
     }
 
-    float rotation_speed = renderer.GetMeshRotationSpeed();
-    if (ImGui::SliderFloat("Rotation speed (rad/s)", &rotation_speed, -6.0f, 6.0f, "%.2f")) {
-        renderer.SetMeshRotationSpeed(rotation_speed);
+
+    float animation_speed = renderer.GetAnimationPlaybackSpeed();
+    if (ImGui::SliderFloat("Animation Speed", &animation_speed, 0.f, 6.0f, "%.2f")) {
+        renderer.SetAnimationPlaybackSpeed(animation_speed);
+
+        // Also update ECS animation controllers if using ECS rendering
+        if (state.use_ecs_rendering && state.ecs_animation_registry) {
+            auto& registry = state.ecs_animation_registry->GetRegistry();
+            auto controller_view = registry.view<AnimationECS::AnimationController>();
+            for (auto entity : controller_view) {
+                auto& controller = controller_view.get<AnimationECS::AnimationController>(entity);
+                controller.playback_speed = animation_speed;
+            }
+        }
     }
 
     if (!renderer.GetAnimateMesh()) {
@@ -1320,13 +1336,14 @@ void UpdateIKGizmos(ViewerState& state) {
     auto& registry = state.ecs_animation_registry->GetRegistry();
     auto ik_view = registry.view<AnimationECS::IKConfiguration, AnimationECS::AnimationBuffers>();
 
-    if (ik_view.empty()) {
+    // Check if view has any entities
+    if (ik_view.begin() == ik_view.end()) {
         state.ik_gizmos.clear();
         return;
     }
 
     // Use first entity for now (could extend to support multiple entities)
-    entt::entity entity = ik_view.front();
+    entt::entity entity = *ik_view.begin();
     auto& ik_config = ik_view.get<AnimationECS::IKConfiguration>(entity);
     auto& buffers = ik_view.get<AnimationECS::AnimationBuffers>(entity);
 
@@ -1367,11 +1384,33 @@ void UpdateIKGizmos(ViewerState& state) {
         }
     }
 
-    // Update gizmo positions from chain target debug data
+    // Update gizmo positions based on IK state
     for (auto& gizmo : state.ik_gizmos) {
         AnimationECS::LimbIKChain* chain = gizmo.GetChain(ik_config);
-        if (chain && chain->Valid() && chain->debug_target_valid) {
-            gizmo.position = chain->debug_target;
+        if (chain && chain->Valid()) {
+            // Don't update position if actively dragging - HandleIKGizmoMouseInteraction does that
+            if (gizmo.is_dragging) {
+                continue;
+            }
+
+            // Update strategy:
+            // - If IK is disabled: Follow animated bone (gizmo moves with animation)
+            // - If IK is enabled: Show IK target position (stays where user dragged it)
+            if (chain->enabled) {
+                // IK is enabled - show the IK target position
+                if (chain->debug_target_valid) {
+                    gizmo.position = chain->debug_target;
+                }
+                // If debug_target not valid yet, keep previous position (don't snap to bone)
+            } else {
+                // IK is disabled - follow the animated end bone
+                if (chain->end >= 0 && static_cast<size_t>(chain->end) < buffers.models.size()) {
+                    const auto& end_matrix = buffers.models[chain->end];
+                    gizmo.position.x = ozz::math::GetX(end_matrix.cols[3]);
+                    gizmo.position.y = ozz::math::GetY(end_matrix.cols[3]);
+                    gizmo.position.z = ozz::math::GetZ(end_matrix.cols[3]);
+                }
+            }
         }
     }
 }
@@ -1417,88 +1456,144 @@ void HandleIKGizmoMouseInteraction(ViewerState& state, VulkanRenderer& renderer,
         return;
     }
 
-    // Get mouse position
     double mouse_x, mouse_y;
-    glfwGetCursorPos(state.window, &mouse_x, &mouse_y);
+    int window_width, window_height;
+    int framebuffer_width, framebuffer_height;
 
-    // Get viewport size
-    int viewport_width, viewport_height;
-    glfwGetFramebufferSize(state.window, &viewport_width, &viewport_height);
-
-    // Get view and projection matrices
+    auto& debug_renderer = renderer.GetDebugRenderer();
     const ozz::math::Float4x4 view = camera.GetViewMatrix();
     const ozz::math::Float4x4 proj = camera.GetProjectionMatrix();
 
-    // Create ray from screen to world
+    glfwGetCursorPos(state.window, &mouse_x, &mouse_y);
+    glfwGetWindowSize(state.window, &window_width, &window_height);
+    glfwGetFramebufferSize(state.window, &framebuffer_width, &framebuffer_height);
+
+    const float scale_x = static_cast<float>(framebuffer_width) / static_cast<float>(window_width);
+    const float scale_y = static_cast<float>(framebuffer_height) / static_cast<float>(window_height);
+    const float fb_mouse_x = static_cast<float>(mouse_x) * scale_x;
+    const float fb_mouse_y = static_cast<float>(mouse_y) * scale_y;
+
     ozz::math::Float3 ray_origin, ray_direction;
     IKGizmo::ScreenToWorldRay(
-        static_cast<float>(mouse_x), static_cast<float>(mouse_y),
-        viewport_width, viewport_height,
+        fb_mouse_x, fb_mouse_y,
+        framebuffer_width, framebuffer_height,
         view, proj,
         &ray_origin, &ray_direction);
 
-    // Check for hover
-    const int hovered_index = IKGizmo::FindClosestGizmo(state.ik_gizmos, ray_origin, ray_direction);
 
-    // Update hover state
-    for (size_t i = 0; i < state.ik_gizmos.size(); ++i) {
-        state.ik_gizmos[i].is_hovered = (static_cast<int>(i) == hovered_index);
-    }
-
-    // Handle mouse button
     const bool left_button_pressed = glfwGetMouseButton(state.window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
 
-    // Check if ImGui wants mouse (don't interact with gizmos if clicking UI)
+    if (state.dragged_gizmo_index < 0) {
+        const int hovered_index = IKGizmo::FindClosestGizmo(state.ik_gizmos, ray_origin, ray_direction);
+
+        for (size_t i = 0; i < state.ik_gizmos.size(); ++i) {
+            state.ik_gizmos[i].is_hovered = (static_cast<int>(i) == hovered_index);
+        }
+    }
+
     if (ImGui::GetIO().WantCaptureMouse) {
         state.dragged_gizmo_index = -1;
+        g_is_dragging_gizmo = false;
         for (auto& gizmo : state.ik_gizmos) {
             gizmo.is_dragging = false;
         }
         return;
     }
 
-    // Start dragging
-    if (left_button_pressed && state.dragged_gizmo_index < 0 && hovered_index >= 0) {
-        state.dragged_gizmo_index = hovered_index;
-        state.ik_gizmos[hovered_index].is_dragging = true;
+    if (left_button_pressed && state.dragged_gizmo_index < 0) {
+        const int hovered_index = IKGizmo::FindClosestGizmo(state.ik_gizmos, ray_origin, ray_direction);
 
-        // Setup drag plane (perpendicular to camera view direction)
-        const ozz::math::Float3 camera_pos = camera.GetPosition();
-        const ozz::math::Float3 camera_target = camera.GetTarget();
-        state.drag_plane_normal.x = camera_pos.x - camera_target.x;
-        state.drag_plane_normal.y = camera_pos.y - camera_target.y;
-        state.drag_plane_normal.z = camera_pos.z - camera_target.z;
+        if (hovered_index >= 0) {
+            state.dragged_gizmo_index = hovered_index;
+            g_is_dragging_gizmo = true;  // Block camera rotation
+            state.ik_gizmos[hovered_index].is_dragging = true;
 
-        // Normalize
-        const float len = std::sqrt(state.drag_plane_normal.x * state.drag_plane_normal.x +
-                                   state.drag_plane_normal.y * state.drag_plane_normal.y +
-                                   state.drag_plane_normal.z * state.drag_plane_normal.z);
-        state.drag_plane_normal.x /= len;
-        state.drag_plane_normal.y /= len;
-        state.drag_plane_normal.z /= len;
+            const ozz::math::Float3 camera_pos = camera.GetPosition();
+            const ozz::math::Float3 camera_target = camera.GetTarget();
+            ozz::math::Float3 camera_forward;
+            camera_forward.x = camera_target.x - camera_pos.x;
+            camera_forward.y = camera_target.y - camera_pos.y;
+            camera_forward.z = camera_target.z - camera_pos.z;
+            const float fwd_len = std::sqrt(camera_forward.x * camera_forward.x +
+                                           camera_forward.y * camera_forward.y +
+                                           camera_forward.z * camera_forward.z);
+            if (fwd_len > 1e-6f) {
+                camera_forward.x /= fwd_len;
+                camera_forward.y /= fwd_len;
+                camera_forward.z /= fwd_len;
+            }
 
-        // Plane distance
-        const ozz::math::Float3& gizmo_pos = state.ik_gizmos[hovered_index].position;
-        state.drag_plane_distance = -(state.drag_plane_normal.x * gizmo_pos.x +
-                                      state.drag_plane_normal.y * gizmo_pos.y +
-                                      state.drag_plane_normal.z * gizmo_pos.z);
+            // Calculate plane for dragging (perpendicular to camera view, at gizmo position)
+            const ozz::math::Float3& gizmo_pos = state.ik_gizmos[hovered_index].position;
+
+            // Plane normal is camera forward direction
+            // Plane distance: -dot(normal, point_on_plane)
+            state.drag_distance_from_camera = -(camera_forward.x * gizmo_pos.x +
+                                                 camera_forward.y * gizmo_pos.y +
+                                                 camera_forward.z * gizmo_pos.z);
+
+            // Store plane normal in drag_start_offset (reusing the variable)
+            state.drag_start_offset = camera_forward;
+
+            // Find where ray intersects the plane and store the offset from gizmo
+            ozz::math::Float3 ray_hit;
+            if (IKGizmo::RayPlaneIntersection(ray_origin, ray_direction, camera_forward,
+                                              state.drag_distance_from_camera, &ray_hit)) {
+                // Store offset from hit point to gizmo (so gizmo doesn't snap to cursor)
+                state.drag_start_offset.x = gizmo_pos.x - ray_hit.x;
+                state.drag_start_offset.y = gizmo_pos.y - ray_hit.y;
+                state.drag_start_offset.z = gizmo_pos.z - ray_hit.z;
+            }
+        }
     }
 
     // Update dragging
     if (left_button_pressed && state.dragged_gizmo_index >= 0) {
-        ozz::math::Float3 intersection;
-        if (IKGizmo::RayPlaneIntersection(ray_origin, ray_direction, state.drag_plane_normal,
-                                         state.drag_plane_distance, &intersection)) {
+        // Reconstruct the drag plane using stored distance
+        // (drag_distance_from_camera stores the plane distance)
+
+        // Get camera forward for plane normal
+        const ozz::math::Float3 camera_pos = camera.GetPosition();
+        const ozz::math::Float3 camera_target = camera.GetTarget();
+        ozz::math::Float3 plane_normal;
+        plane_normal.x = camera_target.x - camera_pos.x;
+        plane_normal.y = camera_target.y - camera_pos.y;
+        plane_normal.z = camera_target.z - camera_pos.z;
+        const float normal_len = std::sqrt(plane_normal.x * plane_normal.x +
+                                          plane_normal.y * plane_normal.y +
+                                          plane_normal.z * plane_normal.z);
+        if (normal_len > 1e-6f) {
+            plane_normal.x /= normal_len;
+            plane_normal.y /= normal_len;
+            plane_normal.z /= normal_len;
+        }
+
+        // Intersect current ray with the drag plane
+        ozz::math::Float3 ray_hit;
+        if (IKGizmo::RayPlaneIntersection(ray_origin, ray_direction, plane_normal,
+                                          state.drag_distance_from_camera, &ray_hit)) {
+            // Debug: Draw the ray hit point (yellow sphere)
+            debug_renderer.DrawSphere(ray_hit, 0.05f, ozz::math::Float4{1.0f, 1.0f, 0.0f, 1.0f});
+
+            // Apply stored offset to get final gizmo position
+            ozz::math::Float3 new_position;
+            new_position.x = ray_hit.x + state.drag_start_offset.x;
+            new_position.y = ray_hit.y + state.drag_start_offset.y;
+            new_position.z = ray_hit.z + state.drag_start_offset.z;
+
+            // Debug: Draw offset vector (from hit to gizmo)
+            debug_renderer.DrawLine(ray_hit, new_position, ozz::math::Float4{1.0f, 0.5f, 0.0f, 1.0f});
+
             // Update gizmo position
-            state.ik_gizmos[state.dragged_gizmo_index].position = intersection;
+            state.ik_gizmos[state.dragged_gizmo_index].position = new_position;
 
             // Apply to IK chain
             if (state.ecs_animation_registry) {
                 auto& registry = state.ecs_animation_registry->GetRegistry();
                 auto ik_view = registry.view<AnimationECS::IKConfiguration, AnimationECS::AnimationBuffers>();
 
-                if (!ik_view.empty()) {
-                    entt::entity entity = ik_view.front();
+                if (ik_view.begin() != ik_view.end()) {
+                    entt::entity entity = *ik_view.begin();
                     auto& ik_config = ik_view.get<AnimationECS::IKConfiguration>(entity);
                     auto& buffers = ik_view.get<AnimationECS::AnimationBuffers>(entity);
 
@@ -1508,7 +1603,7 @@ void HandleIKGizmoMouseInteraction(ViewerState& state, VulkanRenderer& renderer,
                     if (chain && chain->Valid()) {
                         // Apply dragged target (updates chain->target_offset)
                         AnimationECS::IKSolverSystem::ApplyDraggedTarget(
-                            *chain, intersection, ozz::make_span(buffers.models));
+                            *chain, new_position, ozz::make_span(buffers.models));
 
                         // Enable the chain so IK actually runs
                         chain->enabled = true;
@@ -1521,7 +1616,9 @@ void HandleIKGizmoMouseInteraction(ViewerState& state, VulkanRenderer& renderer,
     // Stop dragging
     if (!left_button_pressed && state.dragged_gizmo_index >= 0) {
         state.ik_gizmos[state.dragged_gizmo_index].is_dragging = false;
+        state.ik_gizmos[state.dragged_gizmo_index].is_hovered = false;  // Clear hover state
         state.dragged_gizmo_index = -1;
+        g_is_dragging_gizmo = false;  // Re-enable camera rotation
     }
 }
 
@@ -1547,7 +1644,8 @@ void DrawIKPanel(ViewerState& state, VulkanRenderer& renderer) {
     auto& registry = state.ecs_animation_registry->GetRegistry();
     auto ik_view = registry.view<AnimationECS::IKConfiguration>();
 
-    if (ik_view.empty()) {
+    // Check if view has any entities
+    if (ik_view.begin() == ik_view.end()) {
         ImGui::TextColored(ImVec4(1.f, 0.5f, 0.f, 1.f), "No IK configurations found");
         ImGui::Text("IK will auto-initialize when skeleton is loaded");
         ImGui::End();
@@ -1555,7 +1653,7 @@ void DrawIKPanel(ViewerState& state, VulkanRenderer& renderer) {
     }
 
     // For now, use first entity with IK
-    entt::entity selected_entity = ik_view.front();
+    entt::entity selected_entity = *ik_view.begin();
     auto& ik_config = registry.get<AnimationECS::IKConfiguration>(selected_entity);
 
     // Status display
@@ -2127,6 +2225,11 @@ Camera* GetCameraForWindow(GLFWwindow* window) {
 }
 
 void OnGlfwMouseButton(GLFWwindow* window, int button, int action, int mods) {
+    // Don't pass mouse events to camera if dragging a gizmo
+    if (g_is_dragging_gizmo) {
+        return;
+    }
+
     Camera* camera = GetCameraForWindow(window);
     if (!camera) {
         return;
@@ -2141,6 +2244,11 @@ void OnGlfwMouseButton(GLFWwindow* window, int button, int action, int mods) {
 }
 
 void OnGlfwCursorPos(GLFWwindow* window, double xpos, double ypos) {
+    // Don't pass mouse movement to camera if dragging a gizmo
+    if (g_is_dragging_gizmo) {
+        return;
+    }
+
     Camera* camera = GetCameraForWindow(window);
     if (!camera) {
         return;
@@ -2606,6 +2714,19 @@ int main(int argc, const char** argv) {
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+
+        // Handle space bar to play/pause animation (check after ImGui update in previous frame)
+        if (renderer.IsImGuiInitialized()) {
+            ImGui::SetCurrentContext(renderer.GetImGuiContext());
+            ImGuiIO& io = ImGui::GetIO();
+
+            // Only handle space bar if ImGui doesn't want keyboard input
+            if (!io.WantCaptureKeyboard && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+                // Toggle animation playback
+                bool animate = renderer.GetAnimateMesh();
+                renderer.SetAnimateMesh(!animate);
+            }
+        }
 
         ProcessLoadRequests(state, renderer);
         ApplyMeshVisibility(state, renderer);

@@ -372,9 +372,10 @@ void IKSolverSystem::ApplyDraggedTarget(
     }
 
     const ozz::math::Float3 current_pos = ExtractTranslation(models[chain.end]);
-    chain.target_offset.x = target_world.x - current_pos.x + chain.target_offset.x;
-    chain.target_offset.y = target_world.y - current_pos.y + chain.target_offset.y;
-    chain.target_offset.z = target_world.z - current_pos.z + chain.target_offset.z;
+    // Set offset directly (don't accumulate) - target_world is the absolute position we want
+    chain.target_offset.x = target_world.x - current_pos.x;
+    chain.target_offset.y = target_world.y - current_pos.y;
+    chain.target_offset.z = target_world.z - current_pos.z;
 }
 
 void IKSolverSystem::Update(entt::registry& registry)
@@ -429,6 +430,18 @@ void IKSolverSystem::Update(entt::registry& registry)
             if (!chain.Valid() || !chain.enabled)
                 return;
 
+            // Compute target position first
+            const ozz::math::Float3 target = ComputeChainTarget(
+                chain,
+                ozz::make_span(buffers.models),
+                ik_config.foot_ground_height,
+                ik_config.crouch_offset,
+                ik_config.crouch_affects_arms);
+
+            // Always set debug target so gizmos work properly
+            chain.debug_target = target;
+            chain.debug_target_valid = true;
+
             // Check if target offset is effectively zero (avoid IK on trivial cases)
             const float offset_len_sq = chain.target_offset.x * chain.target_offset.x +
                                        chain.target_offset.y * chain.target_offset.y +
@@ -439,19 +452,13 @@ void IKSolverSystem::Update(entt::registry& registry)
             const bool is_leg_with_ground = (chain.role == LimbIKChain::Role::Leg &&
                                             std::abs(ik_config.foot_ground_height) > epsilon);
 
-            // Skip IK if offset is zero and no ground height (prevents numerical drift)
+            // Skip IK solver if offset is zero and no ground height (prevents numerical drift)
+            // But we still set debug_target above so gizmos work
             if (!is_leg_with_ground && offset_len_sq < epsilon && params.weight > 0.999f)
             {
                 chain.reached = true;  // Trivially reached (staying at animated position)
                 return;
             }
-
-            const ozz::math::Float3 target = ComputeChainTarget(
-                chain,
-                ozz::make_span(buffers.models),
-                ik_config.foot_ground_height,
-                ik_config.crouch_offset,
-                ik_config.crouch_affects_arms);
 
             int chain_dirty = static_cast<int>(buffers.models.size());
             bool success = SolveLimbIK(

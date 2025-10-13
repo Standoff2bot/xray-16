@@ -38,7 +38,6 @@ public:
     void Reset() {
         SetPosition(ozz::math::Float3(2.0f, 2.0f, 2.0f));
         SetTarget(ozz::math::Float3(0.0f, 0.0f, 0.0f));
-        distance_ = CalculateDistance();
     }
 
     // Projection settings
@@ -54,14 +53,12 @@ public:
 
 private:
     void UpdateMatrices() const;
-    float CalculateDistance() const;
-    void UpdatePositionFromRotation();
-    ozz::math::Quaternion CalculateInitialRotation() const;
 
-    // Camera state
-    ozz::math::Float3 eye_position_;
-    ozz::math::Float3 look_at_target_;
-    ozz::math::Float3 up_vector_;
+    // Camera state (ozz-style orbit camera)
+    ozz::math::Float3 center_;     // Rotation center (look-at point)
+    ozz::math::Float2 angles_;     // Euler angles (pitch, yaw) in radians
+    float distance_;               // Distance from center
+    ozz::math::Float3 up_vector_;  // Up vector
 
     // Projection parameters
     float fov_radians_;
@@ -69,9 +66,9 @@ private:
     float near_plane_;
     float far_plane_;
 
-    // Camera control state
-    float distance_;           // Distance from target
-    ozz::math::Quaternion rotation_; // Camera rotation as quaternion
+    // Viewport size (needed for panning calculations)
+    int viewport_width_;
+    int viewport_height_;
 
     // Mouse tracking
     double last_mouse_x_;
@@ -80,7 +77,9 @@ private:
     bool middle_button_down_;
     bool right_button_down_;
 
-    // Cached matrices
+    // Cached matrices and state
+    mutable ozz::math::Float3 eye_position_;  // Computed from center + angles + distance
+    mutable ozz::math::Float3 look_at_target_; // Same as center_ (for compatibility)
     mutable ozz::math::Float4x4 view_matrix_;
     mutable ozz::math::Float4x4 projection_matrix_;
     mutable bool matrices_dirty_;

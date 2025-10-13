@@ -842,22 +842,6 @@ void VulkanRenderer::UpdateMeshAnimation(float delta_time_seconds) {
         mesh_animation_time_ += delta_time_seconds * animation_playback_speed_;
     }
 
-    const float rotation_speed = mesh_rotation_speed_;
-    const float angle = mesh_animation_time_ * rotation_speed;
-    const ozz::math::Float4x4 rotation = ozz::math::Float4x4::FromAxisAngle(ozz::math::Float3::y_axis(), angle);
-
-    // Apply rotation to mesh instance transform
-    mesh_instances_[0].transform = rotation;
-
-    // Also update skeleton transforms to match
-    if (skeleton_renderer_initialized_ && skeleton_loaded_) {
-        std::array<ozz::math::Float4x4, 1> transforms = { rotation };
-        skeleton_renderer_.SetInstanceTransforms(ozz::make_span(transforms));
-        skeleton_world_transform_ = rotation;
-    } else {
-        skeleton_world_transform_ = rotation;
-    }
-
     bool sampled_pose = false;
     // If bind pose mode is active, skip animation sampling and use rest pose
     if (show_bind_pose_) {
