@@ -8,6 +8,7 @@
 #include "ActorEffector.h"
 #include "WeaponMagazinedWGrenade.h" // XXX: move somewhere
 #include "GamePersistent.h"
+#include "xrCore/Animation/Motion.hpp"
 
 player_hud* g_player_hud = nullptr;
 extern ENGINE_API shared_str current_player_hud_sect;
@@ -624,8 +625,6 @@ void player_hud::render_hud(u32 context_id, IRenderable* root)
     if (item1)
         item1->render(context_id, root);
 }
-
-#include "xrCore/Animation/Motion.hpp"
 
 u32 player_hud::motion_length(const shared_str& anim_name, const shared_str& hud_name, const CMotionDef*& md)
 {

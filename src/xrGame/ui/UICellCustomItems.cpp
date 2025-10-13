@@ -4,6 +4,7 @@
 #include "Weapon.h"
 #include "UIDragDropListEx.h"
 #include "xrUICore/ProgressBar/UIProgressBar.h"
+#include "Common/object_broker.h"
 
 #define INV_GRID_WIDTHF 50.0f
 #define INV_GRID_HEIGHTF 50.0f
@@ -351,7 +352,6 @@ CUIWeaponCellItem::CUIWeaponCellItem(CWeapon* itm) : inherited(itm)
         m_addon_offset[eLauncher].set(object()->GetGrenadeLauncherX(), object()->GetGrenadeLauncherY());
 }
 
-#include "Common/object_broker.h"
 CUIWeaponCellItem::~CUIWeaponCellItem() {}
 bool CUIWeaponCellItem::is_scope() { return object()->ScopeAttachable() && object()->IsScopeAttached(); }
 bool CUIWeaponCellItem::is_silencer() { return object()->SilencerAttachable() && object()->IsSilencerAttached(); }

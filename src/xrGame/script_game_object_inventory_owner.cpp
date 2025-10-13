@@ -55,6 +55,9 @@
 #include "inventory_item_impl.h"
 #include "xrServer_Objects_ALife_Items.h"
 #include "xrServerEntities/inventory_space.h"
+#include "InventoryBox.h"
+#include "GametaskManager.h"
+
 //-Alundaio
 
 bool CScriptGameObject::GiveInfoPortion(LPCSTR info_id)
@@ -305,7 +308,6 @@ void CScriptGameObject::IterateInventory(luabind::functor<bool> functor, luabind
             return;
 }
 
-#include "InventoryBox.h"
 void CScriptGameObject::IterateInventoryBox(luabind::functor<bool> functor, luabind::object object)
 {
     CInventoryBox* inventory_box = smart_cast<CInventoryBox*>(&this->object());
@@ -816,7 +818,6 @@ LPCSTR CScriptGameObject::sound_voice_prefix() const
     return pInventoryOwner->SpecificCharacter().sound_voice_prefix();
 }
 
-#include "GametaskManager.h"
 ETaskState CScriptGameObject::GetGameTaskState(LPCSTR task_id, TASK_OBJECTIVE_ID objective_id)
 {
     shared_str shared_name = task_id;

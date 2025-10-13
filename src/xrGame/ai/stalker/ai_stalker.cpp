@@ -901,7 +901,6 @@ void CAI_Stalker::UpdateCL()
 
 void CAI_Stalker::PHHit(SHit& H) { m_pPhysics_support->in_Hit(H, false); }
 CPHDestroyable* CAI_Stalker::ph_destroyable() { return smart_cast<CPHDestroyable*>(character_physics_support()); }
-#include "enemy_manager.h"
 
 void CAI_Stalker::shedule_Update(u32 DT)
 {

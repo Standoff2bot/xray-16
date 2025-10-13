@@ -75,7 +75,6 @@ void CRadioactiveZone::feel_touch_new(IGameObject* O)
     };
 };
 
-#include "Actor.h"
 bool CRadioactiveZone::feel_touch_contact(IGameObject* O)
 {
     CActor* A = smart_cast<CActor*>(O);

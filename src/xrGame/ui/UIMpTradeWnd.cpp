@@ -7,6 +7,8 @@
 #include "UICellItem.h"
 #include "UIDialogHolder.h"
 #include "game_cl_deathmatch.h"
+#include "xrEngine/xr_input.h"
+#include "Actor.h"
 
 void CUIMpTradeWnd::OnBtnOkClicked(CUIWindow* w, void* d)
 {
@@ -47,7 +49,6 @@ void CUIMpTradeWnd::TryUsePreset(ETradePreset idx)
     ApplyPreset(idx);
 }
 
-#include "xrEngine/xr_input.h"
 void CUIMpTradeWnd::OnBtnPreset1Clicked(CUIWindow* w, void* d)
 {
     CheckDragItemToDestroy();
@@ -214,7 +215,6 @@ void CUIMpTradeWnd::FillUpSubLevelItems()
     }
 }
 
-#include "Actor.h"
 void CUIMpTradeWnd::Show(bool status)
 {
     inherited::Show(status);

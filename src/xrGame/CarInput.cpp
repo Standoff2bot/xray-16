@@ -1,4 +1,9 @@
 #include "StdAfx.h"
+#include "script_game_object.h"
+#include "script_game_object_impl.h"
+#include "car_memory.h"
+#include "visual_memory_manager.h"
+
 #pragma hdrstop
 #ifdef DEBUG
 
@@ -380,10 +385,6 @@ float CCar::FireDirDiff()
         return m_car_weapon->FireDirDiff();
     return 0.0f;
 }
-#include "script_game_object.h"
-#include "script_game_object_impl.h"
-#include "car_memory.h"
-#include "visual_memory_manager.h"
 
 bool CCar::isObjectVisible(CScriptGameObject* O_)
 {

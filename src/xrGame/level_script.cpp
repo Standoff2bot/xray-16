@@ -40,6 +40,10 @@
 #include "xrCDB/xr_collide_defs.h"
 #include "xrNetServer/NET_Messages.h"
 #include "xrEngine/Rain.h"
+#include "ActorEffector.h"
+#include "actor_statistic_mgr.h"
+#include "PostprocessAnimator.h"
+#include "relation_registry.h"
 
 LPCSTR command_line() { return Core.Params; }
 bool IsDynamicMusic() { return !!psActorFlags.test(AF_DYNAMIC_MUSIC); }
@@ -429,7 +433,6 @@ void iterate_sounds2(LPCSTR prefix, u32 max_count, luabind::object object, luabi
     iterate_sounds(prefix, max_count, temp);
 }
 
-#include "ActorEffector.h"
 float add_cam_effector(LPCSTR fn, int id, bool cyclic, LPCSTR cb_func)
 {
     CAnimatorCamEffectorScriptCB* e = xr_new<CAnimatorCamEffectorScriptCB>(cb_func);
@@ -459,7 +462,6 @@ void set_snd_volume(float v)
     psSoundVFactor = v;
     clamp(psSoundVFactor, 0.0f, 1.0f);
 }
-#include "actor_statistic_mgr.h"
 void add_actor_points(LPCSTR sect, LPCSTR detail_key, int cnt, int pts)
 {
     return Actor()->StatisticMgr().AddPoints(sect, detail_key, cnt, pts);
@@ -471,10 +473,8 @@ void add_actor_points_str(LPCSTR sect, LPCSTR detail_key, LPCSTR str_value)
 }
 
 int get_actor_points(LPCSTR sect) { return Actor()->StatisticMgr().GetSectionPoints(sect); }
-#include "ActorEffector.h"
 void add_complex_effector(LPCSTR section, int id) { AddEffector(Actor(), id, section); }
 void remove_complex_effector(int id) { RemoveEffector(Actor(), id); }
-#include "PostprocessAnimator.h"
 void add_pp_effector(LPCSTR fn, int id, bool cyclic)
 {
     CPostprocessAnimator* pp = xr_new<CPostprocessAnimator>(id, cyclic);
@@ -505,8 +505,6 @@ void set_pp_effector_factor2(int id, float f)
     if (pp)
         pp->SetCurrentFactor(f);
 }
-
-#include "relation_registry.h"
 
 int g_community_goodwill(LPCSTR _community, int _entity_id)
 {

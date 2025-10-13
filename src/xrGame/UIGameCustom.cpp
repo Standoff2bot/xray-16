@@ -16,6 +16,8 @@
 #include "game_cl_base.h"
 
 #include "ui/UICellItem.h" //Alundaio
+#include "ui/UIGameTutorial.h"
+
 //#include "script_game_object.h" //Alundaio
 
 EGameIDs ParseStringToGameType(const char* str);
@@ -154,7 +156,6 @@ void CUIGameCustom::OnInventoryAction(PIItem item, u16 actionType)
         ActorMenu->OnInventoryAction(item, actionType);
 }
 
-#include "ui/UIGameTutorial.h"
 // XXX nitrocaster: move to appropriate header
 extern CUISequencer* g_tutorial;
 extern CUISequencer* g_tutorial2;

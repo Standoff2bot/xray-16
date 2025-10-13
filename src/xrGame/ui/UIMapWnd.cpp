@@ -21,6 +21,8 @@
 #include "xrUICore/ListBox/UIListBoxItem.h"
 #include "xrEngine/xr_input.h" //remove me !!!
 #include "UIHelper.h"
+#include "GametaskManager.h"
+#include "GameTask.h"
 
 CUIMapWnd* g_map_wnd = NULL; // quick temporary solution -(
 CUIMapWnd* GetMapWnd() { return g_map_wnd; }
@@ -830,11 +832,6 @@ void CUIMapWnd::Reset()
     inherited::Reset();
     ResetActionPlanner();
 }
-
-#include "GametaskManager.h"
-#include "Actor.h"
-#include "map_spot.h"
-#include "GameTask.h"
 
 void CUIMapWnd::SpotSelected(CUIWindow* w)
 {

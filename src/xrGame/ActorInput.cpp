@@ -3,6 +3,7 @@
 #include "Torch.h"
 #include "trade.h"
 #include "xrEngine/CameraBase.h"
+#include "HudItem.h"
 
 #ifdef DEBUG
 #include "PHDebug.h"
@@ -587,7 +588,6 @@ void CActor::IR_OnControllerAttitudeChange(Fvector change)
     OnAxisMove(change.x, change.y, scale, scale, psControllerFlags.test(ControllerInvertX), psControllerFlags.test(ControllerInvertY));
 }
 
-#include "HudItem.h"
 bool CActor::use_Holder(CHolderCustom* holder)
 {
     if (m_holder)

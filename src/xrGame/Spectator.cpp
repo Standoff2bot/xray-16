@@ -21,6 +21,7 @@
 #include "HudItem.h"
 #include "game_cl_mp.h"
 #include "map_manager.h"
+#include "xrEngine/IGame_Persistent.h"
 
 const float CSpectator::cam_inert_value = 0.7f;
 
@@ -537,7 +538,6 @@ bool CSpectator::net_Spawn(CSE_Abstract* DC)
     return TRUE;
 };
 
-#include "xrEngine/IGame_Persistent.h"
 void CSpectator::net_Destroy()
 {
     inherited::net_Destroy();

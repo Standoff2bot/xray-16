@@ -192,9 +192,6 @@ void CPhraseDialog::Load(shared_str dialog_id)
     inherited_shared::load_shared(m_DialogId, NULL);
 }
 
-#include "xrScriptEngine/script_engine.hpp"
-#include "ai_space.h"
-
 void CPhraseDialog::load_shared(LPCSTR)
 {
     const ITEM_DATA& item_data = *id_to_index::GetById(m_DialogId);

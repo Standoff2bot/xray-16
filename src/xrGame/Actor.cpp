@@ -1,6 +1,7 @@
 #include "pch_script.h"
 #include "Actor_Flags.h"
 #include "HUDManager.h"
+#include "debug_renderer.h"
 
 #ifdef DEBUG
 #include "PHDebug.h"
@@ -1608,7 +1609,6 @@ void CActor::shedule_Update(u32 DT)
     m_pPhysics_support->in_shedule_Update(DT);
     Check_for_AutoPickUp();
 };
-#include "debug_renderer.h"
 void CActor::renderable_Render(u32 context_id, IRenderable* root)
 {
     VERIFY(_valid(XFORM()));

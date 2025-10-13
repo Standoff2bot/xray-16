@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "stream_reader.h"
 #include "xrCore/_std_extensions.h"
+#include "FS_impl.h"
 
 #if defined(XR_PLATFORM_POSIX)
 #include <sys/mman.h>
@@ -136,7 +137,6 @@ CStreamReader* CStreamReader::open_chunk(const size_t& chunk_id)
     return (result);
 }
 
-#include "FS_impl.h"
 u32 CStreamReader::find_chunk(u32 ID, bool* bCompressed) { return inherited::find_chunk(ID, bCompressed); }
 void CStreamReader::r_stringZ(shared_str& dest)
 {

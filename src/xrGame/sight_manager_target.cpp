@@ -14,6 +14,7 @@
 #include "ai_space.h"
 #include "ai/stalker/ai_stalker_space.h"
 #include "detail_path_manager.h"
+#include "Actor.h"
 
 void CSightManager::SetPointLookAngles(
     const Fvector& tPosition, float& yaw, float& pitch, Fvector const& look_position, const CGameObject* object)
@@ -36,7 +37,6 @@ void CSightManager::SetPointLookAngles(
     pitch *= -1;
 }
 
-#include "Actor.h"
 void aim_target(shared_str const& aim_bone_id, Fvector& result, const CGameObject* object);
 
 bool CSightManager::aim_target(Fvector& my_position, Fvector& aim_target, const CGameObject* object) const

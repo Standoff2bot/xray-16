@@ -38,6 +38,7 @@
 #include "doors_door.h"
 #include "doors.h"
 #include "xrNetServer/NET_Messages.h"
+#include "Bolt.h"
 
 extern MagicBox3 MagicMinBox(int iQuantity, const Fvector* akPoint);
 
@@ -1097,7 +1098,6 @@ void CGameObject::u_EventGen(NET_Packet& P, u32 type, u32 dest)
 }
 
 void CGameObject::u_EventSend(NET_Packet& P, u32 dwFlags) { Level().Send(P, dwFlags); }
-#include "Bolt.h"
 
 bool CGameObject::UsedAI_Locations() { return (m_server_flags.test(CSE_ALifeObject::flUsedAI_Locations)); }
 bool CGameObject::TestServerFlag(u32 Flag) const { return (m_server_flags.test(Flag)); }

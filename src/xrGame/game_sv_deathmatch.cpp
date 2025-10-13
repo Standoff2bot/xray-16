@@ -20,6 +20,7 @@
 //#define DELAYED_ROUND_TIME	7000
 #include "ui/UIBuyWndShared.h"
 #include "xrEngine/XR_IOConsole.h"
+#include "UIGameDM.h"
 
 #define UNBUYABLESLOT 20
 
@@ -425,7 +426,6 @@ void game_sv_Deathmatch::OnFraglimitExceed()
     // OnRoundEnd();
 }
 
-#include "UIGameDM.h"
 void game_sv_Deathmatch::Update()
 {
     inherited::Update();

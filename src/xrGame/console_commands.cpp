@@ -50,6 +50,8 @@
 #include "ai_debug_variables.h"
 #include "xrPhysics/console_vars.h"
 #include "GametaskManager.h"
+#include "UIGameCustom.h"
+#include "GamePersistent.h"
 
 #ifdef DEBUG
 #include "PHDebug.h"
@@ -623,8 +625,6 @@ void get_files_list(xr_vector<shared_str>& files, LPCSTR dir, LPCSTR file_ext)
     }
     FS.m_Flags.set(CLocatorAPI::flNeedCheck, FALSE);
 }
-
-#include "UIGameCustom.h"
 
 class CCC_ALifeSave : public IConsole_Command
 {
@@ -1477,8 +1477,6 @@ public:
         }
     }
 };
-
-#include "GamePersistent.h"
 
 class CCC_MainMenu : public IConsole_Command
 {

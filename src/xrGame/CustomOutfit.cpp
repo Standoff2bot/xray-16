@@ -11,6 +11,7 @@
 #include "Include/xrRender/Kinematics.h"
 #include "player_hud.h"
 #include "ActorHelmet.h"
+#include "Torch.h"
 
 CCustomOutfit::CCustomOutfit()
 {
@@ -294,7 +295,6 @@ float CCustomOutfit::HitThroughArmor(float hit_power, s16 element, float ap, boo
 }
 
 bool CCustomOutfit::BonePassBullet(int boneID) { return m_boneProtection->getBonePassBullet(s16(boneID)); }
-#include "Torch.h"
 void CCustomOutfit::OnMoveToSlot(const SInvItemPlace& prev)
 {
     if (m_pInventory)

@@ -10,6 +10,7 @@
 #include "xrUICore/Windows/UIWindow.h"
 #include "player_hud.h"
 #include "Weapon.h"
+#include "game_base_space.h"
 
 ITEM_INFO::ITEM_INFO() : snd_time(0), cur_period(0)
 {
@@ -331,7 +332,6 @@ void CCustomDetector::TurnDetectorInternal(bool b)
     UpdateNightVisionMode(b);
 }
 
-#include "game_base_space.h"
 void CCustomDetector::UpdateNightVisionMode(bool b_on) {}
 bool CAfList::feel_touch_contact(IGameObject* O)
 {

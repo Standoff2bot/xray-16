@@ -22,6 +22,7 @@
 #include "UIGameCustom.h"
 #include "ui/UIMainIngameWnd.h"
 #include "xrUICore/Static/UIStatic.h"
+#include "CharacterPhysicsSupport.h"
 
 #define MAX_SATIETY 1.0f
 #define START_SATIETY 0.5f
@@ -382,7 +383,6 @@ void CActorCondition::AffectDamage_InjuriousMaterialAndMonstersInfluence()
     } // while
 }
 
-#include "CharacterPhysicsSupport.h"
 float CActorCondition::GetInjuriousMaterialDamage()
 {
     u16 mat_injurios = m_object->character_physics_support()->movement()->injurious_material_idx();

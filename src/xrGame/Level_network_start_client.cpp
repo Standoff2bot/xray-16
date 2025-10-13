@@ -12,6 +12,7 @@
 
 #include "xrPhysics/IPHWorld.h"
 #include "physics_game.h"
+#include "xrServer.h"
 
 extern pureFrame* g_pNetProcessor;
 
@@ -40,8 +41,6 @@ bool CLevel::net_start_client1()
     g_pGamePersistent->LoadTitle(temp);
     return true;
 }
-
-#include "xrServer.h"
 
 bool CLevel::net_start_client2()
 {

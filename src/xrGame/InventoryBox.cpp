@@ -9,6 +9,7 @@
 #include "ui/UIActorMenu.h"
 #include "UIGameCustom.h"
 #include "inventory_item.h"
+#include "xrServerEntities/xrServer_Objects_ALife.h"
 
 CInventoryBox::CInventoryBox()
 {
@@ -78,7 +79,6 @@ void CInventoryBox::OnEvent(NET_Packet& P, u16 type)
 
 void CInventoryBox::UpdateCL() { inherited::UpdateCL(); }
 void CInventoryBox::net_Destroy() { inherited::net_Destroy(); }
-#include "xrServerEntities/xrServer_Objects_ALife.h"
 bool CInventoryBox::net_Spawn(CSE_Abstract* DC)
 {
     inherited::net_Spawn(DC);
@@ -98,7 +98,6 @@ bool CInventoryBox::net_Spawn(CSE_Abstract* DC)
 }
 
 void CInventoryBox::net_Relcase(IGameObject* O) { inherited::net_Relcase(O); }
-#include "inventory_item.h"
 void CInventoryBox::AddAvailableItems(TIItemContainer& items_container) const
 {
     xr_vector<u16>::const_iterator it = m_items.begin();

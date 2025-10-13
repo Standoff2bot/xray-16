@@ -16,6 +16,8 @@
 #include "ActorEffector.h"
 #include "static_cast_checked.hpp"
 #include "player_hud.h"
+#include "CustomOutfit.h"
+#include "Artefact.h"
 
 #ifdef DEBUG
 #include "PHDebug.h"
@@ -647,7 +649,6 @@ void CActor::StopAnyMove()
 
 bool CActor::is_jump() { return ((mstate_real & (mcJump | mcFall | mcLanding | mcLanding2)) != 0); }
 //максимальный переносимы вес
-#include "CustomOutfit.h"
 float CActor::MaxCarryWeight() const
 {
     float res = inventory().GetMaxWeight();
@@ -661,7 +662,6 @@ float CActor::MaxWalkWeight() const
     max_w += get_additional_weight();
     return max_w;
 }
-#include "Artefact.h"
 float CActor::get_additional_weight() const
 {
     float res = 0.0f;

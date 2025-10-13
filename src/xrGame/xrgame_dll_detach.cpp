@@ -25,6 +25,7 @@
 #include "sound_collection_storage.h"
 #include "relation_registry.h"
 #include "script_properties_list_helper.h"
+#include "xrEngine/IGame_Persistent.h"
 
 extern CScriptPropertiesListHelper* g_property_list_helper;
 
@@ -35,7 +36,6 @@ extern STORY_PAIRS spawn_story_ids;
 extern void release_smart_cast_stats();
 extern void InitHudSoundSettings();
 
-#include "xrEngine/IGame_Persistent.h"
 void init_game_globals()
 {
     ZoneScoped;

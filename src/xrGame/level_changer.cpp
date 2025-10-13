@@ -20,6 +20,8 @@
 
 #include "UIGameSP.h"
 #include "xrEngine/xr_collide_form.h"
+#include "xrAICore/Navigation/PatrolPath/patrol_path.h"
+#include "xrAICore/Navigation/PatrolPath/patrol_path_storage.h"
 
 xr_vector<CLevelChanger*> g_lchangers;
 
@@ -102,8 +104,6 @@ void CLevelChanger::shedule_Update(u32 dt)
 
     update_actor_invitation();
 }
-#include "xrAICore/Navigation/PatrolPath/patrol_path.h"
-#include "xrAICore/Navigation/PatrolPath/patrol_path_storage.h"
 void CLevelChanger::feel_touch_new(IGameObject* tpObject)
 {
     CActor* l_tpActor = smart_cast<CActor*>(tpObject);

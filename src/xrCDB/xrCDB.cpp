@@ -6,10 +6,7 @@
 #include "xrCDB.h"
 #include "xrCore/Threading/Lock.hpp"
 
-namespace Opcode
-{
 #include "OPCODE/OPC_TreeBuilders.h"
-} // namespace Opcode
 
 using namespace CDB;
 using namespace Opcode;

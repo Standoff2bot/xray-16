@@ -12,6 +12,8 @@
 #include "UIGameCustom.h"
 #include "xrUICore/Cursor/UICursor.h"
 #include "game_cl_base.h"
+#include "player_hud.h"
+
 #ifdef DEBUG
 #include "PHDebug.h"
 #endif
@@ -118,7 +120,6 @@ void CHUDManager::Render_Last(u32 context_id)
     }
 }
 
-#include "player_hud.h"
 bool CHUDManager::RenderActiveItemUIQuery()
 {
     if (!psHUD_Flags.is(HUD_DRAW_RT2))

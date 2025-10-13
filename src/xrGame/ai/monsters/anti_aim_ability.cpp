@@ -7,6 +7,8 @@
 #include "control_animation_base.h"
 #include "Inventory.h"
 #include "Weapon.h"
+#include "level_debug.h"
+#include "debug_text_tree.h"
 
 namespace detail::anti_aim_ability
 {
@@ -245,9 +247,6 @@ float anti_aim_ability::calculate_angle() const
 
     return _max(0.f, deviation - max_deviation);
 }
-
-#include "level_debug.h"
-#include "debug_text_tree.h"
 
 extern CActor* g_actor;
 

@@ -35,6 +35,12 @@
 #include "xrCore/Threading/TaskManager.hpp"
 
 #include "xrPhysics/IPHWorld.h"
+#include "game_sv_single.h"
+#include "xrServer.h"
+#include "UIGameCustom.h"
+#include "ui/UIMainIngameWnd.h"
+#include "ui/UIPdaWnd.h"
+#include "HUDManager.h"
 
 #ifndef MASTER_GOLD
 #include "CustomMonster.h"
@@ -650,12 +656,6 @@ void CGamePersistent::OnFrame()
     UpdateDof();
 }
 
-#include "game_sv_single.h"
-#include "xrServer.h"
-#include "UIGameCustom.h"
-#include "ui/UIMainIngameWnd.h"
-#include "ui/UIPdaWnd.h"
-
 void CGamePersistent::OnEvent(EVENT E, u64 P1, u64 P2)
 {
     ZoneScoped;
@@ -790,7 +790,6 @@ void CGamePersistent::SetEffectorDOF(const Fvector& needed_dof)
 }
 
 void CGamePersistent::RestoreEffectorDOF() { SetEffectorDOF(m_dof[3]); }
-#include "HUDManager.h"
 
 //	m_dof		[4];	// 0-dest 1-current 2-from 3-original
 void CGamePersistent::UpdateDof()

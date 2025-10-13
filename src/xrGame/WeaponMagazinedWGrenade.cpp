@@ -12,6 +12,8 @@
 #include "game_base_space.h"
 #include "xrPhysics/MathUtils.h"
 #include "player_hud.h"
+#include "Inventory.h"
+#include "InventoryOwner.h"
 
 #ifdef DEBUG
 #include "PHDebug.h"
@@ -214,8 +216,6 @@ bool CWeaponMagazinedWGrenade::Action(u16 cmd, u32 flags)
     return false;
 }
 
-#include "Inventory.h"
-#include "InventoryOwner.h"
 void CWeaponMagazinedWGrenade::state_Fire(float dt)
 {
     VERIFY(fOneShotTime > 0.f);

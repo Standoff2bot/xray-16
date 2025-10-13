@@ -24,6 +24,8 @@
 
 #include "game_sv_mp_vote_flags.h"
 #include "player_name_modifyer.h"
+#include "ui/UIBuyWndShared.h"
+#include "xrEngine/CameraBase.h"
 
 u32 g_dwMaxCorpses = 10;
 //-----------------------------------------------------------------
@@ -45,8 +47,6 @@ int g_sv_adm_menu_ping_limit = 25;
 //-----------------------------------------------------------------
 
 extern const xr_token round_end_result_str[];
-
-#include "ui/UIBuyWndShared.h"
 
 game_sv_mp::game_sv_mp()
     : inherited(), m_bRankUp_Allowed(false), m_bVotingReal(false),
@@ -698,8 +698,6 @@ void game_sv_mp::SetSkin(CSE_Abstract* E, u16 Team, u16 ID)
     pV->set_visual(SkinName);
     //-------------------------------------------
 };
-
-#include "xrEngine/CameraBase.h"
 
 bool game_sv_mp::GetPosAngleFromActor(ClientID id, Fvector& Pos, Fvector& Angle)
 {

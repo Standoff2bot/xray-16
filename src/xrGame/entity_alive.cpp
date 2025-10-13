@@ -20,6 +20,7 @@
 #include "game_object_space.h"
 #include "material_manager.h"
 #include "game_base_space.h"
+#include "xrEngine/xr_collide_form.h"
 
 #define SMALL_ENTITY_RADIUS 0.6f
 #define BLOOD_MARKS_SECT "bloody_marks"
@@ -724,8 +725,6 @@ void CEntityAlive::destroy_anim_mov_ctrl()
     if (cs)
         cs->on_destroy_anim_mov_ctrl();
 }
-
-#include "xrEngine/xr_collide_form.h"
 
 struct element_predicate
 {

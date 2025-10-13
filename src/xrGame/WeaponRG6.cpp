@@ -5,6 +5,8 @@
 #include "Level.h"
 #include "xrPhysics/MathUtils.h"
 #include "Actor.h"
+#include "Inventory.h"
+#include "InventoryOwner.h"
 
 #ifdef DEBUG
 #include "PHDebug.h"
@@ -42,8 +44,6 @@ void CWeaponRG6::Load(LPCSTR section)
     inheritedRL::Load(section);
     inheritedSG::Load(section);
 }
-#include "Inventory.h"
-#include "InventoryOwner.h"
 void CWeaponRG6::FireStart()
 {
     if (GetState() == eIdle && getRocketCount())

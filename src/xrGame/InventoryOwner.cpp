@@ -27,6 +27,8 @@
 #include "CustomOutfit.h"
 #include "Bolt.h"
 #include "xrNetServer/NET_Messages.h"
+#include "UIGameSP.h"
+#include "ui/UITalkWnd.h"
 
 CInventoryOwner::CInventoryOwner()
     : m_inventory(xr_new<CInventory>()),
@@ -254,8 +256,6 @@ void CInventoryOwner::StartTalk(CInventoryOwner* talk_partner, bool start_trade)
     m_bTalking = true;
     m_pTalkPartner = talk_partner;
 }
-#include "UIGameSP.h"
-#include "ui/UITalkWnd.h"
 
 void CInventoryOwner::StopTalk()
 {

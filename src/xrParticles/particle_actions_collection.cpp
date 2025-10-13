@@ -4,6 +4,7 @@
 #include "particle_effect.h"
 
 #include "xrCore/Threading/ParallelFor.hpp"
+#include "noise.h"
 
 using namespace PAPI;
 
@@ -1611,7 +1612,6 @@ void PAVortex::Transform(const Fmatrix& m)
 //-------------------------------------------------------------------------------------------------
 
 // Turbulence
-#include "noise.h"
 
 static int noise_start = 1;
 extern void noise3Init();

@@ -17,6 +17,7 @@
 #include "zone_effector.h"
 #include "BreakableObject.h"
 #include "GamePersistent.h"
+#include "Bolt.h"
 
 //////////////////////////////////////////////////////////////////////////
 #define PREFETCHED_ARTEFACTS_NUM 1	//количество предварительно проспавненых артефактов
@@ -897,7 +898,6 @@ void CCustomZone::PlayHitParticles(CGameObject* pObject)
         }
     }
 }
-#include "Bolt.h"
 void CCustomZone::PlayEntranceParticles(CGameObject* pObject)
 {
     m_entrance_sound.play_at_pos(0, pObject->Position());

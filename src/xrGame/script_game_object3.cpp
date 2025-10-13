@@ -51,6 +51,8 @@
 #include "WeaponMagazinedWGrenade.h"
 #include "level_path_manager.h"
 #include "game_path_manager.h"
+#include "CustomOutfit.h"
+
 //-Alundaio
 
 namespace MemorySpace
@@ -274,7 +276,6 @@ bool CScriptGameObject::deadbody_can_take_status()
     }
     return inventoryOwner->deadbody_can_take_status();
 }
-#include "CustomOutfit.h"
 
 CScriptGameObject* CScriptGameObject::GetCurrentOutfit() const
 {

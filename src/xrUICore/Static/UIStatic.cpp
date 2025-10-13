@@ -8,6 +8,7 @@
 #include "Include/xrRender/UIRender.h"
 #include "Buttons/UIBtnHint.h"
 #include "Cursor/UICursor.h"
+#include "Include/xrRender/UIShader.h"
 
 bool is_in2(const Frect& b1, const Frect& b2);
 
@@ -89,8 +90,6 @@ void CUIStatic::DrawText()
     if (g_statHint->Owner() == this)
         g_statHint->Draw_();
 }
-
-#include "Include/xrRender/UIShader.h"
 
 void CUIStatic::DrawTexture()
 {

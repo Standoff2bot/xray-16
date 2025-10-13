@@ -20,6 +20,9 @@
 #include "ai_space.h"
 #include "xrAICore/Navigation/PatrolPath/patrol_path.h"
 #include "xrAICore/Navigation/PatrolPath/patrol_path_storage.h"
+#include "InventoryOwner.h"
+#include "entity_alive.h"
+#include "xrEngine/xr_level_controller.h"
 
 #define FASTMODE_DISTANCE (50.f) // distance to camera from sphere, when zone switches to fast update sequence
 
@@ -327,8 +330,6 @@ void CArtefact::MoveTo(Fvector const& position)
     // m_bInInterpolation = false;
 }
 
-#include "InventoryOwner.h"
-#include "entity_alive.h"
 void CArtefact::UpdateXForm()
 {
     if (Device.dwFrame != dwXF_Frame)
@@ -375,7 +376,6 @@ void CArtefact::UpdateXForm()
         XFORM().mul(mRes, offset());
     }
 }
-#include "xrEngine/xr_level_controller.h"
 bool CArtefact::Action(u16 cmd, u32 flags)
 {
     switch (cmd)

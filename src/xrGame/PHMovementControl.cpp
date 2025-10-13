@@ -21,6 +21,10 @@
 #include "Level.h"
 #include "PhysicsShellHolder.h"
 #include "xrCore/xr_token.h"
+#include <ai/monsters/basemonster/base_monster.h>
+#include "xrAICore/Navigation/ai_object_location.h"
+#include "xrCore/_vector3d_ext.h"
+
 #ifdef DEBUG
 #include "PHDebug.h"
 #endif
@@ -255,10 +259,6 @@ void CPHMovementControl::UpdateCollisionDamage()
     //	}
     //}
 }
-
-#include <ai/monsters/basemonster/base_monster.h>
-#include "xrAICore/Navigation/ai_object_location.h"
-#include "xrCore/_vector3d_ext.h"
 
 bool CPHMovementControl::MakeJumpPath(
     xr_vector<DetailPathManager::STravelPathPoint>& out_path, u32& travel_point, Fvector& out_deviation)

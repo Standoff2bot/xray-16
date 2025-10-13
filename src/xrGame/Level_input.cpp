@@ -25,6 +25,8 @@
 #include "xrNetServer/NET_Messages.h"
 
 #include "Include/xrRender/DebugRender.h"
+#include "xrScriptEngine/script_engine.hpp"
+#include "ai_space.h"
 
 #ifdef DEBUG
 #include "ai/monsters/basemonster/base_monster.h"
@@ -115,9 +117,6 @@ extern bool g_block_pause;
 extern float g_separate_factor;
 extern float g_separate_radius;
 #endif
-
-#include "xrScriptEngine/script_engine.hpp"
-#include "ai_space.h"
 
 void CLevel::IR_OnKeyboardPress(int key)
 {

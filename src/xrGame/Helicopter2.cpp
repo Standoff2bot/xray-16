@@ -13,6 +13,11 @@
 
 #include "Actor.h"
 #include "physics_game.h"
+#include "group_hierarchy_holder.h"
+#include "seniority_hierarchy_holder.h"
+#include "team_hierarchy_holder.h"
+#include "squad_hierarchy_holder.h"
+#include "xrPhysics/ExtendedGeom.h"
 
 bool CHelicopter::isObjectVisible(IGameObject* O)
 {
@@ -225,12 +230,6 @@ void CHelicopter::PHHit(SHit& H)
         inherited::PHHit(H);
 }
 
-#include "group_hierarchy_holder.h"
-#include "seniority_hierarchy_holder.h"
-#include "team_hierarchy_holder.h"
-#include "squad_hierarchy_holder.h"
-
-#include "xrPhysics/ExtendedGeom.h"
 void CollisionCallbackDead(bool& do_colide, bool bo1, dContact& c, SGameMtl* material_1, SGameMtl* material_2)
 {
     do_colide = true;

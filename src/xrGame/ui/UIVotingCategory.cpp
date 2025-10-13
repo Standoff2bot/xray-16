@@ -8,6 +8,7 @@
 #include "UIGameCustom.h"
 #include "game_cl_teamdeathmatch.h"
 #include "game_sv_mp_vote_flags.h"
+#include "xrEngine/XR_IOConsole.h"
 
 CUIVotingCategory::CUIVotingCategory() : CUIDialogWnd(CUIVotingCategory::GetDebugType())
 {
@@ -108,8 +109,6 @@ bool CUIVotingCategory::OnKeyboardAction(int dik, EUIMessages keyboard_action)
     }
     return false;
 }
-
-#include "xrEngine/XR_IOConsole.h"
 
 void CUIVotingCategory::OnBtn(int i)
 {

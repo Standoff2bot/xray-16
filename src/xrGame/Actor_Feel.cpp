@@ -16,6 +16,7 @@
 #include "Level.h"
 #include "clsid_game.h"
 #include "HUDManager.h"
+#include "xrEngine/CameraBase.h"
 
 #define PICKUP_INFO_COLOR 0xFFDDDDDD
 
@@ -145,7 +146,6 @@ void CActor::PickupModeUpdate()
     }
 }
 
-#include "xrEngine/CameraBase.h"
 BOOL g_b_COD_PickUpMode = TRUE;
 void CActor::PickupModeUpdate_COD()
 {

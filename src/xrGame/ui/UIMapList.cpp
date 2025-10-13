@@ -15,6 +15,7 @@
 #include "ui/UICDkey.h"
 #include "xrCore/xr_token.h"
 #include "xrCore/buffer_vector.h"
+#include "UIGameCustom.h"
 
 extern ENGINE_API string512 g_sLaunchOnExit_app;
 extern ENGINE_API string512 g_sLaunchOnExit_params;
@@ -233,7 +234,6 @@ const char* CUIMapList::GetCommandLine(LPCSTR player_name)
 
     return m_command.c_str();
 }
-#include "UIGameCustom.h"
 void CUIMapList::LoadMapList()
 {
     const auto& weathers = gMapListHelper.GetGameWeathers();

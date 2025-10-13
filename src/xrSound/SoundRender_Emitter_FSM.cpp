@@ -5,6 +5,7 @@
 #include "SoundRender_Core.h"
 #include "SoundRender_Source.h"
 #include "SoundRender_Target.h"
+#include "xrServerEntities/ai_sounds.h"
 
 XRSOUND_API extern float psSoundCull;
 
@@ -298,8 +299,6 @@ IC void volume_lerp(float& c, float t, float s, float dt)
         mot = diff_a;
     c += (diff / diff_a) * mot;
 }
-
-#include "xrServerEntities/ai_sounds.h"
 
 bool CSoundRender_Emitter::update_culling(float dt)
 {

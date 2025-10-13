@@ -10,6 +10,8 @@
 #include "IPhysicsShellHolder.h"
 #include "xrCore/Animation/Bone.hpp"
 #include "xrEngine/device.h"
+#include "PHElement.h"
+
 extern class CPHWorld* ph_world;
 ///////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////
@@ -248,7 +250,6 @@ void CPHCapture::Release()
 
     e_state = cstReleased;
 }
-#include "PHElement.h"
 void CPHCapture::Deactivate()
 {
     Release();
