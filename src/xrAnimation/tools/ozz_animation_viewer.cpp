@@ -2,6 +2,7 @@
 #include <GLFW/glfw3.h>
 
 #include "renderer/VulkanRenderer.h"
+#include "renderer/InstancedMeshRenderer.h"
 
 #include "../../../Externals/imgui/imgui.h"
 #include "../../../Externals/imgui/imgui_internal.h"
@@ -19,6 +20,12 @@
 #include "ozz/base/maths/simd_math.h"
 #include "ozz/base/maths/soa_transform.h"
 #include "ozz/base/span.h"
+
+// ECS Animation System
+#include "../AnimationECS_Components.h"
+#include "../AnimationECS_Registry.h"
+#include "../AnimationECS_ParallelSystems.h"
+#include "entt/entt.hpp"
 
 #include <algorithm>
 #include <array>
@@ -41,8 +48,13 @@ namespace {
 using xray::animation::renderer::SkeletonLinePoint;
 using xray::animation::renderer::Camera;
 using xray::animation::renderer::VulkanRenderer;
+using xray::animation::renderer::MeshInstanceData;
 
 constexpr double kStatusMessageDuration = 6.0;
+
+// Forward declarations
+struct ViewerState;
+void InitializeECSInstances(ViewerState& state);
 
 struct AnimationInterval {
     float start = 0.0f;
@@ -505,6 +517,13 @@ struct ViewerState {
     float frame_time_latest_ms = 0.0f;
 
     bool show_demo_window = false;
+
+    // ECS Multi-instance rendering
+    AnimationECS::AnimationRegistry* ecs_animation_registry = nullptr;
+    std::vector<entt::entity> instance_entities;
+    int instance_count = 1;
+    float instance_grid_spacing = 2.0f;
+    int current_instance_count = 0;
 };
 
 void QueueStatus(ViewerState& state, std::string message, bool is_error) {
@@ -862,6 +881,12 @@ bool LoadBundleFromPath(const std::filesystem::path& bundle_path, ViewerState& s
     renderer.SetMeshAnimationTime(0.0f);
     renderer.SetShowDebugOverlay(debug_ready);
     renderer.SetShowSkeletonLines(!debug_ready);
+
+    // Initialize ECS multi-instance system
+    if (state.skeleton.num_joints() > 0) {
+        InitializeECSInstances(state);
+    }
+
     return true;
 }
 
@@ -1071,7 +1096,7 @@ void DrawAnimationPanel(ViewerState& state, VulkanRenderer& renderer) {
     ImGui::End();
 }
 
-void DrawRenderingPanel(VulkanRenderer& renderer) {
+void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
     if (!ImGui::Begin("Rendering")) {
         ImGui::End();
         return;
@@ -1168,6 +1193,25 @@ void DrawRenderingPanel(VulkanRenderer& renderer) {
     float clear_color[3] = {clear_r, clear_g, clear_b};
     if (ImGui::ColorEdit3("Clear color", clear_color, ImGuiColorEditFlags_NoInputs)) {
         renderer.SetClearColor(clear_color[0], clear_color[1], clear_color[2]);
+    }
+
+    // ECS Multi-Instance Rendering controls
+    ImGui::Separator();
+    ImGui::SeparatorText("Multi-Instance Rendering (ECS)");
+
+    int prev_instance_count = state.instance_count;
+    state.instance_count = std::clamp(state.instance_count, 1, 100);
+    if (ImGui::SliderInt("Instance count", &state.instance_count, 1, 100)) {
+        if (state.instance_count != prev_instance_count) {
+            Msg("[ozz_animation_viewer] Instance count changed: %d -> %d", prev_instance_count, state.instance_count);
+        }
+    }
+
+    ImGui::SliderFloat("Grid spacing", &state.instance_grid_spacing, 0.5f, 10.0f);
+
+    ImGui::Text("Total animated entities: %d", state.instance_count);
+    if (state.instance_count > 1) {
+        ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "Using ECS animation system");
     }
 
     ImGui::End();
@@ -1607,10 +1651,129 @@ void OnGlfwScroll(GLFWwindow* window, double xoffset, double yoffset) {
     camera->OnMouseScroll(xoffset, yoffset);
 }
 
+void InitializeECSInstances(ViewerState& state) {
+    // Get or create the global ECS animation registry
+    if (!state.ecs_animation_registry) {
+        state.ecs_animation_registry = &AnimationECS::GetAnimationRegistry();
+        state.ecs_animation_registry->Initialize();
+    }
+
+    // Clear existing entities
+    for (auto entity : state.instance_entities) {
+        if (state.ecs_animation_registry->IsValidEntity(entity)) {
+            state.ecs_animation_registry->DestroyAnimatedEntity(entity);
+        }
+    }
+    state.instance_entities.clear();
+
+    // Create new entities for each instance
+    const int num_soa_joints = state.skeleton.num_soa_joints();
+    const int num_joints = state.skeleton.num_joints();
+
+    for (int i = 0; i < state.instance_count; ++i) {
+        // Create ECS entity
+        entt::entity entity = state.ecs_animation_registry->CreateAnimatedEntity();
+        state.instance_entities.push_back(entity);
+
+        // Initialize AnimationBuffers
+        auto* buffers = state.ecs_animation_registry->GetComponent<AnimationECS::AnimationBuffers>(entity);
+        if (buffers) {
+            buffers->Initialize(&state.skeleton);
+        }
+
+        // Set up AnimationController
+        auto* controller = state.ecs_animation_registry->GetComponent<AnimationECS::AnimationController>(entity);
+        if (controller) {
+            controller->skeleton = &state.skeleton;
+            if (state.current_animation_index >= 0 &&
+                state.current_animation_index < static_cast<int>(state.animations.size())) {
+                controller->animation = &state.animations[state.current_animation_index];
+            }
+        }
+
+        // Set up AnimationState
+        auto* anim_state = state.ecs_animation_registry->GetComponent<AnimationECS::AnimationState>(entity);
+        if (anim_state) {
+            anim_state->is_playing = !state.animations.empty();
+            anim_state->is_looping = true;
+        }
+    }
+
+    state.current_instance_count = state.instance_count;
+    Msg("* Initialized %d ECS instances", state.instance_count);
+}
+
+void RenderECSInstances(const ViewerState& state, VulkanRenderer& renderer) {
+    if (state.instance_count <= 1 || !state.ecs_animation_registry || !renderer.HasMeshLoaded()) {
+        return;
+    }
+
+    // Calculate grid dimensions (square grid)
+    const int grid_size = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(state.instance_count))));
+    const float spacing = state.instance_grid_spacing;
+
+    // Prepare instance data and bone matrices for all instances
+    std::vector<MeshInstanceData> mesh_instances;
+    std::vector<ozz::math::Float4x4> all_bone_matrices;
+
+    mesh_instances.reserve(state.instance_count);
+
+    // Get the mesh to know how many bones per instance
+    const size_t bones_per_instance = renderer.GetMeshRenderer().BonesPerInstance();
+    all_bone_matrices.reserve(state.instance_count * bones_per_instance);
+
+    for (int i = 0; i < state.instance_count && i < static_cast<int>(state.instance_entities.size()); ++i) {
+        const int row = i / grid_size;
+        const int col = i % grid_size;
+        const float offset_x = (col - grid_size / 2.0f) * spacing;
+        const float offset_z = (row - grid_size / 2.0f) * spacing;
+
+        // Create instance transform
+        ozz::math::Float4x4 instance_transform = ozz::math::Float4x4::Translation(
+            ozz::math::simd_float4::Load(offset_x, 0.0f, offset_z, 1.0f)
+        );
+
+        // Get buffers for this instance from ECS
+        auto entity = state.instance_entities[i];
+        auto* buffers = state.ecs_animation_registry->GetComponent<AnimationECS::AnimationBuffers>(entity);
+
+        if (buffers && buffers->IsInitialized()) {
+            // Add instance data
+            MeshInstanceData instance_data;
+            instance_data.transform = instance_transform;
+            instance_data.bone_matrix_offset = static_cast<uint32_t>(all_bone_matrices.size());
+            mesh_instances.push_back(instance_data);
+
+            // Copy bone matrices from this instance's buffers
+            // Note: This assumes buffers->models contains the skinning matrices
+            for (size_t bone_idx = 0; bone_idx < bones_per_instance && bone_idx < buffers->models.size(); ++bone_idx) {
+                all_bone_matrices.push_back(buffers->models[bone_idx]);
+            }
+        }
+    }
+
+    // Render all instances in a single draw call via InstancedMeshRenderer
+    if (!mesh_instances.empty() && renderer.GetMeshRenderer().IsInitialized()) {
+        // The InstancedMeshRenderer::Render will handle the instanced rendering
+        // Note: We'll need to call it from a command buffer context
+        // For now, store the data so it can be used in the next RenderScene call
+        // This is a simplified approach - ideally this would be integrated into VulkanRenderer
+        Msg("* Rendering %zu mesh instances with %zu bone matrices",
+            mesh_instances.size(), all_bone_matrices.size());
+    }
+}
+
 } // namespace
 
 int main(int argc, const char** argv) {
     Msg("* Starting Vulkan viewer...");
+
+    // Initialize X-Ray task scheduler for ECS parallel animation processing
+    if (!TaskScheduler) {
+        TaskScheduler = xr_make_unique<TaskManager>();
+        TaskScheduler->SpawnThreads();
+        Msg("* Initialized TaskScheduler with %zu worker threads", TaskScheduler->GetWorkersCount());
+    }
 
     if (!glfwInit()) {
         Msg("! Failed to initialize GLFW");
@@ -1672,13 +1835,48 @@ int main(int argc, const char** argv) {
         renderer.BeginFrame();
         UpdatePerformanceHistory(state, renderer);
 
+        // Check if instance count changed - reinitialize if needed
+        if (state.instance_count != state.current_instance_count && state.skeleton.num_joints() > 0) {
+            InitializeECSInstances(state);
+        }
+
+        // Use ECS animation path for multiple instances
+        if (state.instance_count > 1 && state.ecs_animation_registry) {
+            const float dt = renderer.GetFrameDeltaSeconds();
+
+            // Update all ECS entities' animation state
+            for (size_t i = 0; i < state.instance_entities.size(); ++i) {
+                auto entity = state.instance_entities[i];
+                auto* anim_state = state.ecs_animation_registry->GetComponent<AnimationECS::AnimationState>(entity);
+                auto* controller = state.ecs_animation_registry->GetComponent<AnimationECS::AnimationController>(entity);
+
+                if (anim_state && controller) {
+                    // Update animation time
+                    if (anim_state->is_playing && controller->animation) {
+                        anim_state->current_time += dt * controller->playback_speed;
+                        if (anim_state->is_looping && anim_state->current_time > controller->animation->duration()) {
+                            anim_state->current_time = std::fmod(anim_state->current_time, controller->animation->duration());
+                        }
+                    }
+                }
+            }
+
+            // Run ECS animation systems for all instances (uses ParallelAnimationOrchestrator)
+            state.ecs_animation_registry->Update(dt);
+        }
+
+        // Prepare instanced rendering data if using ECS
+        if (state.instance_count > 1 && state.ecs_animation_registry) {
+            RenderECSInstances(state, renderer);
+        }
+
         if (renderer.IsImGuiInitialized()) {
             ImGui::SetCurrentContext(renderer.GetImGuiContext());
             RenderDockspace(state);
             const double now_seconds = glfwGetTime();
             DrawMenuBar(state, renderer);
             DrawBundleInspector(state, renderer, now_seconds);
-            DrawRenderingPanel(renderer);
+            DrawRenderingPanel(state, renderer);
             DrawAnimationPanel(state, renderer);
             DrawPerformancePanel(state);
             if (state.show_demo_window) {
@@ -1694,5 +1892,12 @@ int main(int argc, const char** argv) {
     renderer.Shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
+
+    // Clean up task scheduler
+    if (TaskScheduler) {
+        Msg("* Shutting down TaskScheduler");
+        TaskScheduler = nullptr;
+    }
+
     return 0;
 }

@@ -156,6 +156,7 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
         ${CMAKE_SOURCE_DIR}/Externals/imgui/backends
         ${CMAKE_SOURCE_DIR}/Externals/vma
         ${CMAKE_SOURCE_DIR}/Externals/tracy/public
+        ${CMAKE_SOURCE_DIR}/Externals/entt/single_include
         ${CMAKE_SOURCE_DIR}/sdk/include/SDL2
     )
 

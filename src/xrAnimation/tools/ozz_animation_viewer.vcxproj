@@ -140,6 +140,7 @@
         $(ImGuiRoot);
         $(ImGuiRoot)\backends;
         $(VMARoot);
+        $(ExternalsDir)\entt\single_include;
         $(ExternalsDir)\tracy\public;
         $(OpenXRayRoot)\sdk\include\SDL2;
         $(VulkanSDK)\Include;
@@ -199,6 +200,7 @@
         $(ImGuiRoot);
         $(ImGuiRoot)\backends;
         $(VMARoot);
+        $(ExternalsDir)\entt\single_include;
         $(ExternalsDir)\tracy\public;
         $(OpenXRayRoot)\sdk\include\SDL2;
         $(VulkanSDK)\Include;
@@ -261,6 +263,7 @@
         $(ImGuiRoot);
         $(ImGuiRoot)\backends;
         $(VMARoot);
+        $(ExternalsDir)\entt\single_include;
         $(ExternalsDir)\tracy\public;
         $(OpenXRayRoot)\sdk\include\SDL2;
         $(VulkanSDK)\Include;
@@ -324,6 +327,7 @@
         $(ImGuiRoot);
         $(ImGuiRoot)\backends;
         $(VMARoot);
+        $(ExternalsDir)\entt\single_include;
         $(ExternalsDir)\tracy\public;
         $(OpenXRayRoot)\sdk\include\SDL2;
         $(VulkanSDK)\Include;
