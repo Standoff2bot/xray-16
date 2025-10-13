@@ -209,7 +209,7 @@ None.
   - [x] Add `IPLHRTFEffect` to rendering pipeline
   - [x] Convert emitter position to Steam Audio source
   - [x] Apply HRTF before OpenAL playback
-  - [ ] Add `snd_steam_audio_hrtf` console variable
+  - [x] Add `snd_steam_audio_hrtf` console variable
 
 - [ ] **3.2** Occlusion replacement
   - [ ] Use `IPLDirectEffect` for occlusion
@@ -235,6 +235,7 @@ None.
 **Recent Progress (2025-10-14)**:
 - Per-emitter Steam Audio inputs now refresh every frame, feeding the simulator with up-to-date position/orientation data.
 - Mono emitters run through Steam Audio's binaural effect before OpenAL playback when `ss_SteamAudio_HRTF` is enabled, yielding stereo output.
+- Added runtime console toggles (`snd_steamaudio`, `snd_steamaudio_hrtf`) for quick A/B testing without recompiling.
 
 ### Testing Checklist
 

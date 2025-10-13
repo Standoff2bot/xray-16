@@ -46,8 +46,10 @@ void CSoundRender_Emitter::start(const ref_sound& _owner, u32 flags, float delay
     ovf = source()->open();
 
 #ifdef USE_STEAMAUDIO
+    m_steamAudioStereoOutput = false;
+
     // Lazy initialization: Create Steam Audio source when we have audio format info
-    if (SoundRender->ipl_context() && scene->ipl_simulator() && !m_steamAudioSource)
+    if (psSoundFlags.test(ss_UseSteamAudio) && SoundRender->ipl_context() && scene->ipl_simulator() && !m_steamAudioSource)
     {
         const auto context = SoundRender->ipl_context();
         const auto simulator = scene->ipl_simulator();
@@ -59,6 +61,13 @@ void CSoundRender_Emitter::start(const ref_sound& _owner, u32 flags, float delay
             context, simulator, audioSettings, hrtf, data_info.channels);
 
         UpdateSteamAudioInputs();
+    }
+
+    if (m_steamAudioSource)
+    {
+        m_steamAudioStereoOutput =
+            data_info.format == SoundFormat::Float32 &&
+            data_info.channels == 1;
     }
 #endif
 }

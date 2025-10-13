@@ -48,6 +48,7 @@ public:
 private:
     SteamAudio::CSteamAudioSource* m_steamAudioSource{};
     xr_vector<float> m_steamAudioBinauralBuffer{};
+    bool m_steamAudioStereoOutput{};
 
     void UpdateSteamAudioInputs();
 

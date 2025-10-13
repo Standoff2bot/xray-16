@@ -871,6 +871,10 @@ void CCC_Register()
     CMD3(CCC_Mask, "snd_acceleration", &psSoundFlags, ss_Hardware);
     CMD3(CCC_Mask, "snd_efx", &psSoundFlags, ss_EFX);
     CMD3(CCC_Mask, "snd_use_float32", &psSoundFlags, ss_UseFloat32);
+#ifdef USE_STEAMAUDIO
+    CMD3(CCC_Mask, "snd_steamaudio", &psSoundFlags, ss_UseSteamAudio);
+    CMD3(CCC_Mask, "snd_steamaudio_hrtf", &psSoundFlags, ss_SteamAudio_HRTF);
+#endif
     CMD4(CCC_Integer, "snd_targets", &psSoundTargets, 4, 256);
     CMD4(CCC_Integer, "snd_cache_size", &psSoundCacheSizeMB, 4, 64);
 

@@ -295,38 +295,56 @@ std::pair<u8*, size_t> CSoundRender_Emitter::obtain_block()
     --filled_blocks;
 #ifdef USE_STEAMAUDIO
     // Apply Steam Audio direct effect (occlusion, distance, transmission) using RAII wrapper
-    if (psSoundFlags.test(ss_EFX) && psSoundFlags.test(ss_UseSteamAudio) && m_steamAudioSource && !is_2D())
-    {
-        const auto data_info = source()->data_info();
-        const int numSamples = result.second / (data_info.channels * sizeof(float));
-        float* directBuffer = reinterpret_cast<float*>(result.first);
+    const auto data_info = source()->data_info();
+    const bool isFloatFormat = data_info.format == SoundFormat::Float32;
+    const bool allowSteamAudio = psSoundFlags.test(ss_EFX) && psSoundFlags.test(ss_UseSteamAudio) && m_steamAudioSource && isFloatFormat && !is_2D();
+    const int numSamples = (data_info.channels && isFloatFormat) ? int(result.second / (data_info.channels * sizeof(float))) : 0;
+    float* directBuffer = reinterpret_cast<float*>(result.first);
 
+    if (allowSteamAudio && numSamples > 0)
+    {
         // Wrapper handles deinterleaving, effect application, and reinterleaving
         m_steamAudioSource->ApplyDirectEffect(directBuffer, directBuffer, numSamples);
+    }
 
-        const bool canApplyHRTF =
-            psSoundFlags.test(ss_SteamAudio_HRTF) &&
-            data_info.format == SoundFormat::Float32 &&
-            data_info.channels == 1;
+    const bool monoFloatSource = isFloatFormat && data_info.channels == 1;
+    const bool wantsStereoOutput = m_steamAudioStereoOutput && monoFloatSource && !is_2D();
+    const bool useHRTF = allowSteamAudio && psSoundFlags.test(ss_SteamAudio_HRTF);
 
-        if (canApplyHRTF)
+    if (wantsStereoOutput)
+    {
+        if (numSamples <= 0)
+            return result;
+
+        const size_t stereoSamples = static_cast<size_t>(numSamples) * 2;
+        m_steamAudioBinauralBuffer.resize(stereoSamples);
+        float* stereoOut = m_steamAudioBinauralBuffer.data();
+
+        if (useHRTF)
         {
             const auto listener = SoundRender->listener_params();
-            const size_t stereoSamples = static_cast<size_t>(numSamples) * 2;
-            m_steamAudioBinauralBuffer.resize(stereoSamples);
-
             m_steamAudioSource->ApplyBinauralEffect(
                 directBuffer,
-                m_steamAudioBinauralBuffer.data(),
+                stereoOut,
                 listener.orientation[0],
                 listener.orientation[1],
                 listener.orientation[2]);
-
-            return {
-                reinterpret_cast<u8*>(m_steamAudioBinauralBuffer.data()),
-                stereoSamples * sizeof(float)
-            };
         }
+        else
+        {
+            // Duplicate mono channel into stereo
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float sample = directBuffer[i];
+                stereoOut[(i << 1) + 0] = sample;
+                stereoOut[(i << 1) + 1] = sample;
+            }
+        }
+
+        return {
+            reinterpret_cast<u8*>(stereoOut),
+            stereoSamples * sizeof(float)
+        };
     }
 #endif
     return result;

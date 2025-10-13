@@ -48,18 +48,16 @@ void CSoundRender_TargetA::start(CSoundRender_Emitter* E)
     const bool mono = info.channels == 1;
 
 #ifdef USE_STEAMAUDIO
-    m_usesSteamAudioHRTF =
+    const bool steamAudioStereo =
         mono &&
         info.format == SoundFormat::Float32 &&
-        psSoundFlags.test(ss_EFX) &&
-        psSoundFlags.test(ss_SteamAudio_HRTF) &&
         m_pEmitter->GetSteamAudioSource() &&
         !m_pEmitter->is_2D();
 #endif
 
     if (info.format == SoundFormat::Float32)
 #ifdef USE_STEAMAUDIO
-        dataFormat = m_usesSteamAudioHRTF ? AL_FORMAT_STEREO_FLOAT32 :
+        dataFormat = steamAudioStereo ? AL_FORMAT_STEREO_FLOAT32 :
             (mono ? AL_FORMAT_MONO_FLOAT32 : AL_FORMAT_STEREO_FLOAT32);
 #else
         dataFormat = mono ? AL_FORMAT_MONO_FLOAT32 : AL_FORMAT_STEREO_FLOAT32;
