@@ -37,6 +37,7 @@
 #include "JoltPhysicsShape.h"
 #include "JoltPhysicsBody.h"
 #include "JoltPhysicsConstraint.h"
+#include "xrMaterialSystem/GameMtlLib.h"
 
 // Layer that objects can be in, determines which other objects it can collide with
 namespace Layers
@@ -183,8 +184,44 @@ public:
                                                    JPH::RVec3Arg inBaseOffset,
                                                    const JPH::CollideShapeResult& inCollisionResult) override
     {
-        // Allow all contacts by default
-        // This can be extended to check material properties, etc.
+        // Find wrapper bodies to get material IDs
+        IPhysicsBody* physics_body1 = FindBodyWrapper(inBody1.GetID());
+        IPhysicsBody* physics_body2 = FindBodyWrapper(inBody2.GetID());
+
+        if (!physics_body1 || !physics_body2)
+            return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+
+        // Cast to Jolt bodies to access material IDs
+        JoltPhysicsBody* jolt_body1 = static_cast<JoltPhysicsBody*>(physics_body1);
+        JoltPhysicsBody* jolt_body2 = static_cast<JoltPhysicsBody*>(physics_body2);
+
+        int mat_id1 = jolt_body1->GetMaterialID();
+        int mat_id2 = jolt_body2->GetMaterialID();
+
+        // If either body has a valid material, check material flags
+        if (mat_id1 >= 0 || mat_id2 >= 0)
+        {
+            SGameMtl* mtl1 = (mat_id1 >= 0) ? GMLib.GetMaterialByID(mat_id1) : nullptr;
+            SGameMtl* mtl2 = (mat_id2 >= 0) ? GMLib.GetMaterialByID(mat_id2) : nullptr;
+
+            // Check if either material is non-passable (blocks collision)
+            if (mtl1 && !mtl1->Flags.test(SGameMtl::flPassable))
+            {
+                // Material 1 is solid, allow collision
+            }
+            else if (mtl2 && !mtl2->Flags.test(SGameMtl::flPassable))
+            {
+                // Material 2 is solid, allow collision
+            }
+            else if (mtl1 && mtl1->Flags.test(SGameMtl::flPassable) &&
+                     mtl2 && mtl2->Flags.test(SGameMtl::flPassable))
+            {
+                // Both materials are passable, reject collision
+                return JPH::ValidateResult::RejectAllContactsForThisBodyPair;
+            }
+        }
+
+        // Allow contact by default
         return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
     }
 
@@ -213,6 +250,33 @@ public:
         JPH::Vec3 contact_point1 = inManifold.mRelativeContactPointsOn1[0];
         JPH::Vec3 world_contact_point = inManifold.mBaseOffset + contact_point1;
 
+        // Cast to Jolt bodies to access material IDs
+        JoltPhysicsBody* jolt_body1 = static_cast<JoltPhysicsBody*>(physics_body1);
+        JoltPhysicsBody* jolt_body2 = static_cast<JoltPhysicsBody*>(physics_body2);
+
+        // Look up materials from material IDs
+        int mat_id1 = jolt_body1->GetMaterialID();
+        int mat_id2 = jolt_body2->GetMaterialID();
+
+        SGameMtl* mtl1 = (mat_id1 >= 0) ? GMLib.GetMaterialByID(mat_id1) : nullptr;
+        SGameMtl* mtl2 = (mat_id2 >= 0) ? GMLib.GetMaterialByID(mat_id2) : nullptr;
+
+        // Apply material-based friction and restitution
+        if (mtl1 || mtl2)
+        {
+            // Calculate combined friction and restitution from materials
+            float friction1 = mtl1 ? mtl1->fPHFriction : 0.5f;
+            float friction2 = mtl2 ? mtl2->fPHFriction : 0.5f;
+            float restitution1 = mtl1 ? mtl1->fPHBouncing : 0.0f;
+            float restitution2 = mtl2 ? mtl2->fPHBouncing : 0.0f;
+
+            // Use geometric mean for friction (standard physics practice)
+            ioSettings.mCombinedFriction = sqrtf(friction1 * friction2);
+
+            // Use maximum for restitution (bouncy materials dominate)
+            ioSettings.mCombinedRestitution = _max(restitution1, restitution2);
+        }
+
         // Build PhysicsContact structure
         PhysicsContact contact;
         contact.position.set(world_contact_point.GetX(), world_contact_point.GetY(), world_contact_point.GetZ());
@@ -222,8 +286,8 @@ public:
         contact.depth = inManifold.mPenetrationDepth;
         contact.body1 = physics_body1;
         contact.body2 = physics_body2;
-        contact.material1 = nullptr; // TODO: Get from body user data
-        contact.material2 = nullptr; // TODO: Get from body user data
+        contact.material1 = mtl1;
+        contact.material2 = mtl2;
         contact.user_data1 = physics_body1->GetUserData();
         contact.user_data2 = physics_body2->GetUserData();
 

@@ -21,6 +21,7 @@ JoltPhysicsBody::JoltPhysicsBody(JoltPhysicsWorld* world, const JPH::BodyID& bod
     , m_collision_callback(nullptr)
     , m_friction(0.5f)
     , m_restitution(0.0f)
+    , m_material_id(-1)
 {
 }
 

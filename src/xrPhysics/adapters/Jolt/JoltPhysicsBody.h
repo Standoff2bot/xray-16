@@ -76,6 +76,10 @@ public:
     // Internal accessors
     const JPH::BodyID& GetBodyID() const { return m_body_id; }
 
+    // Material system
+    void SetMaterialID(int material_id) { m_material_id = material_id; }
+    int GetMaterialID() const { return m_material_id; }
+
 private:
     JoltPhysicsWorld* m_world;
     JPH::BodyID m_body_id;
@@ -85,6 +89,7 @@ private:
     xr_vector<IPhysicsShape*> m_shapes;
     float m_friction;
     float m_restitution;
+    int m_material_id;
 };
 
 #endif // XRPHYSICS_JOLT
