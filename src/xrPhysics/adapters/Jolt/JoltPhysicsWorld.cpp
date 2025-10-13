@@ -24,6 +24,11 @@
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/ConeConstraint.h>
 #include <Jolt/Physics/Constraints/SixDOFConstraint.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseQuery.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 
 #include "xrCore/xrCore.h"
 #include "JoltPhysicsShape.h"
@@ -779,7 +784,138 @@ void JoltPhysicsWorld::DestroyConstraint(IPhysicsConstraint* constraint)
 bool JoltPhysicsWorld::RayCast(const Fvector& origin, const Fvector& direction,
                                float max_distance, PhysicsRayHit& hit_out)
 {
-    Msg("! JoltPhysicsWorld::RayCast: Not implemented yet");
+    if (!m_initialized || !m_physics_system)
+    {
+        hit_out.hit = false;
+        return false;
+    }
+
+    // Convert X-Ray ray to Jolt format
+    JPH::Vec3 jolt_origin(origin.x, origin.y, origin.z);
+    JPH::Vec3 jolt_direction(direction.x, direction.y, direction.z);
+
+    // Normalize direction and scale by max distance
+    float dir_length = jolt_direction.Length();
+    if (dir_length < 1e-6f)
+    {
+        // Invalid direction
+        hit_out.hit = false;
+        return false;
+    }
+
+    jolt_direction = jolt_direction / dir_length;
+
+    // Create ray cast settings
+    JPH::RRayCast ray;
+    ray.mOrigin = jolt_origin;
+    ray.mDirection = jolt_direction * max_distance;
+
+    // Create a closest hit collector
+    JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;
+
+    // Broad phase layer filter - test against all layers
+    class AllBroadPhaseLayerFilter : public JPH::BroadPhaseLayerFilter
+    {
+    public:
+        virtual bool ShouldCollide(JPH::BroadPhaseLayer inLayer) const override
+        {
+            return true; // Test against all broad phase layers
+        }
+    };
+
+    AllBroadPhaseLayerFilter broad_phase_filter;
+
+    // Object layer filter - test against all objects
+    class AllObjectLayerFilter : public JPH::ObjectLayerFilter
+    {
+    public:
+        virtual bool ShouldCollide(JPH::ObjectLayer inLayer) const override
+        {
+            return true; // Test against all objects
+        }
+    };
+
+    AllObjectLayerFilter object_layer_filter;
+
+    // Body filter - test against all bodies
+    class AllBodyFilter : public JPH::BodyFilter
+    {
+    public:
+        virtual bool ShouldCollide(const JPH::BodyID& inBodyID) const override
+        {
+            return true; // Test against all bodies
+        }
+
+        virtual bool ShouldCollideLocked(const JPH::Body& inBody) const override
+        {
+            return true; // Test against all bodies
+        }
+    };
+
+    AllBodyFilter body_filter;
+
+    // Cast the ray
+    m_physics_system->GetNarrowPhaseQuery().CastRay(
+        ray,
+        collector,
+        broad_phase_filter,
+        object_layer_filter,
+        body_filter
+    );
+
+    // Check if we hit something
+    if (collector.HadHit())
+    {
+        JPH::RayCastResult hit = collector.mHit;
+
+        // Fill in hit result
+        hit_out.hit = true;
+        hit_out.fraction = hit.mFraction;
+
+        // Calculate hit position
+        JPH::Vec3 hit_pos = jolt_origin + jolt_direction * (max_distance * hit.mFraction);
+        hit_out.position.set(hit_pos.GetX(), hit_pos.GetY(), hit_pos.GetZ());
+
+        // Get hit normal from the surface
+        JPH::BodyLockRead lock(m_physics_system->GetBodyLockInterface(), hit.mBodyID);
+        if (lock.Succeeded())
+        {
+            const JPH::Body& body = lock.GetBody();
+
+            // Get the surface normal at hit point
+            JPH::Vec3 normal = body.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, hit_pos);
+            hit_out.normal.set(normal.GetX(), normal.GetY(), normal.GetZ());
+
+            // Find the corresponding body wrapper
+            hit_out.body = nullptr;
+            for (auto physics_body : m_bodies)
+            {
+                JoltPhysicsBody* jolt_body = static_cast<JoltPhysicsBody*>(physics_body);
+                if (jolt_body->GetBodyID() == hit.mBodyID)
+                {
+                    hit_out.body = physics_body;
+                    hit_out.user_data = physics_body->GetUserData();
+                    break;
+                }
+            }
+
+            // Shape is not directly accessible from ray hit
+            hit_out.shape = nullptr;
+        }
+        else
+        {
+            // Couldn't lock body, set default normal
+            hit_out.normal.set(0, 1, 0);
+            hit_out.body = nullptr;
+            hit_out.shape = nullptr;
+            hit_out.user_data = nullptr;
+        }
+
+        return true;
+    }
+
+    // No hit
+    hit_out.hit = false;
     return false;
 }
 
