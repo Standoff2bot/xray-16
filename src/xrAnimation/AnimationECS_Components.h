@@ -10,6 +10,8 @@
 #include "ozz/base/containers/vector.h"
 #include "ozz/base/maths/soa_transform.h"
 #include "ozz/base/maths/simd_math.h"
+#include "ExtendedBoneMetadata.h"
+#include <vector>
 
 namespace AnimationECS {
 
@@ -238,6 +240,34 @@ struct XRayCompatibility
     // Flags
     bool accrue{false};
     bool falloff{true};
+};
+
+//-----------------------------------------------------------------------------
+// SkeletonMetadata Component
+// Per-entity skeleton hierarchy and extended metadata
+//-----------------------------------------------------------------------------
+struct SkeletonMetadata
+{
+    // Skeleton hierarchy (parent indices, -1 for roots)
+    std::vector<int> joint_parents;
+
+    // Extended bone metadata (physics shapes, IK constraints, rest lengths, etc.)
+    XRay::Animation::ExtendedBoneMetadataCollection metadata;
+
+    // Optional skeleton reference (for rest pose access)
+    const ozz::animation::Skeleton* skeleton{nullptr};
+
+    bool IsValid() const
+    {
+        return !joint_parents.empty();
+    }
+
+    void Clear()
+    {
+        joint_parents.clear();
+        metadata.clear();
+        skeleton = nullptr;
+    }
 };
 
 } // namespace AnimationECS
