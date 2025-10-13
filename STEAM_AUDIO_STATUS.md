@@ -240,6 +240,7 @@ None.
 - Steam Audio transmission and distance attenuation metrics now inform emitter volume and AI occlusion queries, keeping non-audio systems in sync with the simulator.
 - Added tuning consoles `snd_steamaudio_occ_strength`, `snd_steamaudio_trans_strength`, and `snd_steamaudio_distance_blend` for runtime balancing of Steam Audio direct sound parameters.
 - Implemented dedicated Steam Audio scene queries for stealth/AI, with optional logging via `snd_steamaudio_debug_queries`.
+- Added optional GPU acceleration via Radeon Rays (`snd_steamaudio_gpu`), falling back to CPU automatically if no compatible device is available.
 
 ### Testing Checklist
 

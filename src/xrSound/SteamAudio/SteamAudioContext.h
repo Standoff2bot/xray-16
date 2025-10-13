@@ -33,7 +33,7 @@ public:
      * @param enableValidation Enable validation layer for debugging
      * @return true if initialization succeeded
      */
-    bool Initialize(int sampleRate, int frameSize, bool enableValidation = false);
+    bool Initialize(int sampleRate, int frameSize, bool enableValidation = false, bool requestGPU = false);
 
     /**
      * @brief Shutdown and release all Steam Audio resources
@@ -51,12 +51,23 @@ public:
     [[nodiscard]] const IPLAudioSettings& GetAudioSettings() const { return m_audioSettings; }
     [[nodiscard]] int GetSampleRate() const { return m_audioSettings.samplingRate; }
     [[nodiscard]] int GetFrameSize() const { return m_audioSettings.frameSize; }
+    [[nodiscard]] bool HasRadeonRays() const { return m_gpuActive; }
+    [[nodiscard]] IPLOpenCLDevice GetOpenCLDevice() const { return m_openCLDevice; }
+    [[nodiscard]] IPLRadeonRaysDevice GetRadeonRaysDevice() const { return m_radeonRaysDevice; }
 
 private:
+    bool InitializeGPU();
+    void ShutdownGPU();
+
     IPLContext m_context{};
     IPLHRTF m_hrtf{};
     IPLAudioSettings m_audioSettings{};
     IPLSIMDLevel m_simdLevel{ IPL_SIMDLEVEL_SSE2 };
+    bool m_requestGPU{ false };
+    bool m_gpuActive{ false };
+    IPLOpenCLDeviceList m_openCLDeviceList{};
+    IPLOpenCLDevice m_openCLDevice{};
+    IPLRadeonRaysDevice m_radeonRaysDevice{};
 };
 
 } // namespace SteamAudio

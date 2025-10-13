@@ -32,7 +32,7 @@ CSteamAudioScene::~CSteamAudioScene()
     }
 }
 
-bool CSteamAudioScene::Initialize(IPLContext context, const IPLAudioSettings& audioSettings)
+bool CSteamAudioScene::Initialize(IPLContext context, const IPLAudioSettings& audioSettings, IPLOpenCLDevice openCLDevice, IPLRadeonRaysDevice radeonDevice)
 {
     if (!context)
     {
@@ -44,12 +44,17 @@ bool CSteamAudioScene::Initialize(IPLContext context, const IPLAudioSettings& au
     m_audioSettings = audioSettings;
 
     // Create scene
-    IPLSceneSettings sceneSettings{
-        IPL_SCENETYPE_DEFAULT,
-        nullptr, nullptr, nullptr, nullptr,
-        nullptr, // User data
-        nullptr, nullptr
-    };
+    const bool useGPU = (openCLDevice != nullptr) && (radeonDevice != nullptr);
+
+    IPLSceneSettings sceneSettings{};
+    sceneSettings.type = useGPU ? IPL_SCENETYPE_RADEONRAYS : IPL_SCENETYPE_DEFAULT;
+    sceneSettings.closestHitCallback = nullptr;
+    sceneSettings.anyHitCallback = nullptr;
+    sceneSettings.batchedClosestHitCallback = nullptr;
+    sceneSettings.batchedAnyHitCallback = nullptr;
+    sceneSettings.userData = nullptr;
+    sceneSettings.embreeDevice = nullptr;
+    sceneSettings.radeonRaysDevice = radeonDevice;
 
     IPLerror result = iplSceneCreate(context, &sceneSettings, &m_scene);
     if (result != IPL_STATUS_SUCCESS)
@@ -61,23 +66,24 @@ bool CSteamAudioScene::Initialize(IPLContext context, const IPLAudioSettings& au
     Msg("* SOUND: SteamAudio: Scene created successfully");
 
     // Create simulator
-    IPLSimulationSettings simulationSettings{
-        IPL_SIMULATIONFLAGS_DIRECT,  // Start with direct sound only
-        IPL_SCENETYPE_DEFAULT,
-        IPL_REFLECTIONEFFECTTYPE_CONVOLUTION,
-        128,   // Max number of rays
-        4096,  // Number of diffuse samples
-        32,    // Max number of sources
-        2.0f,  // Max duration
-        1,     // Max order (ambisonics)
-        8,     // Max number of reflection bounces
-        2,     // IR update rate
-        5,     // Number of threads for simulation
-        32,    // Ray batch size
-        audioSettings.samplingRate,
-        audioSettings.frameSize,
-        nullptr, nullptr, nullptr,
-    };
+    IPLSimulationSettings simulationSettings{};
+    simulationSettings.flags = IPL_SIMULATIONFLAGS_DIRECT;
+    simulationSettings.sceneType = useGPU ? IPL_SCENETYPE_RADEONRAYS : IPL_SCENETYPE_DEFAULT;
+    simulationSettings.reflectionType = IPL_REFLECTIONEFFECTTYPE_CONVOLUTION;
+    simulationSettings.maxNumOcclusionSamples = 128;
+    simulationSettings.maxNumRays = 128;
+    simulationSettings.numDiffuseSamples = 4096;
+    simulationSettings.maxDuration = 2.0f;
+    simulationSettings.maxOrder = 1;
+    simulationSettings.maxNumSources = 32;
+    simulationSettings.numThreads = 5;
+    simulationSettings.rayBatchSize = 32;
+    simulationSettings.numVisSamples = 0;
+    simulationSettings.samplingRate = audioSettings.samplingRate;
+    simulationSettings.frameSize = audioSettings.frameSize;
+    simulationSettings.openCLDevice = openCLDevice;
+    simulationSettings.radeonRaysDevice = radeonDevice;
+    simulationSettings.tanDevice = nullptr;
 
     result = iplSimulatorCreate(context, &simulationSettings, &m_simulator);
     if (result != IPL_STATUS_SUCCESS)
@@ -88,7 +94,7 @@ bool CSteamAudioScene::Initialize(IPLContext context, const IPLAudioSettings& au
         return false;
     }
 
-    Msg("* SOUND: SteamAudio: Simulator created successfully");
+    Msg("* SOUND: SteamAudio: Simulator created successfully (%s)", useGPU ? "GPU" : "CPU");
 
     // Link simulator to scene
     iplSimulatorSetScene(m_simulator, m_scene);

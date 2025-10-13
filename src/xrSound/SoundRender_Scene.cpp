@@ -26,7 +26,9 @@ CSoundRender_Scene::CSoundRender_Scene()
         if (steamAudioContext->IsInitialized())
         {
             m_steamAudioScene = xr_new<SteamAudio::CSteamAudioScene>();
-            if (!m_steamAudioScene->Initialize(steamAudioContext->GetContext(), steamAudioContext->GetAudioSettings()))
+            const IPLOpenCLDevice openCLDevice = steamAudioContext->HasRadeonRays() ? steamAudioContext->GetOpenCLDevice() : nullptr;
+            const IPLRadeonRaysDevice radeonDevice = steamAudioContext->HasRadeonRays() ? steamAudioContext->GetRadeonRaysDevice() : nullptr;
+            if (!m_steamAudioScene->Initialize(steamAudioContext->GetContext(), steamAudioContext->GetAudioSettings(), openCLDevice, radeonDevice))
             {
                 Msg("! SOUND: SteamAudio: Failed to initialize scene, disabling Steam Audio for this scene");
                 xr_delete(m_steamAudioScene);

@@ -38,7 +38,7 @@ public:
      * @param audioSettings Audio format settings
      * @return true if initialization succeeded
      */
-    bool Initialize(IPLContext context, const IPLAudioSettings& audioSettings);
+    bool Initialize(IPLContext context, const IPLAudioSettings& audioSettings, IPLOpenCLDevice openCLDevice = nullptr, IPLRadeonRaysDevice radeonDevice = nullptr);
 
     /**
      * @brief Load geometry from X-Ray collision database

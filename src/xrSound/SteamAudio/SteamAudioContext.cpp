@@ -2,6 +2,8 @@
 #include "SteamAudioContext.h"
 #include "xrCore/xrCore.h"
 
+#include <cfloat>
+
 namespace SteamAudio
 {
 
@@ -10,7 +12,7 @@ CSteamAudioContext::~CSteamAudioContext()
     Shutdown();
 }
 
-bool CSteamAudioContext::Initialize(int sampleRate, int frameSize, bool enableValidation)
+bool CSteamAudioContext::Initialize(int sampleRate, int frameSize, bool enableValidation, bool requestGPU)
 {
     if (IsInitialized())
     {
@@ -80,6 +82,24 @@ bool CSteamAudioContext::Initialize(int sampleRate, int frameSize, bool enableVa
 
     Msg("* SOUND: SteamAudio: Context created successfully");
 
+    m_requestGPU = requestGPU;
+    if (m_requestGPU)
+    {
+        m_gpuActive = InitializeGPU();
+        if (m_gpuActive)
+        {
+            Msg("* SOUND: SteamAudio: GPU acceleration enabled");
+        }
+        else
+        {
+            Msg("~ SOUND: SteamAudio: GPU acceleration requested but unavailable, falling back to CPU");
+        }
+    }
+    else
+    {
+        m_gpuActive = false;
+    }
+
     // Store audio settings
     m_audioSettings.samplingRate = sampleRate;
     m_audioSettings.frameSize = frameSize;
@@ -107,6 +127,8 @@ bool CSteamAudioContext::Initialize(int sampleRate, int frameSize, bool enableVa
 
 void CSteamAudioContext::Shutdown()
 {
+    ShutdownGPU();
+
     if (m_hrtf)
     {
         iplHRTFRelease(&m_hrtf);
@@ -120,6 +142,97 @@ void CSteamAudioContext::Shutdown()
         m_context = nullptr;
         Msg("* SOUND: SteamAudio: Context released");
     }
+}
+
+bool CSteamAudioContext::InitializeGPU()
+{
+    if (!m_context)
+        return false;
+
+    IPLOpenCLDeviceSettings deviceSettings{};
+    deviceSettings.type = IPL_OPENCLDEVICETYPE_GPU;
+    deviceSettings.numCUsToReserve = 0;
+    deviceSettings.fractionCUsForIRUpdate = 1.0f;
+    deviceSettings.requiresTAN = IPL_FALSE;
+
+    const IPLerror listResult = iplOpenCLDeviceListCreate(m_context, &deviceSettings, &m_openCLDeviceList);
+    if (listResult != IPL_STATUS_SUCCESS)
+    {
+        Msg("~ SOUND: SteamAudio: Failed to enumerate OpenCL devices, error: %d", static_cast<int>(listResult));
+        ShutdownGPU();
+        return false;
+    }
+
+    const IPLint32 deviceCount = iplOpenCLDeviceListGetNumDevices(m_openCLDeviceList);
+    if (deviceCount <= 0)
+    {
+        Msg("~ SOUND: SteamAudio: No compatible OpenCL GPU devices found");
+        ShutdownGPU();
+        return false;
+    }
+
+    IPLint32 chosenIndex = 0;
+    IPLfloat32 bestScore = -FLT_MAX;
+    for (IPLint32 i = 0; i < deviceCount; ++i)
+    {
+        IPLOpenCLDeviceDesc desc{};
+        iplOpenCLDeviceListGetDeviceDesc(m_openCLDeviceList, i, &desc);
+        if (desc.type != IPL_OPENCLDEVICETYPE_GPU)
+            continue;
+        const IPLfloat32 score = desc.perfScore;
+        if (score > bestScore)
+        {
+            bestScore = score;
+            chosenIndex = i;
+        }
+    }
+
+    IPLOpenCLDeviceDesc chosenDesc{};
+    iplOpenCLDeviceListGetDeviceDesc(m_openCLDeviceList, chosenIndex, &chosenDesc);
+
+    const IPLerror deviceResult = iplOpenCLDeviceCreate(m_context, m_openCLDeviceList, chosenIndex, &m_openCLDevice);
+    if (deviceResult != IPL_STATUS_SUCCESS)
+    {
+        Msg("~ SOUND: SteamAudio: Failed to create OpenCL device, error: %d", static_cast<int>(deviceResult));
+        ShutdownGPU();
+        return false;
+    }
+
+    const IPLerror rrResult = iplRadeonRaysDeviceCreate(m_openCLDevice, nullptr, &m_radeonRaysDevice);
+    if (rrResult != IPL_STATUS_SUCCESS)
+    {
+        Msg("~ SOUND: SteamAudio: Failed to create Radeon Rays device, error: %d", static_cast<int>(rrResult));
+        ShutdownGPU();
+        return false;
+    }
+
+    Msg("* SOUND: SteamAudio: Selected GPU '%s' on platform '%s'", chosenDesc.deviceName, chosenDesc.platformName);
+    return true;
+}
+
+void CSteamAudioContext::ShutdownGPU()
+{
+    if (m_radeonRaysDevice)
+    {
+        iplRadeonRaysDeviceRelease(&m_radeonRaysDevice);
+        m_radeonRaysDevice = nullptr;
+        Msg("* SOUND: SteamAudio: Radeon Rays device released");
+    }
+
+    if (m_openCLDevice)
+    {
+        iplOpenCLDeviceRelease(&m_openCLDevice);
+        m_openCLDevice = nullptr;
+        Msg("* SOUND: SteamAudio: OpenCL device released");
+    }
+
+    if (m_openCLDeviceList)
+    {
+        iplOpenCLDeviceListRelease(&m_openCLDeviceList);
+        m_openCLDeviceList = nullptr;
+    }
+
+    m_gpuActive = false;
 }
 
 } // namespace SteamAudio

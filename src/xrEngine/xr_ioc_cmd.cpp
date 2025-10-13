@@ -877,6 +877,7 @@ void CCC_Register()
     CMD4(CCC_Float, "snd_steamaudio_occ_strength", &psSteamAudioOcclusionStrength, 0.0f, 5.0f);
     CMD4(CCC_Float, "snd_steamaudio_trans_strength", &psSteamAudioTransmissionStrength, 0.0f, 5.0f);
     CMD4(CCC_Float, "snd_steamaudio_distance_blend", &psSteamAudioDistanceBlend, 0.0f, 1.0f);
+    CMD4(CCC_Integer, "snd_steamaudio_gpu", &psSteamAudioUseGPU, 0, 1);
     CMD4(CCC_Integer, "snd_steamaudio_debug_queries", &psSteamAudioDebugQueries, 0, 1);
 #endif
     CMD4(CCC_Integer, "snd_targets", &psSoundTargets, 4, 256);

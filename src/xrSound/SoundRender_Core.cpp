@@ -43,6 +43,7 @@ XRSOUND_API int psSoundCacheSizeMB = 32;
 XRSOUND_API float psSteamAudioOcclusionStrength = 1.0f;
 XRSOUND_API float psSteamAudioTransmissionStrength = 1.0f;
 XRSOUND_API float psSteamAudioDistanceBlend = 1.0f;
+XRSOUND_API int psSteamAudioUseGPU = 0;
 XRSOUND_API int psSteamAudioDebugQueries = 0;
 #endif
 
@@ -83,7 +84,8 @@ void CSoundRender_Core::_initialize()
         constexpr int sampleRate = 48000;
         constexpr int frameSize = 1024;  // FIX: Was 19200 (400ms!), now 1024 (~21ms @ 48kHz)
 
-        if (!m_steamAudioContext->Initialize(sampleRate, frameSize, enableValidation))
+        const bool requestGPU = psSteamAudioUseGPU != 0;
+        if (!m_steamAudioContext->Initialize(sampleRate, frameSize, enableValidation, requestGPU))
         {
             Msg("! SOUND: SteamAudio: Failed to initialize, disabling Steam Audio");
             xr_delete(m_steamAudioContext);
