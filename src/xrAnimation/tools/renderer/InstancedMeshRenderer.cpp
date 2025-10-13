@@ -729,8 +729,6 @@ bool InstancedMeshRenderer::CreatePipeline() {
     config.depth_write_enable = true;  // ENABLE depth writes
     config.depth_compare_op = VK_COMPARE_OP_LESS_OR_EQUAL;  // Use LESS_OR_EQUAL like reference implementation
     config.blend_enable = false;
-    config.render_pass = device_->GetRenderPass();
-    config.subpass = 0;
     config.descriptor_set_layouts = {descriptor_set_layout_};
 
     Msg("* InstancedMeshRenderer pipeline config: depth_test=%d, depth_write=%d, depth_compare=%d",

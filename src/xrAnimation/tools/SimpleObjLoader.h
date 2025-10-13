@@ -22,6 +22,11 @@ public:
     // Returns true on success
     static bool LoadObjFile(const std::string& file_path, ozz::sample::Mesh& out_mesh);
 
+    // Find a resource file by searching common locations relative to CWD
+    // Tries: relative path as-is, ../../../<path>, ../../<path>, ../<path>
+    // Returns the resolved path if found, empty string otherwise
+    static std::string FindResourceFile(const std::string& relative_path);
+
 private:
     struct TempVertex {
         float position[3];

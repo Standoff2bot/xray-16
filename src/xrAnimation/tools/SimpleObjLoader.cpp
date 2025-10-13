@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <unordered_map>
 #include <cstring>
+#include <filesystem>
 
 #define Msg(...) printf(__VA_ARGS__), printf("\n")
 
@@ -39,6 +40,34 @@ struct hash<xray::animation::tools::VertexKey> {
 namespace xray {
 namespace animation {
 namespace tools {
+
+std::string SimpleObjLoader::FindResourceFile(const std::string& relative_path) {
+    // List of search paths to try (in order)
+    const std::vector<std::string> search_prefixes = {
+        "",           // Try as-is first (for Linux builds from project root)
+        "../../../",  // Visual Studio (src/xrAnimation/tools -> project root)
+        "../../",     // Some build configs
+        "../",        // Other build configs
+    };
+
+    for (const auto& prefix : search_prefixes) {
+        std::string candidate = prefix + relative_path;
+
+        // Check if file exists
+        if (std::filesystem::exists(candidate)) {
+            auto abs_path = std::filesystem::absolute(candidate);
+            Msg("* Found resource: %s -> %s", relative_path.c_str(), abs_path.string().c_str());
+            return candidate;
+        }
+    }
+
+    // Not found in any location
+    Msg("! Resource not found: %s (tried %zu locations)", relative_path.c_str(), search_prefixes.size());
+    auto cwd = std::filesystem::current_path();
+    Msg("! CWD: %s", cwd.string().c_str());
+
+    return "";
+}
 
 bool SimpleObjLoader::LoadObjFile(const std::string& file_path, ozz::sample::Mesh& out_mesh) {
     std::ifstream file(file_path);

@@ -757,8 +757,6 @@ bool DebugRenderer::CreateLinePipeline() {
     config.depth_write_enable = false;
     config.blend_enable = true;
     config.line_width = 5.0f;
-    config.render_pass = device_->GetRenderPass();
-    config.subpass = 0;
     config.descriptor_set_layouts.push_back(descriptor_set_layout_);
 
     return line_pipeline_.Create(device_->GetDevice(), config);
@@ -804,8 +802,6 @@ bool DebugRenderer::CreateSolidPipeline() {
     config.depth_test_enable = true;
     config.depth_write_enable = false;
     config.blend_enable = true;
-    config.render_pass = device_->GetRenderPass();
-    config.subpass = 0;
     config.descriptor_set_layouts.push_back(descriptor_set_layout_);
 
     return solid_pipeline_.Create(device_->GetDevice(), config);

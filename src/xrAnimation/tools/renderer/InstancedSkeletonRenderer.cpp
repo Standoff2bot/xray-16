@@ -252,8 +252,6 @@ bool InstancedSkeletonRenderer::CreatePipeline() {
     config.depth_test_enable = true;
     config.depth_write_enable = true;
     config.blend_enable = false;
-    config.render_pass = device_->GetRenderPass();
-    config.subpass = 0;
     config.descriptor_set_layouts = {descriptor_set_layout_};
 
     if (!pipeline_.Create(device_->GetDevice(), config)) {

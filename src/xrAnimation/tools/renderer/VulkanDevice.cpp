@@ -46,11 +46,11 @@ bool VulkanDevice::Initialize(GLFWwindow* window, bool enable_validation) {
     if (!CreateSurface(window)) return false;
     if (!PickPhysicalDevice()) return false;
     if (!CreateLogicalDevice()) return false;
+    if (!CreateAllocator()) return false;  // MUST be before CreateDepthResources
     if (!CreateSwapchain()) return false;
     if (!CreateImageViews()) return false;
     if (!CreateDepthResources()) return false;
     if (!CreateCommandPool()) return false;
-    if (!CreateAllocator()) return false;
     if (!CreateSyncObjects()) return false;
 
     Msg("* Vulkan device initialized successfully");

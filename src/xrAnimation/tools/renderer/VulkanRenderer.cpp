@@ -264,7 +264,15 @@ bool VulkanRenderer::InitializeImGui() {
     init_info.PipelineCache = VK_NULL_HANDLE;
     init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     init_info.UseDynamicRendering = true;
-    init_info.PipelineInfoMain.ColorAttachmentFormat = device_.GetSwapchainFormat();
+
+    // Setup dynamic rendering info
+    VkPipelineRenderingCreateInfoKHR pipeline_rendering_info = {};
+    pipeline_rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+    pipeline_rendering_info.colorAttachmentCount = 1;
+    VkFormat color_format = device_.GetSwapchainFormat();
+    pipeline_rendering_info.pColorAttachmentFormats = &color_format;
+    init_info.PipelineInfoMain.PipelineRenderingCreateInfo = pipeline_rendering_info;
+
     init_info.Allocator = nullptr;
     init_info.CheckVkResultFn = CheckVkResult;
     init_info.MinAllocationSize = 1024 * 1024;
@@ -1175,10 +1183,17 @@ bool VulkanRenderer::LoadVikingRoomMesh() {
     // Allocate mesh
     viking_room_mesh_ = std::make_unique<ozz::sample::Mesh>();
 
-    // Load the OBJ file
-    const std::string viking_room_path = "res/testdata/viking_room.obj";
-    if (!xray::animation::tools::SimpleObjLoader::LoadObjFile(viking_room_path, *viking_room_mesh_)) {
-        Msg("! Failed to load viking room mesh from: %s", viking_room_path.c_str());
+    const std::string relative_path = "res/testdata/viking_room.obj";
+    const std::string resolved_path = xray::animation::tools::SimpleObjLoader::FindResourceFile(relative_path);
+
+    if (resolved_path.empty()) {
+        Msg("! Could not locate viking room mesh: %s", relative_path.c_str());
+        viking_room_mesh_.reset();
+        return false;
+    }
+
+    if (!xray::animation::tools::SimpleObjLoader::LoadObjFile(resolved_path, *viking_room_mesh_)) {
+        Msg("! Failed to load viking room mesh from: %s", resolved_path.c_str());
         viking_room_mesh_.reset();
         return false;
     }
