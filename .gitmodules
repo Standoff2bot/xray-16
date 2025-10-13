@@ -37,3 +37,6 @@
 [submodule "Externals/glfw"]
 	path = Externals/glfw
 	url = https://github.com/glfw/glfw.git
+[submodule "Externals/JoltPhysics"]
+	path = Externals/JoltPhysics
+	url = https://github.com/jrouwe/JoltPhysics.git

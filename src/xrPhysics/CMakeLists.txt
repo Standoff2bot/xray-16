@@ -1,3 +1,15 @@
+# Physics engine selection
+option(XRPHYSICS_USE_JOLT "Use Jolt Physics instead of ODE" OFF)
+option(XRPHYSICS_USE_ODE "Use ODE Physics (legacy)" ON)
+
+if(XRPHYSICS_USE_JOLT AND XRPHYSICS_USE_ODE)
+    message(FATAL_ERROR "Cannot enable both XRPHYSICS_USE_JOLT and XRPHYSICS_USE_ODE simultaneously")
+endif()
+
+if(NOT XRPHYSICS_USE_JOLT AND NOT XRPHYSICS_USE_ODE)
+    message(FATAL_ERROR "Must enable either XRPHYSICS_USE_JOLT or XRPHYSICS_USE_ODE")
+endif()
+
 add_library(xrPhysics)
 
 target_sources_grouped(
@@ -8,6 +20,15 @@ target_sources_grouped(
     StdAfx.h
     xrPhysics.cpp
     xrPhysics.h
+)
+
+# Physics abstraction layer
+target_sources_grouped(
+    TARGET xrPhysics
+    NAME "Physics\\Adapters"
+    FILES
+    adapters/IPhysicsAdapter.h
+    adapters/PhysicsEngineRegistry.cpp
 )
 
 target_sources_grouped(
@@ -393,6 +414,23 @@ target_sources_grouped(
     icollisiondamagereceiver.h
 )
 
+# Jolt Physics specific sources
+if(XRPHYSICS_USE_JOLT)
+    target_sources_grouped(
+        TARGET xrPhysics
+        NAME "Physics\\Adapters\\Jolt"
+        FILES
+        adapters/Jolt/JoltPhysicsWorld.h
+        adapters/Jolt/JoltPhysicsWorld.cpp
+        adapters/Jolt/JoltPhysicsBody.h
+        adapters/Jolt/JoltPhysicsBody.cpp
+        adapters/Jolt/JoltPhysicsShape.h
+        adapters/Jolt/JoltPhysicsShape.cpp
+        adapters/Jolt/JoltPhysicsConstraint.h
+        adapters/Jolt/JoltPhysicsConstraint.cpp
+    )
+endif()
+
 target_include_directories(xrPhysics
     PUBLIC
     "${CMAKE_SOURCE_DIR}/Externals"
@@ -401,12 +439,24 @@ target_include_directories(xrPhysics
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_SOURCE_DIR}/src"
     "${CMAKE_SOURCE_DIR}/Externals/imgui"
-    "${CMAKE_SOURCE_DIR}/Externals/ode/include"
 )
 
+# Add physics engine specific includes
+if(XRPHYSICS_USE_ODE)
+    target_include_directories(xrPhysics
+        PRIVATE
+        "${CMAKE_SOURCE_DIR}/Externals/ode/include"
+    )
+endif()
+
+if(XRPHYSICS_USE_JOLT)
+    target_include_directories(xrPhysics
+        PRIVATE
+        "${CMAKE_SOURCE_DIR}/Externals/JoltPhysics"
+    )
+endif()
+
 target_link_libraries(xrPhysics
-    PUBLIC
-    xrODE
     PRIVATE
     xrCore
     xrEngine
@@ -418,11 +468,45 @@ target_link_libraries(xrPhysics
     xrSound
 )
 
+# Link physics engine
+if(XRPHYSICS_USE_ODE)
+    target_link_libraries(xrPhysics PUBLIC xrODE)
+endif()
+
+if(XRPHYSICS_USE_JOLT)
+    # Configure Jolt build
+    set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "Disable IPO for Jolt" FORCE)
+    set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "Don't use static MSVC runtime" FORCE)
+    set(CROSS_PLATFORM_DETERMINISTIC OFF CACHE BOOL "Disable cross-platform deterministic" FORCE)
+    set(DOUBLE_PRECISION OFF CACHE BOOL "Use single precision" FORCE)
+    set(GENERATE_DEBUG_SYMBOLS ON CACHE BOOL "Generate debug symbols" FORCE)
+    set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "Don't override CXX flags" FORCE)
+    set(BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build Jolt as static library" FORCE)
+
+    add_subdirectory("${CMAKE_SOURCE_DIR}/Externals/JoltPhysics/Build" JoltPhysics EXCLUDE_FROM_ALL)
+
+    set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED} CACHE BOOL "Restore BUILD_SHARED_LIBS" FORCE)
+
+    target_link_libraries(xrPhysics PRIVATE Jolt)
+endif()
+
 target_compile_definitions(xrPhysics
     PRIVATE
     XRPHYSICS_EXPORTS
     PURE_DYNAMIC_CAST
 )
+
+# Physics engine compile definitions
+if(XRPHYSICS_USE_JOLT)
+    target_compile_definitions(xrPhysics PRIVATE XRPHYSICS_JOLT=1)
+    message(STATUS "xrPhysics: Using Jolt Physics engine")
+endif()
+
+if(XRPHYSICS_USE_ODE)
+    target_compile_definitions(xrPhysics PRIVATE XRPHYSICS_ODE=1)
+    message(STATUS "xrPhysics: Using ODE Physics engine (legacy)")
+endif()
 
 set_target_properties(xrPhysics PROPERTIES
     PREFIX ""
