@@ -56,6 +56,8 @@ constexpr double kStatusMessageDuration = 6.0;
 // Forward declarations
 struct ViewerState;
 void InitializeECSInstances(ViewerState& state);
+void InitializeRegularInstances(ViewerState& state);
+void UpdateRegularInstanceAnimations(ViewerState& state, float dt);
 
 struct AnimationInterval {
     float start = 0.0f;
@@ -482,6 +484,31 @@ std::vector<SkeletonLinePoint> BuildSkeletonLinePoints(const ozz::animation::Ske
     return points;
 }
 
+// Per-instance animation state for regular (non-ECS) rendering
+struct RegularInstanceState {
+    int animation_index = -1;
+    float current_time = 0.0f;
+    float playback_speed = 1.0f;
+
+    // Animation buffers (similar to ECS AnimationBuffers)
+    ozz::animation::SamplingJob::Context context;
+    ozz::vector<ozz::math::SoaTransform> locals;
+    ozz::vector<ozz::math::Float4x4> models;
+
+    void Initialize(const ozz::animation::Skeleton* skeleton) {
+        if (!skeleton) return;
+        const int num_joints = skeleton->num_joints();
+        const int num_soa_joints = skeleton->num_soa_joints();
+        locals.resize(num_soa_joints);
+        models.resize(num_joints);
+        context.Resize(num_joints);
+    }
+
+    bool IsInitialized() const {
+        return !locals.empty() && !models.empty();
+    }
+};
+
 struct ViewerState {
     GLFWwindow* window = nullptr;
     std::array<char, 512> bundle_path_buffer{};
@@ -522,6 +549,11 @@ struct ViewerState {
     // ECS Multi-instance rendering
     AnimationECS::AnimationRegistry* ecs_animation_registry = nullptr;
     std::vector<entt::entity> instance_entities;
+
+    // Regular (non-ECS) multi-instance rendering
+    // Use unique_ptr because SamplingJob::Context is non-copyable
+    xr_vector<xr_unique_ptr<RegularInstanceState>> regular_instances;
+
     int instance_count = 1;
     float instance_grid_spacing = 2.0f;
     int current_instance_count = 0;
@@ -896,9 +928,10 @@ bool LoadBundleFromPath(const std::filesystem::path& bundle_path, ViewerState& s
     renderer.SetShowDebugOverlay(debug_ready);
     renderer.SetShowSkeletonLines(!debug_ready);
 
-    // Initialize ECS multi-instance system
+    // Initialize multi-instance systems (both ECS and regular)
     if (state.skeleton.num_joints() > 0) {
         InitializeECSInstances(state);
+        InitializeRegularInstances(state);
     }
 
     return true;
@@ -1217,8 +1250,8 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
     ImGui::SeparatorText("Multi-Instance Rendering");
 
     int prev_instance_count = state.instance_count;
-    state.instance_count = std::clamp(state.instance_count, 1, 100);
-    if (ImGui::SliderInt("Instance count", &state.instance_count, 1, 100)) {
+    state.instance_count = std::clamp(state.instance_count, 1, 10000);
+    if (ImGui::SliderInt("Instance count", &state.instance_count, 1, 10000)) {
         if (state.instance_count != prev_instance_count) {
             Msg("[ozz_animation_viewer] Instance count changed: %d -> %d", prev_instance_count, state.instance_count);
         }
@@ -1226,13 +1259,14 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
 
     ImGui::SliderFloat("Grid spacing", &state.instance_grid_spacing, 0.5f, 10.0f);
 
-    // Randomize animations toggle (only for ECS with multiple instances and animations)
-    if (state.use_ecs_rendering && state.instance_count > 1 && state.animations.size() > 1) {
+    // Randomize animations toggle (only with multiple instances and animations)
+    if (state.instance_count > 1 && state.animations.size() > 1) {
         if (ImGui::Checkbox("Randomize animations per instance", &state.randomize_instance_animations)) {
             Msg("[ozz_animation_viewer] Randomize animations: %s", state.randomize_instance_animations ? "enabled" : "disabled");
             // Reinitialize instances when toggling to apply changes
             if (state.skeleton.num_joints() > 0) {
                 InitializeECSInstances(state);
+                InitializeRegularInstances(state);
             }
         }
 
@@ -1241,7 +1275,7 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
             ImGui::TextUnformatted("Each instance plays a random animation");
-            ImGui::TextUnformatted("Requires: ECS mode, 2+ instances, 2+ animations");
+            ImGui::TextUnformatted("Requires: 2+ instances, 2+ animations");
             ImGui::EndTooltip();
         }
     }
@@ -1250,9 +1284,10 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
     bool prev_ecs_mode = state.use_ecs_rendering;
     if (ImGui::Checkbox("Use ECS Animation System", &state.use_ecs_rendering)) {
         Msg("[ozz_animation_viewer] Rendering mode changed to: %s", state.use_ecs_rendering ? "ECS" : "Regular");
-        // Reinitialize ECS instances when toggling mode to keep sync
+        // Reinitialize instances when toggling mode to keep sync
         if (state.skeleton.num_joints() > 0) {
             InitializeECSInstances(state);
+            InitializeRegularInstances(state);
         }
     }
 
@@ -1814,6 +1849,97 @@ void InitializeECSInstances(ViewerState& state) {
     Msg("* Initialized %d ECS instances", state.instance_count);
 }
 
+void InitializeRegularInstances(ViewerState& state) {
+    // Clear existing instances
+    state.regular_instances.clear();
+    state.regular_instances.reserve(state.instance_count);
+
+    // Setup random number generator for randomized animations
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> anim_dist(0, std::max(0, static_cast<int>(state.animations.size()) - 1));
+
+    for (int i = 0; i < state.instance_count; ++i) {
+        auto instance = xr_make_unique<RegularInstanceState>();
+
+        // Initialize animation buffers
+        instance->Initialize(&state.skeleton);
+
+        // Determine which animation this instance should play
+        instance->animation_index = state.current_animation_index;
+        if (state.randomize_instance_animations && !state.animations.empty()) {
+            instance->animation_index = anim_dist(gen);
+        }
+
+        // Set playback speed from metadata
+        if (instance->animation_index >= 0 && instance->animation_index < static_cast<int>(state.animation_metadata.size())) {
+            instance->playback_speed = state.animation_metadata[instance->animation_index].speed;
+        }
+
+        // Randomize starting time if enabled
+        if (state.randomize_instance_animations && instance->animation_index >= 0 &&
+            instance->animation_index < static_cast<int>(state.animations.size())) {
+            const float duration = state.animations[instance->animation_index].duration();
+            std::uniform_real_distribution<float> time_dist(0.0f, duration);
+            instance->current_time = time_dist(gen);
+        }
+
+        state.regular_instances.push_back(std::move(instance));
+    }
+
+    state.current_instance_count = state.instance_count;
+    Msg("* Initialized %d regular instances", state.instance_count);
+}
+
+void UpdateRegularInstanceAnimations(ViewerState& state, float dt) {
+    if (state.regular_instances.size() != static_cast<size_t>(state.instance_count)) {
+        return;
+    }
+
+    // Update each instance's animation
+    for (int i = 0; i < state.instance_count; ++i) {
+        auto& instance = *state.regular_instances[i];
+
+        if (instance.animation_index < 0 ||
+            instance.animation_index >= static_cast<int>(state.animations.size()) ||
+            !instance.IsInitialized()) {
+            continue;
+        }
+
+        const auto& animation = state.animations[instance.animation_index];
+
+        // Update time
+        instance.current_time += dt * instance.playback_speed;
+
+        // Calculate time ratio and handle looping
+        const float duration = animation.duration();
+        float time_ratio = 0.0f;
+        if (duration > 0.0f) {
+            time_ratio = instance.current_time / duration;
+            if (time_ratio > 1.0f) {
+                // Loop
+                instance.current_time = fmodf(instance.current_time, duration);
+                time_ratio = fmodf(time_ratio, 1.0f);
+            }
+        }
+
+        // Sample animation
+        ozz::animation::SamplingJob sampling_job;
+        sampling_job.animation = &animation;
+        sampling_job.context = &instance.context;
+        sampling_job.ratio = time_ratio;
+        sampling_job.output = ozz::make_span(instance.locals);
+        sampling_job.Run();
+
+        // Local-to-Model transformation
+        ozz::animation::LocalToModelJob ltm_job;
+        ltm_job.skeleton = &state.skeleton;
+        ltm_job.input = ozz::make_span(instance.locals);
+        ltm_job.output = ozz::make_span(instance.models);
+        ltm_job.Run();
+    }
+}
+
 void RenderRegularInstances(ViewerState& state, VulkanRenderer& renderer) {
     if (state.instance_count <= 1 || !renderer.HasMeshLoaded()) {
         return;
@@ -1823,25 +1949,22 @@ void RenderRegularInstances(ViewerState& state, VulkanRenderer& renderer) {
     const int grid_size = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(state.instance_count))));
     const float spacing = state.instance_grid_spacing;
 
-    // Reuse cached buffers to avoid per-frame allocations
-    state.render_instance_buffer.clear();
-    state.render_skeleton_transforms_buffer.clear();
-    state.render_bone_matrices_buffer.clear();
-
-    state.render_instance_buffer.reserve(state.instance_count);
-    state.render_skeleton_transforms_buffer.reserve(state.instance_count);
-
     // Get the mesh to know how many bones per instance
     const size_t bones_per_instance = renderer.GetMeshRenderer().BonesPerInstance();
-    state.render_bone_matrices_buffer.reserve(state.instance_count * bones_per_instance);
 
-    // Get the current animated bone matrices from the regular animation path
-    // The renderer's UpdateMeshAnimation() computes these
-    const auto& current_bone_matrices = renderer.GetCurrentBoneMatrices();
+    // Pre-allocate buffers to exact sizes
+    state.render_instance_buffer.resize(state.instance_count);
+    state.render_skeleton_transforms_buffer.resize(state.instance_count);
+    state.render_bone_matrices_buffer.resize(state.instance_count * bones_per_instance);
 
     // Get the mesh world transform (includes rotation from UpdateMeshAnimation)
     const ozz::math::Float4x4 mesh_world_transform = renderer.GetMeshWorldTransform();
 
+    // Get mesh data for skinning (read-only, thread-safe)
+    const auto& joint_remaps = renderer.GetMeshJointRemaps();
+    const auto& inverse_bind_poses = renderer.GetMeshInverseBindPoses();
+
+    // Process each instance
     for (int i = 0; i < state.instance_count; ++i) {
         const int row = i / grid_size;
         const int col = i % grid_size;
@@ -1855,22 +1978,34 @@ void RenderRegularInstances(ViewerState& state, VulkanRenderer& renderer) {
         // Apply rotation first, then translation
         const ozz::math::Float4x4 instance_transform = translation * mesh_world_transform;
 
-        state.render_skeleton_transforms_buffer.push_back(instance_transform);
+        state.render_skeleton_transforms_buffer[i] = instance_transform;
 
         // Add instance data
-        MeshInstanceData instance_data;
-        instance_data.transform = instance_transform;
-        instance_data.bone_matrix_offset = static_cast<uint32_t>(state.render_bone_matrices_buffer.size());
-        state.render_instance_buffer.push_back(instance_data);
+        state.render_instance_buffer[i].transform = instance_transform;
+        state.render_instance_buffer[i].bone_matrix_offset = static_cast<uint32_t>(i * bones_per_instance);
 
-        // For regular rendering, all instances share the same animation
-        // Copy the current animated bone matrices from the renderer
-        for (size_t bone_idx = 0; bone_idx < bones_per_instance && bone_idx < current_bone_matrices.size(); ++bone_idx) {
-            state.render_bone_matrices_buffer.push_back(current_bone_matrices[bone_idx]);
-        }
-        // Fill remaining with identity if needed
-        while (state.render_bone_matrices_buffer.size() < (i + 1) * bones_per_instance) {
-            state.render_bone_matrices_buffer.push_back(ozz::math::Float4x4::identity());
+        // Compute skinning matrices from per-instance animation data
+        if (i < static_cast<int>(state.regular_instances.size())) {
+            const auto& instance = *state.regular_instances[i];
+            if (instance.IsInitialized()) {
+                const size_t bone_base_offset = i * bones_per_instance;
+
+                for (size_t bone_idx = 0; bone_idx < bones_per_instance && bone_idx < joint_remaps.size(); ++bone_idx) {
+                    const uint16_t joint = joint_remaps[bone_idx];
+                    const size_t write_idx = bone_base_offset + bone_idx;
+
+                    if (joint < instance.models.size()) {
+                        const ozz::math::Float4x4& model_space = instance.models[joint];
+                        const ozz::math::Float4x4& inv_bind_pose = inverse_bind_poses[bone_idx];
+
+                        // Skinning matrix = model_space * inverse_bind_pose
+                        state.render_bone_matrices_buffer[write_idx] = model_space * inv_bind_pose;
+                    } else {
+                        // Fallback to identity if joint index is out of range
+                        state.render_bone_matrices_buffer[write_idx] = ozz::math::Float4x4::identity();
+                    }
+                }
+            }
         }
     }
 
@@ -1894,23 +2029,29 @@ void RenderECSInstances(ViewerState& state, VulkanRenderer& renderer) {
     const int grid_size = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(state.instance_count))));
     const float spacing = state.instance_grid_spacing;
 
-    // Reuse cached buffers to avoid per-frame allocations
-    state.render_instance_buffer.clear();
-    state.render_skeleton_transforms_buffer.clear();
-    state.render_bone_matrices_buffer.clear();
-
-    state.render_instance_buffer.reserve(state.instance_count);
-    state.render_skeleton_transforms_buffer.reserve(state.instance_count);
-
     // Get the mesh to know how many bones per instance
     const size_t bones_per_instance = renderer.GetMeshRenderer().BonesPerInstance();
-    state.render_bone_matrices_buffer.reserve(state.instance_count * bones_per_instance);
+
+    // OPTIMIZED: Pre-allocate buffers to exact sizes (avoid reallocation)
+    state.render_instance_buffer.resize(state.instance_count);
+    state.render_skeleton_transforms_buffer.resize(state.instance_count);
+    state.render_bone_matrices_buffer.resize(state.instance_count * bones_per_instance);
 
     // Get the mesh world transform (includes rotation from UpdateMeshAnimation)
     const ozz::math::Float4x4 mesh_world_transform = renderer.GetMeshWorldTransform();
 
-    for (int i = 0; i < state.instance_count && i < static_cast<int>(state.instance_entities.size()); ++i) {
-        // Create instance transform
+    // Get mesh data for skinning (read-only, thread-safe)
+    const auto& joint_remaps = renderer.GetMeshJointRemaps();
+    const auto& inverse_bind_poses = renderer.GetMeshInverseBindPoses();
+
+    // OPTIMIZED: Parallel processing of render data preparation
+    // Each instance computes its transform and skinning matrices independently
+    auto render_prep_lambda = [&](int i) {
+        if (i >= static_cast<int>(state.instance_entities.size())) {
+            return;
+        }
+
+        // Compute instance transform
         ozz::math::Float4x4 instance_transform;
 
         if (state.instance_count == 1) {
@@ -1929,27 +2070,24 @@ void RenderECSInstances(ViewerState& state, VulkanRenderer& renderer) {
             instance_transform = translation * mesh_world_transform;
         }
 
-        state.render_skeleton_transforms_buffer.push_back(instance_transform);
+        // Write to pre-allocated indexed position
+        state.render_skeleton_transforms_buffer[i] = instance_transform;
 
         // Get buffers for this instance from ECS
         auto entity = state.instance_entities[i];
         auto* buffers = state.ecs_animation_registry->GetComponent<AnimationECS::AnimationBuffers>(entity);
 
         if (buffers && buffers->IsInitialized()) {
-            // Add instance data
-            MeshInstanceData instance_data;
-            instance_data.transform = instance_transform;
-            instance_data.bone_matrix_offset = static_cast<uint32_t>(state.render_bone_matrices_buffer.size());
-            state.render_instance_buffer.push_back(instance_data);
+            // Add instance data at indexed position
+            state.render_instance_buffer[i].transform = instance_transform;
+            state.render_instance_buffer[i].bone_matrix_offset = static_cast<uint32_t>(i * bones_per_instance);
 
             // Compute skinning matrices = model_space_transform * inverse_bind_pose
-            // Get mesh data from renderer
-            const auto& joint_remaps = renderer.GetMeshJointRemaps();
-            const auto& inverse_bind_poses = renderer.GetMeshInverseBindPoses();
+            const size_t bone_base_offset = i * bones_per_instance;
 
-            // For each bone in the mesh, compute the skinning matrix
             for (size_t bone_idx = 0; bone_idx < bones_per_instance && bone_idx < joint_remaps.size(); ++bone_idx) {
                 const uint16_t joint = joint_remaps[bone_idx];
+                const size_t write_idx = bone_base_offset + bone_idx;
 
                 // Get the model-space transform for this joint
                 if (joint < buffers->models.size()) {
@@ -1957,14 +2095,26 @@ void RenderECSInstances(ViewerState& state, VulkanRenderer& renderer) {
                     const ozz::math::Float4x4& inv_bind_pose = inverse_bind_poses[bone_idx];
 
                     // Skinning matrix = model_space * inverse_bind_pose
-                    const ozz::math::Float4x4 skinning_matrix = model_space * inv_bind_pose;
-                    state.render_bone_matrices_buffer.push_back(skinning_matrix);
+                    state.render_bone_matrices_buffer[write_idx] = model_space * inv_bind_pose;
                 } else {
                     // Fallback to identity if joint index is out of range
-                    state.render_bone_matrices_buffer.push_back(ozz::math::Float4x4::identity());
+                    state.render_bone_matrices_buffer[write_idx] = ozz::math::Float4x4::identity();
                 }
             }
         }
+    };
+
+    // Execute in parallel (using same backend as ECS animation system)
+    if (AnimationECS::g_parallel_implementation == AnimationECS::ParallelImplementation::StdExecution) {
+        // Create index range for parallel_for
+        std::vector<int> indices(state.instance_count);
+        std::iota(indices.begin(), indices.end(), 0);
+        std::for_each(std::execution::par, indices.begin(), indices.end(), render_prep_lambda);
+    } else {
+        // Use X-Ray task system
+        xr_vector<int> indices(state.instance_count);
+        std::iota(indices.begin(), indices.end(), 0);
+        xr_parallel_for_each(indices, render_prep_lambda);
     }
 
     // Pass ECS instances to VulkanRenderer to be rendered
@@ -2053,16 +2203,20 @@ int main(int argc, const char** argv) {
         // Check if instance count changed - reinitialize if needed
         if (state.instance_count != state.current_instance_count && state.skeleton.num_joints() > 0) {
             InitializeECSInstances(state);
+            InitializeRegularInstances(state);
             // When changing instance count, clear any ECS instance data from renderer
             renderer.ClearECSInstances();
         }
 
+        const float dt = renderer.GetFrameDeltaSeconds();
+
         // Use ECS animation path when enabled
         if (state.use_ecs_rendering && state.instance_count >= 1 && state.ecs_animation_registry) {
-            const float dt = renderer.GetFrameDeltaSeconds();
-
             // Run ECS animation systems for all instances (uses ParallelAnimationOrchestrator)
             state.ecs_animation_registry->Update(dt);
+        } else if (!state.use_ecs_rendering && state.instance_count > 1) {
+            // Run regular per-instance animation updates (sequential)
+            UpdateRegularInstanceAnimations(state, dt);
         }
 
         // Prepare instanced rendering data
@@ -2070,7 +2224,7 @@ int main(int argc, const char** argv) {
             // Use ECS rendering (single or multi-instance)
             RenderECSInstances(state, renderer);
         } else if (!state.use_ecs_rendering && state.instance_count > 1) {
-            // Use regular multi-instance rendering (all instances share same animation)
+            // Use regular multi-instance rendering with per-instance animations
             RenderRegularInstances(state, renderer);
         }
         // Single instance mode with regular rendering - UpdateMeshAnimation() handles this automatically

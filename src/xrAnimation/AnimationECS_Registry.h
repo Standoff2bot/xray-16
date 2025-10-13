@@ -140,6 +140,19 @@ public:
     }
 
     //-------------------------------------------------------------------------
+    // Batched update for performance (call once per frame for ALL entities)
+    //-------------------------------------------------------------------------
+    void UpdateBatched(float dt)
+    {
+        if (!m_initialized)
+            return;
+
+        // Run all animation systems ONCE for ALL entities in registry
+        // This is much more efficient than calling Update() per entity
+        ParallelAnimationOrchestrator::Update(m_registry, dt);
+    }
+
+    //-------------------------------------------------------------------------
     // Statistics
     //-------------------------------------------------------------------------
     size_t GetEntityCount() const

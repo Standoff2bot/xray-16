@@ -30,9 +30,8 @@ inline ParallelImplementation g_parallel_implementation = ParallelImplementation
 class ParallelAnimationProcessor
 {
 private:
-    // Reusable buffers to avoid per-frame allocations
+    // Reusable buffer to avoid per-frame allocations
     xr_vector<entt::entity> m_entity_cache;
-    xr_vector<entt::entity> m_blend_entity_cache;
 
     // Singleton
     ParallelAnimationProcessor() = default;
@@ -80,132 +79,13 @@ public:
             return;
         }
 
-        // Phase 1: Sample animations in parallel (SIMD-friendly, no shared state)
-        PerformanceTimer sampling_timer;
+        // OPTIMIZED: Single-pass processing - Sample + Blend + LocalToModel in ONE parallel pass
+        // This eliminates 2 synchronization points and greatly improves cache utilization
+        PerformanceTimer combined_timer;
 
-        auto sampling_lambda = [&](entt::entity entity)
+        auto combined_processing_lambda = [&, dt](entt::entity entity)
         {
             auto& state = view.get<AnimationState>(entity);
-            auto& controller = view.get<AnimationController>(entity);
-            auto& buffers = view.get<AnimationBuffers>(entity);
-
-            // Skip if not playing or no animation
-            if (!state.is_playing || !controller.animation || !buffers.IsInitialized())
-                return;
-
-            // Update time
-            state.current_time += dt * controller.playback_speed;
-
-            // Calculate time ratio
-            const float duration = controller.animation->duration();
-            if (duration > 0.0f)
-            {
-                state.time_ratio = state.current_time / duration;
-
-                // Handle looping
-                if (state.time_ratio > 1.0f)
-                {
-                    if (state.is_looping)
-                    {
-                        state.current_time = fmodf(state.current_time, duration);
-                        state.time_ratio = fmodf(state.time_ratio, 1.0f);
-                    }
-                    else
-                    {
-                        state.current_time = duration;
-                        state.time_ratio = 1.0f;
-                        state.is_playing = false;
-                    }
-                }
-            }
-
-            // Sample animation
-            ozz::animation::SamplingJob sampling_job;
-            sampling_job.animation = controller.animation;
-            sampling_job.context = &buffers.context;
-            sampling_job.ratio = state.time_ratio;
-            sampling_job.output = ozz::make_span(buffers.locals);
-
-            // Note: Sampling failures removed from hot path - check profiler stats instead
-            sampling_job.Run();
-        };
-
-        // Execute based on selected parallel implementation
-        if (g_parallel_implementation == ParallelImplementation::StdExecution)
-        {
-            std::for_each(std::execution::par, m_entity_cache.begin(), m_entity_cache.end(), sampling_lambda);
-        }
-        else
-        {
-            xr_parallel_for_each(m_entity_cache, sampling_lambda);
-        }
-
-        if (profiler.IsEnabled())
-        {
-            profiler.GetStats().sampling_time += sampling_timer.ElapsedMs();
-        }
-
-        // Phase 2: Blending (if needed, process entities with BlendState)
-        PerformanceTimer blending_timer;
-        auto blend_view = registry.view<AnimationBuffers, BlendState, AnimationController>();
-
-        // Reuse cached vector for blend entities
-        m_blend_entity_cache.clear();
-        m_blend_entity_cache.reserve(blend_view.size_hint());
-
-        for (auto entity : blend_view)
-        {
-            m_blend_entity_cache.push_back(entity);
-        }
-
-        if (profiler.IsEnabled())
-        {
-            profiler.GetStats().blending_entities += m_blend_entity_cache.size();
-        }
-
-        if (!m_blend_entity_cache.empty())
-        {
-            auto blending_lambda = [&](entt::entity entity)
-            {
-                auto& buffers = blend_view.get<AnimationBuffers>(entity);
-                auto& blend_state = blend_view.get<BlendState>(entity);
-                auto& controller = blend_view.get<AnimationController>(entity);
-
-                // Skip if no layers to blend
-                if (!blend_state.HasLayers() || !controller.skeleton)
-                    return;
-
-                // Setup blending job
-                ozz::animation::BlendingJob blend_job;
-                blend_job.layers = ozz::make_span(blend_state.layers);
-                blend_job.rest_pose = controller.skeleton->joint_rest_poses();
-                blend_job.output = ozz::make_span(buffers.locals);
-
-                // Note: Blending failures removed from hot path
-                blend_job.Run();
-            };
-
-            // Execute based on selected parallel implementation
-            if (g_parallel_implementation == ParallelImplementation::StdExecution)
-            {
-                std::for_each(std::execution::par, m_blend_entity_cache.begin(), m_blend_entity_cache.end(), blending_lambda);
-            }
-            else
-            {
-                xr_parallel_for_each(m_blend_entity_cache, blending_lambda);
-            }
-        }
-
-        if (profiler.IsEnabled())
-        {
-            profiler.GetStats().blending_time += blending_timer.ElapsedMs();
-        }
-
-        // Phase 3: Local-to-Model transformation in parallel
-        PerformanceTimer ltm_timer;
-
-        auto ltm_lambda = [&](entt::entity entity)
-        {
             auto& controller = view.get<AnimationController>(entity);
             auto& buffers = view.get<AnimationBuffers>(entity);
 
@@ -213,29 +93,80 @@ public:
             if (!controller.skeleton || !buffers.IsInitialized())
                 return;
 
-            // Setup local-to-model job
+            // Step 1: Sample animation (if playing)
+            if (state.is_playing && controller.animation)
+            {
+                // Update time
+                state.current_time += dt * controller.playback_speed;
+
+                // Calculate time ratio
+                const float duration = controller.animation->duration();
+                if (duration > 0.0f)
+                {
+                    state.time_ratio = state.current_time / duration;
+
+                    // Handle looping
+                    if (state.time_ratio > 1.0f)
+                    {
+                        if (state.is_looping)
+                        {
+                            state.current_time = fmodf(state.current_time, duration);
+                            state.time_ratio = fmodf(state.time_ratio, 1.0f);
+                        }
+                        else
+                        {
+                            state.current_time = duration;
+                            state.time_ratio = 1.0f;
+                            state.is_playing = false;
+                        }
+                    }
+                }
+
+                // Sample animation into locals
+                ozz::animation::SamplingJob sampling_job;
+                sampling_job.animation = controller.animation;
+                sampling_job.context = &buffers.context;
+                sampling_job.ratio = state.time_ratio;
+                sampling_job.output = ozz::make_span(buffers.locals);
+                sampling_job.Run();
+            }
+
+            // Step 2: Blend (if BlendState component exists)
+            // Check for BlendState component - only some entities have it
+            auto* blend_state = registry.try_get<BlendState>(entity);
+            if (blend_state && blend_state->HasLayers())
+            {
+                // Setup blending job
+                ozz::animation::BlendingJob blend_job;
+                blend_job.layers = ozz::make_span(blend_state->layers);
+                blend_job.rest_pose = controller.skeleton->joint_rest_poses();
+                blend_job.output = ozz::make_span(buffers.locals);
+                blend_job.Run();
+            }
+
+            // Step 3: Local-to-Model transformation
             ozz::animation::LocalToModelJob ltm_job;
             ltm_job.skeleton = controller.skeleton;
             ltm_job.input = ozz::make_span(buffers.locals);
             ltm_job.output = ozz::make_span(buffers.models);
-
-            // Note: LocalToModel failures removed from hot path
             ltm_job.Run();
         };
 
-        // Execute based on selected parallel implementation
+        // Execute single-pass processing in parallel
         if (g_parallel_implementation == ParallelImplementation::StdExecution)
         {
-            std::for_each(std::execution::par, m_entity_cache.begin(), m_entity_cache.end(), ltm_lambda);
+            std::for_each(std::execution::par, m_entity_cache.begin(), m_entity_cache.end(), combined_processing_lambda);
         }
         else
         {
-            xr_parallel_for_each(m_entity_cache, ltm_lambda);
+            xr_parallel_for_each(m_entity_cache, combined_processing_lambda);
         }
 
         if (profiler.IsEnabled())
         {
-            profiler.GetStats().local_to_model_time += ltm_timer.ElapsedMs();
+            // Track combined processing time (sampling + blending + local-to-model)
+            // Cannot accurately split this since they're in one pass now
+            profiler.GetStats().sampling_time += combined_timer.ElapsedMs();
         }
 
         // Phase 4: IK Solving (after LocalToModel, before callbacks)

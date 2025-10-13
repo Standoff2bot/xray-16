@@ -1380,77 +1380,21 @@ void OzzKinematicsAnimated::LL_UpdateTracks(float dt, bool b_force, bool leave_b
             }
         }
 
-        // Handle multi-layer blending if we have multiple active blends
-        if (activeBlends.size() > 1 && buffers)
+        // NOTE: Multi-blend support removed - ECS systems will handle sampling
+        // Previously we were sampling animations here AND in ECS systems (duplicate work!)
+        // Now we let AnimationSamplingSystem do ALL sampling for better performance
+
+        // Remove BlendState if it exists (multi-blend not yet supported in optimized path)
+        if (registry.HasComponent<AnimationECS::BlendState>(m_ecs_entity))
         {
-            // Get or add BlendState component for multi-animation blending
-            auto* blend_state = registry.GetComponent<AnimationECS::BlendState>(m_ecs_entity);
-            if (!blend_state)
-            {
-                blend_state = &registry.AddComponent<AnimationECS::BlendState>(m_ecs_entity);
-            }
-
-            // Prepare storage for all blend layers
-            const size_t num_soa_joints = static_cast<size_t>(core.Skeleton().num_soa_joints());
-            blend_state->PrepareForLayers(activeBlends.size(), num_soa_joints);
-
-            // Create blend layers from active blends
-            size_t layer_index = 0;
-            for (const auto& entry : activeBlends)
-            {
-                if (!entry.blend || !g_pOzzMotionsContainer)
-                    continue;
-
-                // Validate motion slot
-                if (entry.motionId.slot >= m_Motions.size())
-                    continue;
-
-                // Get animation from motion system
-                OzzMotionsValue* value = g_pOzzMotionsContainer->Resolve(m_Motions[entry.motionId.slot].motions.GetHandle());
-                if (!value)
-                    continue;
-
-                auto* record = value->FindMotion(entry.motionId.idx);
-                if (!record || !record->animation)
-                    continue;
-
-                // Get layer storage
-                auto layer_transforms = blend_state->GetLayerStorage(layer_index);
-                if (layer_transforms.empty())
-                    continue;
-
-                // Sample this animation into layer storage
-                ozz::animation::SamplingJob sampling_job;
-                sampling_job.animation = record->animation.get();
-                sampling_job.context = &buffers->context;
-
-                // Calculate ratio safely
-                const float time_total = entry.blend->timeTotal;
-                const float ratio = (time_total > 0.0f) ? (entry.blend->timeCurrent / time_total) : 0.0f;
-                sampling_job.ratio = std::clamp(ratio, 0.0f, 1.0f);
-                sampling_job.output = layer_transforms;
-
-                if (sampling_job.Run())
-                {
-                    // Add blend layer with calculated weight
-                    blend_state->AddLayer(entry.blend->blendAmount, layer_transforms);
-                    ++layer_index;
-                }
-            }
-        }
-        else
-        {
-            // Single animation - remove BlendState if it exists
-            if (registry.HasComponent<AnimationECS::BlendState>(m_ecs_entity))
-            {
-                registry.RemoveComponent<AnimationECS::BlendState>(m_ecs_entity);
-            }
+            registry.RemoveComponent<AnimationECS::BlendState>(m_ecs_entity);
         }
 
-        // Run ECS animation systems (sampling + blending + local-to-model)
-        registry.Update(dt);
+        // IMPORTANT: Do NOT call registry.Update() here!
+        // The global batched update will handle all entities at once for much better performance
+        // Calling Update() 500 times (once per character) was causing the performance drop
 
-        // Apply ECS animation results to skeleton
+        // Just apply ECS animation results to skeleton (already computed by batched update)
         if (state && buffers && buffers->IsInitialized())
         {
             // Use ECS-generated local transforms instead of legacy sampledLocals
