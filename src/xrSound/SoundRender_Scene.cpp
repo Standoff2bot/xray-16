@@ -15,6 +15,14 @@
 #include "SteamAudio/SteamAudioSource.h"
 #endif
 
+#ifdef DEBUG
+#include "xrCore/_color.h"
+#include "Include/xrAPI/xrAPI.h"
+using ImTextureID = void*;
+#include "xrEngine/Render.h"
+#include "Include/xrRender/DebugRender.h"
+#endif
+
 #include <algorithm>
 
 CSoundRender_Scene::CSoundRender_Scene()
@@ -397,6 +405,18 @@ float CSoundRender_Scene::get_occlusion_to(const Fvector& hear_pt, const Fvector
             }
 #endif
 
+#if defined(USE_STEAMAUDIO) && defined(DEBUG)
+            if (psSteamAudioDebugQueries && GEnv.DRender)
+            {
+                Fvector verts[2] = { listener.position, snd_pt };
+                u16 indices[2] = { 0, 1 };
+                const u8 r = static_cast<u8>((1.0f - clamped) * 255.0f);
+                const u8 g = static_cast<u8>(clamped * 255.0f);
+                const u32 color = color_argb(255, r, g, 0);
+                GEnv.DRender->add_lines(verts, 2, indices, 1, color);
+            }
+#endif
+
             return clamped;
         }
     }
@@ -425,6 +445,17 @@ float CSoundRender_Scene::get_occlusion_to(const Fvector& hear_pt, const Fvector
             }
         }
     }
+#if defined(USE_STEAMAUDIO) && defined(DEBUG)
+    if (psSteamAudioDebugQueries && GEnv.DRender)
+    {
+        Fvector verts[2] = { hear_pt, snd_pt };
+        u16 indices[2] = { 0, 1 };
+        const u8 r = static_cast<u8>((1.0f - occ_value) * 255.0f);
+        const u8 g = static_cast<u8>(occ_value * 255.0f);
+        const u32 color = color_argb(255, r, g, 64);
+        GEnv.DRender->add_lines(verts, 2, indices, 1, color);
+    }
+#endif
     return occ_value;
 }
 
