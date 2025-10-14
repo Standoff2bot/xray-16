@@ -63,6 +63,8 @@ void InstancedMeshRenderer::Shutdown() {
         index_buffer_.Destroy();
         instance_buffer_.Destroy();
         bone_matrix_buffer_.Destroy();
+        inverse_bind_pose_buffer_.Destroy();
+        joint_remap_buffer_.Destroy();
         uniform_buffer_.Destroy();
         pipeline_.Destroy();
         descriptor_set_layout_ = VK_NULL_HANDLE;
@@ -91,6 +93,8 @@ void InstancedMeshRenderer::Shutdown() {
 
     pipeline_.Destroy();
     uniform_buffer_.Destroy();
+    joint_remap_buffer_.Destroy();
+    inverse_bind_pose_buffer_.Destroy();
     bone_matrix_buffer_.Destroy();
     instance_buffer_.Destroy();
     index_buffer_.Destroy();
@@ -280,6 +284,108 @@ bool InstancedMeshRenderer::UploadMesh(const ozz::sample::Mesh& mesh) {
     index_buffer_.Upload(indices_uint32.data(), sizeof(uint32_t) * indices_uint32.size());
 
     bones_per_instance_ = static_cast<uint32_t>(mesh.num_joints());
+
+    // Upload inverse bind poses (uploaded once, shared across all instances)
+    // CRITICAL: We MUST always create this buffer because the shader expects it at binding 2!
+    if (!mesh.inverse_bind_poses.empty()) {
+        const size_t ibp_count = mesh.inverse_bind_poses.size();
+        const VkDeviceSize ibp_size = sizeof(float) * 16 * ibp_count;
+
+        inverse_bind_pose_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), ibp_size,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+        // Flatten inverse bind pose matrices for upload
+        std::vector<float> ibp_flattened(ibp_count * 16);
+        for (size_t i = 0; i < ibp_count; ++i) {
+            StoreMatrix(mesh.inverse_bind_poses[i], ibp_flattened.data() + i * 16);
+        }
+
+        inverse_bind_pose_buffer_.Upload(ibp_flattened.data(), sizeof(float) * ibp_flattened.size());
+
+        Msg("* Uploaded %zu inverse bind pose matrices (uploaded once, shared across instances)", ibp_count);
+
+        // DEBUG: Print first IBP matrix to verify correctness (log first 2 mesh uploads)
+        static int ibp_log = 0;
+        if (ibp_log++ < 2 && ibp_count > 0) {
+            Msg("=== First IBP Matrix (palette 0) - Upload #%d ===", ibp_log);
+            const auto& ibp0 = mesh.inverse_bind_poses[0];
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetX(ibp0.cols[0]), ozz::math::GetX(ibp0.cols[1]),
+                ozz::math::GetX(ibp0.cols[2]), ozz::math::GetX(ibp0.cols[3]));
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetY(ibp0.cols[0]), ozz::math::GetY(ibp0.cols[1]),
+                ozz::math::GetY(ibp0.cols[2]), ozz::math::GetY(ibp0.cols[3]));
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetZ(ibp0.cols[0]), ozz::math::GetZ(ibp0.cols[1]),
+                ozz::math::GetZ(ibp0.cols[2]), ozz::math::GetZ(ibp0.cols[3]));
+            Msg("  [%.3f, %.3f, %.3f, %.3f]",
+                ozz::math::GetW(ibp0.cols[0]), ozz::math::GetW(ibp0.cols[1]),
+                ozz::math::GetW(ibp0.cols[2]), ozz::math::GetW(ibp0.cols[3]));
+        }
+    } else {
+        // Create buffer with identity matrices as fallback
+        Msg("! Warning: Mesh has no inverse bind poses - creating identity IBP buffer");
+        const size_t ibp_count = std::max<size_t>(bones_per_instance_, 1);
+        const VkDeviceSize ibp_size = sizeof(float) * 16 * ibp_count;
+
+        inverse_bind_pose_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), ibp_size,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+        // Upload identity matrices
+        std::vector<float> ibp_identity(ibp_count * 16);
+        for (size_t i = 0; i < ibp_count; ++i) {
+            StoreMatrix(ozz::math::Float4x4::identity(), ibp_identity.data() + i * 16);
+        }
+
+        inverse_bind_pose_buffer_.Upload(ibp_identity.data(), sizeof(float) * ibp_identity.size());
+    }
+
+    // Upload joint remaps (palette index → skeleton joint index)
+    // CRITICAL: We MUST always create this buffer because the shader expects it at binding 3!
+    if (!mesh.joint_remaps.empty()) {
+        const size_t remap_count = mesh.joint_remaps.size();
+        const VkDeviceSize remap_size = sizeof(uint32_t) * remap_count;
+
+        joint_remap_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), remap_size,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+        // Convert uint16_t remaps to uint32_t for shader
+        std::vector<uint32_t> remap_uint32(mesh.joint_remaps.begin(), mesh.joint_remaps.end());
+        joint_remap_buffer_.Upload(remap_uint32.data(), sizeof(uint32_t) * remap_uint32.size());
+
+        Msg("* Uploaded %zu joint remap indices (palette → skeleton mapping)", remap_count);
+
+        // DEBUG: Print first few remaps to verify correctness (log first 2 mesh uploads)
+        static int remap_log = 0;
+        if (remap_log++ < 2) {
+            Msg("=== Joint Remap Data (palette → skeleton) - Upload #%d ===", remap_log);
+            for (size_t i = 0; i < std::min(size_t(10), remap_uint32.size()); ++i) {
+                Msg("  remap[%zu] = %u (palette %zu maps to skeleton joint %u)", i, remap_uint32[i], i, remap_uint32[i]);
+            }
+        }
+    } else {
+        // Create buffer with identity mapping as fallback
+        Msg("! Warning: Mesh has no joint remaps - creating identity remap buffer");
+        const size_t remap_count = std::max<size_t>(bones_per_instance_, 1);
+        const VkDeviceSize remap_size = sizeof(uint32_t) * remap_count;
+
+        joint_remap_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), remap_size,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+        // Upload identity mapping (0, 1, 2, 3, ...)
+        std::vector<uint32_t> remap_identity(remap_count);
+        for (size_t i = 0; i < remap_count; ++i) {
+            remap_identity[i] = static_cast<uint32_t>(i);
+        }
+
+        joint_remap_buffer_.Upload(remap_identity.data(), sizeof(uint32_t) * remap_identity.size());
+    }
+
+    // Update descriptor set to include IBP and remap buffers
+    if (descriptor_set_ != VK_NULL_HANDLE) {
+        UpdateDescriptorSet();
+    }
+
     mesh_uploaded_ = true;
     return true;
 }
@@ -333,6 +439,9 @@ void InstancedMeshRenderer::Render(VkCommandBuffer cmd,
 
     pipeline_.Bind(cmd);
 
+    const uint32_t skinning_flags = use_gpu_skinning_ ? 1u : 0u;
+    vkCmdPushConstants(cmd, pipeline_.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(uint32_t), &skinning_flags);
+
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.GetLayout(), 0, 1, &descriptor_set_, 0, nullptr);
 
     VkBuffer vertex_buffers[] = {vertex_buffer_.GetBuffer(), instance_buffer_.GetBuffer()};
@@ -350,25 +459,28 @@ bool InstancedMeshRenderer::CreateDescriptorSetLayout() {
     camera_binding.descriptorCount = 1;
     camera_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    VkDescriptorSetLayoutBinding bones_binding = {};
-    bones_binding.binding = 1;
-    bones_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bones_binding.descriptorCount = 1;
-    bones_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    // Model-space bone matrices (per-frame upload)
+    VkDescriptorSetLayoutBinding model_matrices_binding = {};
+    model_matrices_binding.binding = 1;
+    model_matrices_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    model_matrices_binding.descriptorCount = 1;
+    model_matrices_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    VkDescriptorSetLayoutBinding clip_binding = {};
-    clip_binding.binding = 2;
-    clip_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    clip_binding.descriptorCount = 1;
-    clip_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    // Inverse bind poses (uploaded once, shared across instances)
+    VkDescriptorSetLayoutBinding ibp_binding = {};
+    ibp_binding.binding = 2;
+    ibp_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    ibp_binding.descriptorCount = 1;
+    ibp_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    VkDescriptorSetLayoutBinding frag_debug_binding = {};
-    frag_debug_binding.binding = 3;
-    frag_debug_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;  // Changed to SSBO
-    frag_debug_binding.descriptorCount = 1;
-    frag_debug_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Joint remaps (palette → skeleton, uploaded once)
+    VkDescriptorSetLayoutBinding joint_remap_binding = {};
+    joint_remap_binding.binding = 3;
+    joint_remap_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    joint_remap_binding.descriptorCount = 1;
+    joint_remap_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {camera_binding, bones_binding, clip_binding, frag_debug_binding};
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {camera_binding, model_matrices_binding, ibp_binding, joint_remap_binding};
 
     VkDescriptorSetLayoutCreateInfo layout_info = {};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -393,8 +505,8 @@ bool InstancedMeshRenderer::CreatePipeline() {
     config.vertex_shader_path = (shader_root / "skinned_mesh_instanced.vert.spv").string();
     config.fragment_shader_path = (shader_root / "skinned_mesh_instanced.frag.spv").string();
 #else
-    config.vertex_shader_path = "src/xrAnimation/tools/shaders/skinned_mesh_instanced.vert.spv";
-    config.fragment_shader_path = "src/xrAnimation/tools/shaders/skinned_mesh_instanced.frag.spv";
+    config.vertex_shader_path = "src/xrAnimation/tools/renderer/shaders/skinned_mesh_instanced.vert.spv";
+    config.fragment_shader_path = "src/xrAnimation/tools/renderer/shaders/skinned_mesh_instanced.frag.spv";
 #endif
 
     VkVertexInputBindingDescription vertex_binding = {};
@@ -485,6 +597,12 @@ bool InstancedMeshRenderer::CreatePipeline() {
     config.blend_enable = false;
     config.descriptor_set_layouts = {descriptor_set_layout_};
 
+    VkPushConstantRange skinning_range = {};
+    skinning_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    skinning_range.offset = 0;
+    skinning_range.size = sizeof(uint32_t);
+    config.push_constant_ranges = {skinning_range};
+
     Msg("* InstancedMeshRenderer pipeline config: depth_test=%d, depth_write=%d, depth_compare=%d",
         config.depth_test_enable, config.depth_write_enable, config.depth_compare_op);
 
@@ -500,7 +618,7 @@ bool InstancedMeshRenderer::CreateDescriptorPool() {
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     pool_sizes[0].descriptorCount = 1;  // camera only
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    pool_sizes[1].descriptorCount = 3;  // bones + clip_debug + frag_debug
+    pool_sizes[1].descriptorCount = 3;  // model_matrices + inverse_bind_poses + joint_remaps
 
     VkDescriptorPoolCreateInfo pool_info = {};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -726,14 +844,24 @@ void InstancedMeshRenderer::UpdateDescriptorSet() {
     camera_info.offset = 0;
     camera_info.range = sizeof(CameraUBO);
 
-    VkDescriptorBufferInfo bone_info = {};
-    bone_info.buffer = bone_matrix_buffer_.GetBuffer();
-    bone_info.offset = 0;
-    bone_info.range = VK_WHOLE_SIZE;
+    VkDescriptorBufferInfo model_matrices_info = {};
+    model_matrices_info.buffer = bone_matrix_buffer_.GetBuffer();
+    model_matrices_info.offset = 0;
+    model_matrices_info.range = VK_WHOLE_SIZE;
+
+    VkDescriptorBufferInfo ibp_info = {};
+    ibp_info.buffer = inverse_bind_pose_buffer_.GetBuffer();
+    ibp_info.offset = 0;
+    ibp_info.range = VK_WHOLE_SIZE;
+
+    VkDescriptorBufferInfo remap_info = {};
+    remap_info.buffer = joint_remap_buffer_.GetBuffer();
+    remap_info.offset = 0;
+    remap_info.range = VK_WHOLE_SIZE;
 
     std::vector<VkWriteDescriptorSet> writes;
 
-    // Always write camera and bones
+    // Binding 0: Camera uniform buffer
     VkWriteDescriptorSet camera_write = {};
     camera_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     camera_write.dstSet = descriptor_set_;
@@ -743,14 +871,44 @@ void InstancedMeshRenderer::UpdateDescriptorSet() {
     camera_write.pBufferInfo = &camera_info;
     writes.push_back(camera_write);
 
-    VkWriteDescriptorSet bones_write = {};
-    bones_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    bones_write.dstSet = descriptor_set_;
-    bones_write.dstBinding = 1;
-    bones_write.descriptorCount = 1;
-    bones_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bones_write.pBufferInfo = &bone_info;
-    writes.push_back(bones_write);
+    // Binding 1: Model-space bone matrices (per-frame)
+    VkWriteDescriptorSet model_matrices_write = {};
+    model_matrices_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    model_matrices_write.dstSet = descriptor_set_;
+    model_matrices_write.dstBinding = 1;
+    model_matrices_write.descriptorCount = 1;
+    model_matrices_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    model_matrices_write.pBufferInfo = &model_matrices_info;
+    writes.push_back(model_matrices_write);
+
+    // Binding 2: Inverse bind poses (uploaded once)
+    // NOTE: This buffer should always exist after UploadMesh(), but check anyway
+    if (inverse_bind_pose_buffer_.GetBuffer() != VK_NULL_HANDLE) {
+        VkWriteDescriptorSet ibp_write = {};
+        ibp_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        ibp_write.dstSet = descriptor_set_;
+        ibp_write.dstBinding = 2;
+        ibp_write.descriptorCount = 1;
+        ibp_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        ibp_write.pBufferInfo = &ibp_info;
+        writes.push_back(ibp_write);
+    } else {
+        Msg("! WARNING: inverse_bind_pose_buffer_ is NULL in UpdateDescriptorSet!");
+    }
+
+    // Binding 3: Joint remaps (uploaded once)
+    if (joint_remap_buffer_.GetBuffer() != VK_NULL_HANDLE) {
+        VkWriteDescriptorSet remap_write = {};
+        remap_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        remap_write.dstSet = descriptor_set_;
+        remap_write.dstBinding = 3;
+        remap_write.descriptorCount = 1;
+        remap_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        remap_write.pBufferInfo = &remap_info;
+        writes.push_back(remap_write);
+    } else {
+        Msg("! WARNING: joint_remap_buffer_ is NULL in UpdateDescriptorSet!");
+    }
 
     if (!writes.empty()) {
         vkUpdateDescriptorSets(device_->GetDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);

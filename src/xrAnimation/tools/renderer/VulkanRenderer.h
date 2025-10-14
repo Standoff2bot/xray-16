@@ -77,6 +77,10 @@ public:
     bool GetShowSkeletonLines() const { return show_skeleton_lines_; }
     void SetShowSkinnedMesh(bool show);
     bool GetShowSkinnedMesh() const { return show_skinned_mesh_; }
+    void SetUseGpuMeshInstancing(bool enabled);
+    bool GetUseGpuMeshInstancing() const { return use_gpu_mesh_instancing_; }
+    void SetUseGpuSkeletonInstancing(bool enabled);
+    bool GetUseGpuSkeletonInstancing() const { return use_gpu_skeleton_instancing_; }
 
     // Frame timing
     float GetFrameDeltaSeconds() const { return static_cast<float>(frame_delta_seconds_); }
@@ -186,6 +190,8 @@ private:
     bool show_triangle_ = true;
     bool show_skeleton_lines_ = true;
     bool show_skinned_mesh_ = true;
+    bool use_gpu_mesh_instancing_ = true;
+    bool use_gpu_skeleton_instancing_ = true;
 
     std::vector<MeshInstanceData> mesh_instances_;
     std::vector<ozz::math::Float4x4> mesh_bone_matrices_;

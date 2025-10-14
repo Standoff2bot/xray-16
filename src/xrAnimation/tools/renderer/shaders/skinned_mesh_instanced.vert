@@ -17,27 +17,84 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 view_proj;
 } camera;
 
-layout(std430, set = 0, binding = 1) readonly buffer BoneMatrices {
+// Model-space bone transforms (updated per-frame)
+layout(std430, set = 0, binding = 1) readonly buffer ModelMatrices {
     mat4 matrices[];
-} bones;
+} model_matrices;
+
+// Inverse bind pose matrices (uploaded once, shared across all instances)
+layout(std430, set = 0, binding = 2) readonly buffer InverseBindPoses {
+    mat4 matrices[];
+} inverse_bind_poses;
+
+// Joint remap buffer (palette index → skeleton joint index)
+layout(std430, set = 0, binding = 3) readonly buffer JointRemaps {
+    uint indices[];
+} joint_remaps;
+
+layout(push_constant) uniform SkinningOptions {
+    uint flags;
+} skinning_options;
+
+const uint FLAG_GPU_SKINNING = 1u;
 
 layout(location = 0) out vec3 out_world_normal;
 layout(location = 1) out vec2 out_uv;
 
+// Skinning matrix computation. When GPU skinning is enabled we upload skeleton-order
+// model matrices and multiply inverse bind pose on the GPU. When disabled we upload
+// palette-order skinning matrices that already include the inverse bind pose.
 mat4 accumulate_skinning(uint base_index) {
     mat4 skin_matrix = mat4(0.0);
+    bool gpu_skinning = (skinning_options.flags & FLAG_GPU_SKINNING) != 0u;
 
     if (in_bone_weights.x > 0.0) {
-        skin_matrix += bones.matrices[base_index + in_bone_indices.x] * in_bone_weights.x;
+        uint palette_idx = in_bone_indices.x;
+        mat4 skinning_mat;
+        if (gpu_skinning) {
+            uint joint_idx = joint_remaps.indices[palette_idx];
+            skinning_mat = model_matrices.matrices[base_index + joint_idx]
+                         * inverse_bind_poses.matrices[palette_idx];
+        } else {
+            skinning_mat = model_matrices.matrices[base_index + palette_idx];
+        }
+        skin_matrix += skinning_mat * in_bone_weights.x;
     }
     if (in_bone_weights.y > 0.0) {
-        skin_matrix += bones.matrices[base_index + in_bone_indices.y] * in_bone_weights.y;
+        uint palette_idx = in_bone_indices.y;
+        mat4 skinning_mat;
+        if (gpu_skinning) {
+            uint joint_idx = joint_remaps.indices[palette_idx];
+            skinning_mat = model_matrices.matrices[base_index + joint_idx]
+                         * inverse_bind_poses.matrices[palette_idx];
+        } else {
+            skinning_mat = model_matrices.matrices[base_index + palette_idx];
+        }
+        skin_matrix += skinning_mat * in_bone_weights.y;
     }
     if (in_bone_weights.z > 0.0) {
-        skin_matrix += bones.matrices[base_index + in_bone_indices.z] * in_bone_weights.z;
+        uint palette_idx = in_bone_indices.z;
+        mat4 skinning_mat;
+        if (gpu_skinning) {
+            uint joint_idx = joint_remaps.indices[palette_idx];
+            skinning_mat = model_matrices.matrices[base_index + joint_idx]
+                         * inverse_bind_poses.matrices[palette_idx];
+        } else {
+            skinning_mat = model_matrices.matrices[base_index + palette_idx];
+        }
+        skin_matrix += skinning_mat * in_bone_weights.z;
     }
     if (in_bone_weights.w > 0.0) {
-        skin_matrix += bones.matrices[base_index + in_bone_indices.w] * in_bone_weights.w;
+        uint palette_idx = in_bone_indices.w;
+        mat4 skinning_mat;
+        if (gpu_skinning) {
+            uint joint_idx = joint_remaps.indices[palette_idx];
+            skinning_mat = model_matrices.matrices[base_index + joint_idx]
+                         * inverse_bind_poses.matrices[palette_idx];
+        } else {
+            skinning_mat = model_matrices.matrices[base_index + palette_idx];
+        }
+        skin_matrix += skinning_mat * in_bone_weights.w;
     }
 
     float weight_sum = in_bone_weights.x + in_bone_weights.y + in_bone_weights.z + in_bone_weights.w;
@@ -58,6 +115,13 @@ void main() {
     );
 
     uint base_index = in_bone_matrix_offset;
+
+    // TEMP DEBUG: Verify we can read the buffers
+    // For first vertex of first instance, palette 0 should map to skeleton joint 2
+    // Test: Read joint_remaps[0] - should be 2
+    // Test: Read model_matrices[2] - should be valid
+    // Test: Read inverse_bind_poses[0] - should be non-identity
+
     mat4 skin_matrix = accumulate_skinning(base_index);
 
     vec4 local_position = skin_matrix * vec4(in_position, 1.0);

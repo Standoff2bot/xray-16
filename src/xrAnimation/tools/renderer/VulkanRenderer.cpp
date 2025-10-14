@@ -117,6 +117,7 @@ bool VulkanRenderer::Initialize(GLFWwindow* window) {
     if (!mesh_renderer_initialized_) {
         Msg("! Failed to initialize mesh renderer");
     } else {
+        mesh_renderer_.SetUseGpuSkinning(use_gpu_mesh_instancing_);
         mesh_loaded_ = InitializeDebugMesh();
         if (!mesh_loaded_) {
             Msg("! Failed to upload debug skinned mesh");
@@ -697,6 +698,9 @@ bool VulkanRenderer::LoadBundleMesh(const ozz::sample::Mesh& mesh, const ozz::an
     mesh_joint_remaps_.assign(mesh.joint_remaps.begin(), mesh.joint_remaps.end());
     mesh_inverse_bind_poses_.assign(mesh.inverse_bind_poses.begin(), mesh.inverse_bind_poses.end());
 
+    // CRITICAL: Store skeleton pointer so UpdateMeshAnimation() can sample animations!
+    skeleton_source_ = &skeleton;
+
     const uint32_t bones_per_instance = mesh_renderer_.BonesPerInstance();
     if (bones_per_instance == 0) {
         Msg("! Uploaded mesh reports zero bones; skipping mesh rendering");
@@ -724,28 +728,49 @@ bool VulkanRenderer::LoadBundleMesh(const ozz::sample::Mesh& mesh, const ozz::an
         if (!job.Run()) {
             Msg("! Failed to compute skeleton bind pose for mesh palette");
         } else {
-            for (uint32_t palette_index = 0; palette_index < bones_per_instance; ++palette_index) {
-                ozz::math::Float4x4 palette_matrix = ozz::math::Float4x4::identity();
+            const ozz::math::Float4x4 identity = ozz::math::Float4x4::identity();
+            if (use_gpu_mesh_instancing_) {
+                const size_t skeleton_joint_count = models.size();
+                mesh_bone_matrices_.assign(skeleton_joint_count * mesh_instances_.size(), identity);
 
-                if (palette_index < mesh.joint_remaps.size()) {
-                    const uint16_t joint = mesh.joint_remaps[palette_index];
-                    if (joint < models.size() && palette_index < mesh.inverse_bind_poses.size()) {
-                        palette_matrix = models[joint] * mesh.inverse_bind_poses[palette_index];
+                for (size_t i = 0; i < mesh_instances_.size(); ++i) {
+                    const size_t base_offset = i * skeleton_joint_count;
+                    mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(base_offset);
+
+                    for (size_t joint_idx = 0; joint_idx < skeleton_joint_count; ++joint_idx) {
+                        mesh_bone_matrices_[base_offset + joint_idx] = models[joint_idx];
                     }
                 }
+            } else {
+                const size_t palette_size = static_cast<size_t>(bones_per_instance);
+                const size_t palette_count = std::min(
+                    {palette_size,
+                     mesh_joint_remaps_.empty() ? palette_size : mesh_joint_remaps_.size(),
+                     mesh_inverse_bind_poses_.size(),
+                     models.size()});
+                mesh_bone_matrices_.assign(palette_size * mesh_instances_.size(), identity);
 
-                mesh_bind_pose_palette_[palette_index] = palette_matrix;
-                sampled_palette_[palette_index] = palette_matrix;
-                mesh_bind_pose_palette_[palette_index] = palette_matrix;
+                for (size_t i = 0; i < mesh_instances_.size(); ++i) {
+                    const size_t base_offset = i * palette_size;
+                    mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(base_offset);
+
+                    for (size_t bone_idx = 0; bone_idx < palette_size; ++bone_idx) {
+                        const size_t write_idx = base_offset + bone_idx;
+                        if (bone_idx < palette_count) {
+                            const uint16_t joint = mesh_joint_remaps_.empty()
+                                ? static_cast<uint16_t>(bone_idx)
+                                : mesh_joint_remaps_[bone_idx];
+                            if (joint < models.size()) {
+                                mesh_bone_matrices_[write_idx] = models[joint] * mesh_inverse_bind_poses_[bone_idx];
+                                continue;
+                            }
+                        }
+                        mesh_bone_matrices_[write_idx] = identity;
+                    }
+                }
             }
         }
     }
-
-    for (size_t i = 0; i < mesh_instances_.size(); ++i) {
-        mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(i * bones_per_instance);
-    }
-
-    ApplyPaletteToInstances(mesh_bind_pose_palette_);
 
     mesh_loaded_ = true;
     Msg("* Bundle mesh uploaded (%d vertices, %zu indices, bones=%u)",
@@ -843,6 +868,18 @@ void VulkanRenderer::UpdateMeshAnimation(float delta_time_seconds) {
     }
 
     bool sampled_pose = false;
+
+    // DEBUG: Check animation state
+    static int anim_check = 0;
+    if (anim_check++ < 5) {
+        Msg("=== UpdateMeshAnimation Entry ===");
+        Msg("show_bind_pose_ = %d", show_bind_pose_);
+        Msg("active_animation_ = %p", (void*)active_animation_);
+        Msg("skeleton_source_ = %p", (void*)skeleton_source_);
+        Msg("animate_mesh_ = %d", animate_mesh_);
+        Msg("mesh_animation_time_ = %.3f", mesh_animation_time_);
+    }
+
     // If bind pose mode is active, skip animation sampling and use rest pose
     if (show_bind_pose_) {
         skeleton_pose_models_ = skeleton_rest_models_;
@@ -900,19 +937,59 @@ void VulkanRenderer::UpdateMeshAnimation(float delta_time_seconds) {
         skeleton_pose_models_.assign(model_transforms_.begin(), model_transforms_.end());
 
         const size_t palette_size = mesh_bind_pose_palette_.size();
-        if (palette_size == mesh_inverse_bind_poses_.size() && palette_size > 0) {
-            sampled_palette_.resize(palette_size);
-            for (size_t palette_index = 0; palette_index < palette_size; ++palette_index) {
-                uint32_t joint_index = (palette_index < mesh_joint_remaps_.size())
-                    ? static_cast<uint32_t>(mesh_joint_remaps_[palette_index])
-                    : static_cast<uint32_t>(palette_index);
-                if (joint_index < model_transforms_.size()) {
-                    sampled_palette_[palette_index] = model_transforms_[joint_index] * mesh_inverse_bind_poses_[palette_index];
-                } else {
-                    sampled_palette_[palette_index] = mesh_bind_pose_palette_[palette_index];
+
+        // DEBUG: Check why condition might be failing
+        static int check_count = 0;
+        if (check_count++ < 5) {
+            Msg("=== UpdateMeshAnimation Debug ===");
+            Msg("palette_size = %zu", palette_size);
+            Msg("mesh_inverse_bind_poses_.size() = %zu", mesh_inverse_bind_poses_.size());
+            Msg("Condition will %s",
+                (palette_size == mesh_inverse_bind_poses_.size() && palette_size > 0) ? "PASS" : "FAIL");
+        }
+
+        if (!mesh_inverse_bind_poses_.empty() && !model_transforms_.empty()) {
+            if (use_gpu_mesh_instancing_) {
+                const size_t skeleton_joint_count = model_transforms_.size();
+                const ozz::math::Float4x4 identity = ozz::math::Float4x4::identity();
+                mesh_bone_matrices_.assign(skeleton_joint_count * mesh_instances_.size(), identity);
+
+                for (size_t i = 0; i < mesh_instances_.size(); ++i) {
+                    const size_t base_offset = i * skeleton_joint_count;
+                    mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(base_offset);
+
+                    for (size_t joint_idx = 0; joint_idx < skeleton_joint_count; ++joint_idx) {
+                        mesh_bone_matrices_[base_offset + joint_idx] = model_transforms_[joint_idx];
+                    }
+                }
+            } else {
+                const size_t palette_count = std::min(
+                    {palette_size,
+                     mesh_joint_remaps_.empty() ? palette_size : mesh_joint_remaps_.size(),
+                     mesh_inverse_bind_poses_.size(),
+                     model_transforms_.size()});
+                const ozz::math::Float4x4 identity = ozz::math::Float4x4::identity();
+                mesh_bone_matrices_.assign(palette_size * mesh_instances_.size(), identity);
+
+                for (size_t i = 0; i < mesh_instances_.size(); ++i) {
+                    const size_t base_offset = i * palette_size;
+                    mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(base_offset);
+
+                    for (size_t bone_idx = 0; bone_idx < palette_size; ++bone_idx) {
+                        const size_t write_idx = base_offset + bone_idx;
+                        if (bone_idx < palette_count) {
+                            const uint16_t joint = mesh_joint_remaps_.empty()
+                                ? static_cast<uint16_t>(bone_idx)
+                                : mesh_joint_remaps_[bone_idx];
+                            if (joint < model_transforms_.size()) {
+                                mesh_bone_matrices_[write_idx] = model_transforms_[joint] * mesh_inverse_bind_poses_[bone_idx];
+                                continue;
+                            }
+                        }
+                        mesh_bone_matrices_[write_idx] = identity;
+                    }
                 }
             }
-            ApplyPaletteToInstances(sampled_palette_);
         } else {
             ApplyPaletteToInstances(mesh_bind_pose_palette_);
         }
@@ -964,13 +1041,34 @@ void VulkanRenderer::ApplyPaletteToInstances(const std::vector<ozz::math::Float4
         return;
     }
 
-    const size_t bones_per_instance = palette.size();
-    for (const MeshInstanceData& instance : mesh_instances_) {
-        const size_t offset = static_cast<size_t>(instance.bone_matrix_offset);
-        for (size_t bone = 0; bone < bones_per_instance; ++bone) {
-            const size_t dst_index = offset + bone;
-            if (dst_index < mesh_bone_matrices_.size()) {
-                mesh_bone_matrices_[dst_index] = palette[bone];
+    const size_t palette_size = palette.size();
+    const size_t instance_count = mesh_instances_.size();
+    const ozz::math::Float4x4 identity = ozz::math::Float4x4::identity();
+
+    if (use_gpu_mesh_instancing_ && skeleton_source_) {
+        const size_t skeleton_joint_count = std::max(
+            palette_size,
+            static_cast<size_t>(skeleton_source_->num_joints()));
+        mesh_bone_matrices_.assign(skeleton_joint_count * instance_count, identity);
+
+        for (size_t i = 0; i < instance_count; ++i) {
+            const size_t base_offset = i * skeleton_joint_count;
+            mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(base_offset);
+
+            const size_t copy_count = std::min(palette_size, skeleton_joint_count);
+            for (size_t bone = 0; bone < copy_count; ++bone) {
+                mesh_bone_matrices_[base_offset + bone] = palette[bone];
+            }
+        }
+    } else {
+        mesh_bone_matrices_.assign(palette_size * instance_count, identity);
+
+        for (size_t i = 0; i < instance_count; ++i) {
+            const size_t base_offset = i * palette_size;
+            mesh_instances_[i].bone_matrix_offset = static_cast<uint32_t>(base_offset);
+
+            for (size_t bone = 0; bone < palette_size; ++bone) {
+                mesh_bone_matrices_[base_offset + bone] = palette[bone];
             }
         }
     }
@@ -999,6 +1097,28 @@ void VulkanRenderer::SetShowSkeletonLines(bool show) {
 void VulkanRenderer::SetShowSkinnedMesh(bool show) {
     std::cout << "SetShowSkinnedMesh: " << show << std::endl;
     show_skinned_mesh_ = show;
+}
+
+void VulkanRenderer::SetUseGpuMeshInstancing(bool enabled) {
+    if (mesh_renderer_initialized_) {
+        mesh_renderer_.SetUseGpuSkinning(enabled);
+    }
+    if (use_gpu_mesh_instancing_ == enabled) {
+        return;
+    }
+    use_gpu_mesh_instancing_ = enabled;
+    Msg("* VulkanRenderer: GPU mesh instancing %s", enabled ? "enabled" : "disabled");
+    if (!mesh_instances_.empty()) {
+        UpdateMeshAnimation(0.0f);
+    }
+}
+
+void VulkanRenderer::SetUseGpuSkeletonInstancing(bool enabled) {
+    if (use_gpu_skeleton_instancing_ == enabled) {
+        return;
+    }
+    use_gpu_skeleton_instancing_ = enabled;
+    Msg("* VulkanRenderer: GPU skeleton instancing %s", enabled ? "enabled" : "disabled");
 }
 
 void VulkanRenderer::SetMeshRotationSpeed(float radians_per_second) {
@@ -1101,6 +1221,13 @@ void VulkanRenderer::DrawBoneShapesInstanced(const BoneInstance* instances, size
         return;
     }
 
+    if (!use_gpu_skeleton_instancing_) {
+        for (size_t i = 0; i < count; ++i) {
+            DrawBoneShape(instances[i].head, instances[i].tail, instances[i].radius, instances[i].color);
+        }
+        return;
+    }
+
     // Convert IDebugDrawContext::BoneInstance to DebugRenderer::BoneInstance
     xr_vector<DebugRenderer::BoneInstance> debug_instances;
     debug_instances.reserve(count);
@@ -1120,6 +1247,13 @@ void VulkanRenderer::DrawBoneShapesInstanced(const BoneInstance* instances, size
 void VulkanRenderer::DrawSpheresInstanced(const SphereInstance* instances, size_t count)
 {
     if (count == 0 || !instances) {
+        return;
+    }
+
+    if (!use_gpu_skeleton_instancing_) {
+        for (size_t i = 0; i < count; ++i) {
+            DrawSphere(instances[i].center, instances[i].radius, instances[i].color);
+        }
         return;
     }
 

@@ -560,6 +560,8 @@ struct ViewerState {
     int current_instance_count = 0;
     bool use_ecs_rendering = true;  // Toggle between ECS and regular rendering
     bool randomize_instance_animations = false;  // Randomize which animation each instance plays
+    bool enable_gpu_mesh_instancing = true;      // GPU skinning by uploading skeleton-order matrices
+    bool enable_gpu_skeleton_instancing = true;  // GPU instanced debug bones/spheres
 
     // Reusable rendering buffers to avoid per-frame allocations
     std::vector<MeshInstanceData> render_instance_buffer;
@@ -1293,6 +1295,43 @@ void DrawRenderingPanel(ViewerState& state, VulkanRenderer& renderer) {
     } else {
         ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "Mode: Regular Animation System");
     }
+
+    ImGui::Separator();
+    ImGui::SeparatorText("GPU Instancing");
+
+    bool gpu_mesh_instancing = state.enable_gpu_mesh_instancing;
+    if (ImGui::Checkbox("Mesh skinning on GPU", &gpu_mesh_instancing)) {
+        state.enable_gpu_mesh_instancing = gpu_mesh_instancing;
+        renderer.SetUseGpuMeshInstancing(gpu_mesh_instancing);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted("Toggle between GPU skeleton-order uploads and CPU palette skinning");
+        ImGui::TextUnformatted("Disable if you need legacy palette-aligned bone matrices");
+        ImGui::EndTooltip();
+    }
+
+    bool gpu_skeleton_instancing = state.enable_gpu_skeleton_instancing;
+    if (ImGui::Checkbox("Skeleton debug GPU instancing", &gpu_skeleton_instancing)) {
+        state.enable_gpu_skeleton_instancing = gpu_skeleton_instancing;
+        renderer.SetUseGpuSkeletonInstancing(gpu_skeleton_instancing);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted("Control GPU batching for skeleton debug bones and joint spheres");
+        ImGui::TextUnformatted("Disable to fall back to per-primitive CPU drawing");
+        ImGui::EndTooltip();
+    }
+    const size_t palette_bones = renderer.GetMeshRenderer().BonesPerInstance();
+    const size_t skeleton_joints = static_cast<size_t>(state.skeleton.num_joints());
+    ImGui::Text("Palette bones: %zu", palette_bones);
+    ImGui::Text("Skeleton joints: %zu", skeleton_joints);
+    ImGui::Text("Matrices/instance (current): %zu",
+        state.enable_gpu_mesh_instancing ? skeleton_joints : palette_bones);
 
     // Parallel implementation selection (only when ECS is active)
     if (state.use_ecs_rendering && state.instance_count >= 1) {
@@ -2436,22 +2475,32 @@ void RenderECSInstances(ViewerState& state, VulkanRenderer& renderer) {
     const int grid_size = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(state.instance_count))));
     const float spacing = state.instance_grid_spacing;
 
-    // Get the mesh to know how many bones per instance
     const size_t bones_per_instance = renderer.GetMeshRenderer().BonesPerInstance();
+    const size_t skeleton_joint_count = static_cast<size_t>(state.skeleton.num_joints());
+    if (bones_per_instance == 0 || skeleton_joint_count == 0) {
+        return;
+    }
+
+    const bool use_gpu_skinning = renderer.GetUseGpuMeshInstancing();
+    const auto& joint_remaps = renderer.GetMeshJointRemaps();
+    const auto& inverse_bind_poses = renderer.GetMeshInverseBindPoses();
+
+    const size_t matrices_per_instance = use_gpu_skinning
+        ? skeleton_joint_count
+        : bones_per_instance;
+    if (matrices_per_instance == 0) {
+        return;
+    }
 
     // OPTIMIZED: Pre-allocate buffers to exact sizes (avoid reallocation)
     state.render_instance_buffer.resize(state.instance_count);
     state.render_skeleton_transforms_buffer.resize(state.instance_count);
-    state.render_bone_matrices_buffer.resize(state.instance_count * bones_per_instance);
+    state.render_bone_matrices_buffer.resize(state.instance_count * matrices_per_instance);
 
     // For ECS multi-instance rendering, we don't use mesh_world_transform for positioning
     // Grid positioning is absolute, not relative to a base transform
     // Only use identity (or rotation if needed in the future)
     const ozz::math::Float4x4 mesh_world_transform = ozz::math::Float4x4::identity();
-
-    // Get mesh data for skinning (read-only, thread-safe)
-    const auto& joint_remaps = renderer.GetMeshJointRemaps();
-    const auto& inverse_bind_poses = renderer.GetMeshInverseBindPoses();
 
     // PRE-FETCH: Get all component pointers BEFORE parallel loop (EnTT is not thread-safe)
     auto& registry = state.ecs_animation_registry->GetRegistry();
@@ -2516,28 +2565,35 @@ void RenderECSInstances(ViewerState& state, VulkanRenderer& renderer) {
             inst_transform->world_transform = instance_transform;
         }
 
+        const size_t bone_base_offset = static_cast<size_t>(i) * matrices_per_instance;
+        auto dst_begin = state.render_bone_matrices_buffer.begin() + bone_base_offset;
+        auto dst_end = dst_begin + matrices_per_instance;
+        const ozz::math::Float4x4 identity = ozz::math::Float4x4::identity();
+        std::fill(dst_begin, dst_end, identity);
+
+        // Add instance data at indexed position
+        state.render_instance_buffer[i].transform = instance_transform;
+        state.render_instance_buffer[i].bone_matrix_offset = static_cast<uint32_t>(bone_base_offset);
+
         if (buffers && buffers->IsInitialized()) {
-            // Add instance data at indexed position
-            state.render_instance_buffer[i].transform = instance_transform;
-            state.render_instance_buffer[i].bone_matrix_offset = static_cast<uint32_t>(i * bones_per_instance);
+            if (use_gpu_skinning) {
+                const size_t copy_count = std::min(buffers->models.size(), skeleton_joint_count);
+                if (copy_count > 0) {
+                    std::copy_n(buffers->models.begin(), copy_count, dst_begin);
+                }
+            } else {
+                const size_t palette_count = std::min(
+                    {bones_per_instance, joint_remaps.empty() ? bones_per_instance : joint_remaps.size(), inverse_bind_poses.size()});
 
-            // Compute skinning matrices = model_space_transform * inverse_bind_pose
-            const size_t bone_base_offset = i * bones_per_instance;
-
-            for (size_t bone_idx = 0; bone_idx < bones_per_instance && bone_idx < joint_remaps.size(); ++bone_idx) {
-                const uint16_t joint = joint_remaps[bone_idx];
-                const size_t write_idx = bone_base_offset + bone_idx;
-
-                // Get the model-space transform for this joint
-                if (joint < buffers->models.size()) {
-                    const ozz::math::Float4x4& model_space = buffers->models[joint];
-                    const ozz::math::Float4x4& inv_bind_pose = inverse_bind_poses[bone_idx];
-
-                    // Skinning matrix = model_space * inverse_bind_pose
-                    state.render_bone_matrices_buffer[write_idx] = model_space * inv_bind_pose;
-                } else {
-                    // Fallback to identity if joint index is out of range
-                    state.render_bone_matrices_buffer[write_idx] = ozz::math::Float4x4::identity();
+                for (size_t bone_idx = 0; bone_idx < palette_count; ++bone_idx) {
+                    const uint16_t joint = joint_remaps.empty()
+                        ? static_cast<uint16_t>(bone_idx)
+                        : joint_remaps[bone_idx];
+                    if (joint < buffers->models.size()) {
+                        const ozz::math::Float4x4& model_space = buffers->models[joint];
+                        const ozz::math::Float4x4& inv_bind_pose = inverse_bind_poses[bone_idx];
+                        state.render_bone_matrices_buffer[bone_base_offset + bone_idx] = model_space * inv_bind_pose;
+                    }
                 }
             }
         }
@@ -2625,6 +2681,8 @@ int main(int argc, const char** argv) {
 
     ViewerState state;
     state.window = window;
+    renderer.SetUseGpuMeshInstancing(state.enable_gpu_mesh_instancing);
+    renderer.SetUseGpuSkeletonInstancing(state.enable_gpu_skeleton_instancing);
 
     const std::string bundle_argument = ParseBundleArgument(argc, argv);
     const std::string animation_argument = ParseAnimationArgument(argc, argv);

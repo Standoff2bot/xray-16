@@ -46,6 +46,8 @@ public:
     bool IsInitialized() const { return initialized_; }
     bool HasMesh() const { return mesh_uploaded_; }
     uint32_t BonesPerInstance() const { return bones_per_instance_; }
+    void SetUseGpuSkinning(bool enabled) { use_gpu_skinning_ = enabled; }
+    bool GetUseGpuSkinning() const { return use_gpu_skinning_; }
 
 private:
     struct Vertex {
@@ -82,7 +84,9 @@ private:
     VulkanBuffer vertex_buffer_;
     VulkanBuffer index_buffer_;
     VulkanBuffer instance_buffer_;
-    VulkanBuffer bone_matrix_buffer_;
+    VulkanBuffer bone_matrix_buffer_;      // Model-space matrices (per-frame)
+    VulkanBuffer inverse_bind_pose_buffer_; // Inverse bind poses (uploaded once)
+    VulkanBuffer joint_remap_buffer_;       // Joint remaps (palette → skeleton, uploaded once)
     VulkanBuffer uniform_buffer_;
 
     VulkanPipeline pipeline_;
@@ -99,6 +103,7 @@ private:
     uint32_t bones_per_instance_ = 0;
     bool initialized_ = false;
     bool mesh_uploaded_ = false;
+    bool use_gpu_skinning_ = true;
 };
 
 } // namespace renderer
