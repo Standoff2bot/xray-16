@@ -16,15 +16,7 @@ public:
 private:
     pcstr tool_name() const override { return "Ozz Animation Utility"; }
 
-    void DrawAnimationPanel();
-    void DrawPlaybackControls();
-    void DrawBlendingControls();
-    void DrawIKControls();
-    void DrawSkeletonDebug();
-
-    // Get current animated object
-    OzzKinematicsAnimated* GetCurrentAnimatedObject();
-
+    // Forward declare structs first
     // Animation playback state
     struct PlaybackState
     {
@@ -33,7 +25,17 @@ private:
         float speed{ 1.0f };
         float time_ratio{ 0.0f };
         int current_animation_index{ -1 };
-    } playback_;
+    };
+
+    // Skeleton debug state
+    struct SkeletonDebugState
+    {
+        bool draw_skeleton{ true };
+        bool draw_bone_names{ false };
+        bool draw_bone_axes{ false };
+        int bone_display_limit{ 64 };
+        xr_vector<bool> bone_visibility;
+    };
 
     // Blending state
     struct BlendingState
@@ -42,7 +44,7 @@ private:
         float blend_weight{ 1.0f };
         int blend_animation_index{ -1 };
         float blend_transition_time{ 0.3f };
-    } blending_;
+    };
 
     // IK state
     struct IKState
@@ -57,23 +59,53 @@ private:
         float arm_ik_weight{ 1.0f };
         float arm_ik_soften{ 0.5f };
         float arm_twist_angle_deg{ 0.0f };
-    } ik_;
+    };
 
-    // Skeleton debug state
-    struct SkeletonDebugState
+    // HUD item tracking
+    struct HudItemState
     {
-        bool draw_skeleton{ true };
-        bool draw_bone_names{ false };
-        bool draw_bone_axes{ false };
-        int bone_display_limit{ 64 };
-        xr_vector<bool> bone_visibility;
-    } skeleton_debug_;
+        OzzKinematicsAnimated* anim_object{ nullptr };
+        xr_vector<shared_str> available_animations;
+        PlaybackState playback;
+        SkeletonDebugState skeleton_debug;
+        shared_str display_name;
+    };
+
+    // Function declarations (after struct definitions)
+    void DrawAnimationPanel();
+    void DrawPlaybackControls();
+    void DrawBlendingControls();
+    void DrawIKControls();
+    void DrawSkeletonDebug();
+
+    // HUD mode drawing
+    void DrawHudModeUI();
+    void DrawAnimatedObjectPanel(const char* object_name, OzzKinematicsAnimated* anim_obj,
+                                  xr_vector<shared_str>& animations, PlaybackState& playback,
+                                  SkeletonDebugState& skeleton_debug);
+
+    // Get current animated object
+    OzzKinematicsAnimated* GetCurrentAnimatedObject();
+
+    // Check if we're in HUD mode
+    bool IsInHudMode() const;
 
     // UI state
     bool paused_{ false };
+    bool is_hud_mode_{ false };
 
-    // Cached references
+    // Third-person mode state
+    PlaybackState playback_;
+    SkeletonDebugState skeleton_debug_;
+    BlendingState blending_;
+    IKState ik_;
     OzzKinematicsAnimated* current_object_{ nullptr };
     xr_vector<shared_str> available_animations_;
+
+    // HUD mode state
+    HudItemState hud_hands_;           // HUD arms model
+    HudItemState hud_item_slot0_;      // Item in slot 0 (usually right hand)
+    HudItemState hud_item_slot1_;      // Item in slot 1 (usually left hand)
+
     u32 last_update_frame_{ 0 };
 };

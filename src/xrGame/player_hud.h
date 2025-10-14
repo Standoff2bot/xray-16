@@ -141,6 +141,7 @@ public:
     void attach_item(CHudItem* item);
     bool allow_activation(CHudItem* item) const;
     attachable_hud_item* attached_item(u16 item_idx) { return m_attached_items[item_idx]; };
+    IKinematicsAnimated* hands_model() { return m_model; };
     void detach_item_idx(u16 idx);
     void detach_item(CHudItem* item);
     void detach_all_items()
