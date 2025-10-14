@@ -2408,6 +2408,9 @@ void InitializeECSInstances(ViewerState& state, VulkanRenderer& renderer) {
                 skeleton_metadata.joint_parents[j] = static_cast<int>(parents[j]);
             }
 
+            // Build pre-computed children map for O(1) child lookups
+            skeleton_metadata.BuildChildrenMap();
+
             // Store skeleton pointer and metadata
             skeleton_metadata.skeleton = &state.skeleton;
 

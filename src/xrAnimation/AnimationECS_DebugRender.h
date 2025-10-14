@@ -73,17 +73,15 @@ private:
     /// </summary>
     /// <param name="ctx">Debug draw context</param>
     /// <param name="pose_models">Model-space transforms for each joint (current pose)</param>
-    /// <param name="skeleton_parents">Parent indices for each joint (-1 for roots)</param>
+    /// <param name="skeleton_metadata">Skeleton hierarchy, children map, and extended metadata</param>
     /// <param name="instance_transform">World transform for this instance</param>
     /// <param name="debug_state">Visualization settings</param>
-    /// <param name="bone_metadata">Extended metadata collection</param>
     static void RenderSkeleton(
         IDebugDrawContext& ctx,
         const std::vector<ozz::math::Float4x4>& pose_models,
-        const std::vector<int>& skeleton_parents,
+        const SkeletonMetadata& skeleton_metadata,
         const ozz::math::Float4x4& instance_transform,
-        const SkeletonDebugState& debug_state,
-        const XRay::Animation::ExtendedBoneMetadataCollection& bone_metadata);
+        const SkeletonDebugState& debug_state);
 
     /// <summary>
     /// Compute rest length for a bone (distance to parent or child).

@@ -251,6 +251,9 @@ struct SkeletonMetadata
     // Skeleton hierarchy (parent indices, -1 for roots)
     std::vector<int> joint_parents;
 
+    // Pre-computed children per joint (for O(1) child lookup instead of O(N) linear search)
+    std::vector<std::vector<int>> joint_children;
+
     // Extended bone metadata (physics shapes, IK constraints, rest lengths, etc.)
     XRay::Animation::ExtendedBoneMetadataCollection metadata;
 
@@ -265,8 +268,25 @@ struct SkeletonMetadata
     void Clear()
     {
         joint_parents.clear();
+        joint_children.clear();
         metadata.clear();
         skeleton = nullptr;
+    }
+
+    // Build the joint_children map from joint_parents (call after populating joint_parents)
+    void BuildChildrenMap()
+    {
+        joint_children.clear();
+        joint_children.resize(joint_parents.size());
+
+        for (size_t i = 0; i < joint_parents.size(); ++i)
+        {
+            int parent = joint_parents[i];
+            if (parent >= 0 && static_cast<size_t>(parent) < joint_children.size())
+            {
+                joint_children[parent].push_back(static_cast<int>(i));
+            }
+        }
     }
 };
 

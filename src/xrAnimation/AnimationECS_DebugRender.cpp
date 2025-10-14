@@ -47,19 +47,17 @@ void SkeletonDebugRenderSystem::Render(entt::registry& registry, IDebugDrawConte
             buffers.models.begin(), buffers.models.end());
 
         // Render this skeleton instance
-        RenderSkeleton(ctx, pose_models, metadata.joint_parents,
-                      inst_transform.world_transform, debug_state,
-                      metadata.metadata);
+        RenderSkeleton(ctx, pose_models, metadata,
+                      inst_transform.world_transform, debug_state);
     }
 }
 
 void SkeletonDebugRenderSystem::RenderSkeleton(
     IDebugDrawContext& ctx,
     const std::vector<ozz::math::Float4x4>& pose_models,
-    const std::vector<int>& skeleton_parents,
+    const SkeletonMetadata& skeleton_metadata,
     const ozz::math::Float4x4& instance_transform,
-    const SkeletonDebugState& debug_state,
-    const XRay::Animation::ExtendedBoneMetadataCollection& bone_metadata)
+    const SkeletonDebugState& debug_state)
 {
     if (pose_models.empty())
         return;
@@ -69,6 +67,11 @@ void SkeletonDebugRenderSystem::RenderSkeleton(
     const ozz::math::Float4 root_color{0.55f, 0.75f, 1.0f, 0.55f};   // Light blue
     const ozz::math::Float4 joint_color{0.92f, 0.35f, 0.35f, 0.65f}; // Red-orange
     const ozz::math::Float4 link_color{0.65f, 0.65f, 0.95f, 0.55f};  // Purple-blue
+
+    // Get references for easier access
+    const auto& skeleton_parents = skeleton_metadata.joint_parents;
+    const auto& joint_children = skeleton_metadata.joint_children;
+    const auto& bone_metadata = skeleton_metadata.metadata;
 
     // Lambda to compute rest length as fallback
     auto compute_rest_length = [&](int bone_index) -> float
@@ -90,10 +93,10 @@ void SkeletonDebugRenderSystem::RenderSkeleton(
         if (result > kSkeletonDebugEpsilon)
             return result;
 
-        // Try child distance
-        for (size_t child = 0; child < skeleton_parents.size(); ++child)
+        // Try child distance using pre-computed children (O(1) instead of O(N))
+        if (bone_index < static_cast<int>(joint_children.size()))
         {
-            if (skeleton_parents[child] == bone_index)
+            for (int child : joint_children[bone_index])
             {
                 result = std::max(result, DistanceBetween(
                     pose_models[bone_index], pose_models[child]));
@@ -103,7 +106,17 @@ void SkeletonDebugRenderSystem::RenderSkeleton(
         return result;
     };
 
-    // Render each bone
+    // Collect all bone instances for batched rendering
+    std::vector<IDebugDrawContext::BoneInstance> bone_instances;
+    bone_instances.reserve(pose_models.size());
+
+    std::vector<IDebugDrawContext::SphereInstance> sphere_instances;
+    if (debug_state.show_joint_positions)
+    {
+        sphere_instances.reserve(pose_models.size() * 2);  // head + tail per bone
+    }
+
+    // First pass: collect all instances and draw lines
     for (size_t bone = 0; bone < pose_models.size(); ++bone)
     {
         const ozz::math::Float4x4& pose_transform = pose_models[bone];
@@ -147,17 +160,16 @@ void SkeletonDebugRenderSystem::RenderSkeleton(
         ozz::math::Float3 tail_position = bone_position;
         bool has_child = false;
 
-        // Find first child
-        for (size_t child = 0; child < skeleton_parents.size(); ++child)
+        // Find first child using pre-computed children map (O(1) instead of O(N))
+        if (bone < joint_children.size())
         {
-            if (skeleton_parents[child] == static_cast<int>(bone) &&
-                child < pose_models.size())
+            const auto& children = joint_children[bone];
+            if (!children.empty() && static_cast<size_t>(children[0]) < pose_models.size())
             {
                 const ozz::math::Float4x4 child_world =
-                    instance_transform * pose_models[child];
+                    instance_transform * pose_models[children[0]];
                 tail_position = ExtractTranslation(child_world);
                 has_child = true;
-                break;
             }
         }
 
@@ -208,15 +220,26 @@ void SkeletonDebugRenderSystem::RenderSkeleton(
             kSkeletonDefaultRadius * 0.4f,
             bone_length * 0.45f);
 
-        // Draw bone shape
-        const ozz::math::Float4 draw_color = (bone == 0) ? root_color : bone_color;
-        ctx.DrawBoneShape(bone_position, tail_position, joint_radius, draw_color);
+        // Collect bone instance for batched rendering
+        IDebugDrawContext::BoneInstance bone_inst;
+        bone_inst.head = bone_position;
+        bone_inst.tail = tail_position;
+        bone_inst.radius = joint_radius;
+        bone_inst.color = (bone == 0) ? root_color : bone_color;
+        bone_instances.push_back(bone_inst);
 
-        // Draw joint spheres
+        // Collect joint sphere instances if enabled
         if (debug_state.show_joint_positions)
         {
-            ctx.DrawSphere(bone_position, joint_radius, joint_color, 24);
-            ctx.DrawSphere(tail_position, joint_radius * 0.6f, joint_color, 24);
+            IDebugDrawContext::SphereInstance sphere_inst;
+            sphere_inst.center = bone_position;
+            sphere_inst.radius = joint_radius;
+            sphere_inst.color = joint_color;
+            sphere_instances.push_back(sphere_inst);
+
+            sphere_inst.center = tail_position;
+            sphere_inst.radius = joint_radius * 0.6f;
+            sphere_instances.push_back(sphere_inst);
         }
 
         // Draw axes at root bone
@@ -230,6 +253,17 @@ void SkeletonDebugRenderSystem::RenderSkeleton(
                 ozz::math::Float4{0.3f, 1.0f, 0.3f, 1.0f},  // Green Y
                 ozz::math::Float4{0.3f, 0.6f, 1.0f, 1.0f}); // Blue Z
         }
+    }
+
+    // Second pass: render all collected instances in batches
+    if (!bone_instances.empty())
+    {
+        ctx.DrawBoneShapesInstanced(bone_instances.data(), bone_instances.size());
+    }
+
+    if (!sphere_instances.empty())
+    {
+        ctx.DrawSpheresInstanced(sphere_instances.data(), sphere_instances.size());
     }
 }
 

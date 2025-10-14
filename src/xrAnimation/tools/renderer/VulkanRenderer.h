@@ -125,6 +125,9 @@ public:
                   const ozz::math::Float4& color_y,
                   const ozz::math::Float4& color_z) override;
 
+    void DrawBoneShapesInstanced(const BoneInstance* instances, size_t count) override;
+    void DrawSpheresInstanced(const SphereInstance* instances, size_t count) override;
+
     // Mesh data accessors for skinning computation
     const std::vector<uint16_t>& GetMeshJointRemaps() const { return mesh_joint_remaps_; }
     const std::vector<ozz::math::Float4x4>& GetMeshInverseBindPoses() const { return mesh_inverse_bind_poses_; }

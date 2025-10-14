@@ -119,6 +119,53 @@ public:
                          const ozz::math::Float4& color_x,
                          const ozz::math::Float4& color_y,
                          const ozz::math::Float4& color_z) = 0;
+
+    // ========================================================================
+    // BATCHED/INSTANCED RENDERING API
+    // ========================================================================
+
+    /// <summary>
+    /// Instance data for bone shape rendering.
+    /// </summary>
+    struct BoneInstance {
+        ozz::math::Float3 head;     // Bone start position (joint/parent)
+        ozz::math::Float3 tail;     // Bone end position (child)
+        float radius;                // Bone thickness
+        ozz::math::Float4 color;    // RGBA color
+    };
+
+    /// <summary>
+    /// Instance data for sphere rendering.
+    /// </summary>
+    struct SphereInstance {
+        ozz::math::Float3 center;   // Sphere center position
+        float radius;                // Sphere radius
+        ozz::math::Float4 color;    // RGBA color
+    };
+
+    /// <summary>
+    /// Draw multiple bone shapes in a single batched call.
+    /// </summary>
+    /// <param name="instances">Array of bone instances to render</param>
+    /// <param name="count">Number of instances in the array</param>
+    /// <remarks>
+    /// Performance optimization: Reduces per-bone CPU overhead and consolidates
+    /// geometry generation and draw calls. Implementations should batch all bones
+    /// into a single vertex buffer and issue minimal draw calls.
+    /// </remarks>
+    virtual void DrawBoneShapesInstanced(const BoneInstance* instances, size_t count) = 0;
+
+    /// <summary>
+    /// Draw multiple spheres in a single batched call.
+    /// </summary>
+    /// <param name="instances">Array of sphere instances to render</param>
+    /// <param name="count">Number of instances in the array</param>
+    /// <remarks>
+    /// Performance optimization: Reduces per-sphere CPU overhead and consolidates
+    /// geometry generation and draw calls. Implementations should batch all spheres
+    /// into a single vertex buffer and issue minimal draw calls.
+    /// </remarks>
+    virtual void DrawSpheresInstanced(const SphereInstance* instances, size_t count) = 0;
 };
 
 } // namespace AnimationECS

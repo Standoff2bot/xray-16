@@ -110,6 +110,17 @@ bool DebugRenderer::Initialize(VulkanDevice* device) {
         return false;
     }
 
+    if (!CreateBoneInstancedPipeline()) {
+        printf("! ERROR: Failed to create bone instanced pipeline!\n");
+        return false;
+    }
+
+    // Generate unit geometry for GPU instancing
+    printf("* DebugRenderer: Generating unit geometry for GPU instancing...\n");
+    GenerateUnitOctahedron();
+    GenerateUnitSphere(8);
+    printf("* DebugRenderer: GPU instancing initialized successfully\n");
+
     UpdateDescriptorSet();
     initialized_ = true;
     return true;
@@ -124,6 +135,11 @@ void DebugRenderer::Shutdown() {
 
     line_pipeline_.Destroy();
     solid_pipeline_.Destroy();
+    bone_instanced_pipeline_.Destroy();
+
+    unit_octahedron_buffer_.Destroy();
+    unit_sphere_buffer_.Destroy();
+    instance_buffer_.Destroy();
 
     if (descriptor_pool_) {
         vkDestroyDescriptorPool(vk_device, descriptor_pool_, nullptr);
@@ -141,18 +157,27 @@ void DebugRenderer::Shutdown() {
 
     line_vertices_.clear();
     solid_vertices_.clear();
+    bone_instances_.clear();
+    sphere_instances_.clear();
     line_vertex_capacity_ = 0;
     solid_vertex_capacity_ = 0;
+    instance_buffer_capacity_ = 0;
+    unit_octahedron_vertex_count_ = 0;
+    unit_sphere_vertex_count_ = 0;
     line_buffer_dirty_ = false;
     solid_buffer_dirty_ = false;
+    instance_buffer_dirty_ = false;
     initialized_ = false;
 }
 
 void DebugRenderer::BeginFrame() {
     line_vertices_.clear();
     solid_vertices_.clear();
+    bone_instances_.clear();
+    sphere_instances_.clear();
     line_buffer_dirty_ = false;
     solid_buffer_dirty_ = false;
+    instance_buffer_dirty_ = false;
 }
 
 void DebugRenderer::DrawLine(const ozz::math::Float3& start, const ozz::math::Float3& end, const ozz::math::Float4& color) {
@@ -538,8 +563,161 @@ void DebugRenderer::DrawCapsuleShape(const ozz::math::Float4x4& transform, const
     DrawLine(top_world, bottom_world, color);
 }
 
+void DebugRenderer::GenerateUnitOctahedron() {
+    // Generate unit octahedron centered at origin with vertices at:
+    // Top (0,1,0), Bottom (0,-1,0), and 4 mid-ring vertices at distance 1
+    xr_vector<InstanceVertex> vertices;
+    vertices.reserve(24);  // 8 triangles × 3 vertices
+
+    const ozz::math::Float3 top{0, 1, 0};
+    const ozz::math::Float3 bottom{0, -1, 0};
+    const ozz::math::Float3 v0{1, 0, 0};   // +X
+    const ozz::math::Float3 v1{0, 0, 1};   // +Z
+    const ozz::math::Float3 v2{-1, 0, 0};  // -X
+    const ozz::math::Float3 v3{0, 0, -1};  // -Z
+
+    auto push_triangle = [&](const ozz::math::Float3& a, const ozz::math::Float3& b, const ozz::math::Float3& c) {
+        // Compute face normal
+        ozz::math::Float3 edge1 = Sub(b, a);
+        ozz::math::Float3 edge2 = Sub(c, a);
+        ozz::math::Float3 normal = NormalizeSafe(Cross(edge1, edge2), ozz::math::Float3::y_axis());
+
+        InstanceVertex v{};
+        v.normal[0] = normal.x;
+        v.normal[1] = normal.y;
+        v.normal[2] = normal.z;
+
+        v.position[0] = a.x; v.position[1] = a.y; v.position[2] = a.z;
+        vertices.push_back(v);
+        v.position[0] = b.x; v.position[1] = b.y; v.position[2] = b.z;
+        vertices.push_back(v);
+        v.position[0] = c.x; v.position[1] = c.y; v.position[2] = c.z;
+        vertices.push_back(v);
+    };
+
+    // Top pyramid (4 triangles)
+    push_triangle(top, v0, v1);
+    push_triangle(top, v1, v2);
+    push_triangle(top, v2, v3);
+    push_triangle(top, v3, v0);
+
+    // Bottom pyramid (4 triangles)
+    push_triangle(bottom, v1, v0);
+    push_triangle(bottom, v2, v1);
+    push_triangle(bottom, v3, v2);
+    push_triangle(bottom, v0, v3);
+
+    unit_octahedron_vertex_count_ = static_cast<uint32_t>(vertices.size());
+    VkDeviceSize buffer_size = static_cast<VkDeviceSize>(vertices.size() * sizeof(InstanceVertex));
+
+    unit_octahedron_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), buffer_size,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+    unit_octahedron_buffer_.Upload(vertices.data(), buffer_size);
+
+    printf("* GenerateUnitOctahedron: %u vertices\n", unit_octahedron_vertex_count_);
+}
+
+void DebugRenderer::GenerateUnitSphere(int segments) {
+    // Generate UV sphere with radius 1.0 centered at origin
+    segments = std::max(segments, 8);
+    const int rings = segments / 2;
+    const float pi = 3.14159265359f;
+
+    xr_vector<InstanceVertex> vertices;
+    vertices.reserve(rings * segments * 6);  // Approximate
+
+    auto push_triangle = [&](const ozz::math::Float3& p0, const ozz::math::Float3& p1, const ozz::math::Float3& p2) {
+        // For unit sphere, normals are same as positions (pointing outward from origin)
+        ozz::math::Float3 n0 = NormalizeSafe(p0, ozz::math::Float3::y_axis());
+        ozz::math::Float3 n1 = NormalizeSafe(p1, ozz::math::Float3::y_axis());
+        ozz::math::Float3 n2 = NormalizeSafe(p2, ozz::math::Float3::y_axis());
+
+        InstanceVertex v{};
+        v.position[0] = p0.x; v.position[1] = p0.y; v.position[2] = p0.z;
+        v.normal[0] = n0.x; v.normal[1] = n0.y; v.normal[2] = n0.z;
+        vertices.push_back(v);
+
+        v.position[0] = p1.x; v.position[1] = p1.y; v.position[2] = p1.z;
+        v.normal[0] = n1.x; v.normal[1] = n1.y; v.normal[2] = n1.z;
+        vertices.push_back(v);
+
+        v.position[0] = p2.x; v.position[1] = p2.y; v.position[2] = p2.z;
+        v.normal[0] = n2.x; v.normal[1] = n2.y; v.normal[2] = n2.z;
+        vertices.push_back(v);
+    };
+
+    // Generate sphere vertices
+    for (int ring = 0; ring < rings; ++ring) {
+        const float phi0 = pi * static_cast<float>(ring) / static_cast<float>(rings);
+        const float phi1 = pi * static_cast<float>(ring + 1) / static_cast<float>(rings);
+
+        for (int seg = 0; seg < segments; ++seg) {
+            const float theta0 = kTwoPi * static_cast<float>(seg) / static_cast<float>(segments);
+            const float theta1 = kTwoPi * static_cast<float>(seg + 1) / static_cast<float>(segments);
+
+            // Compute sphere points (radius = 1.0)
+            const float sin_phi0 = std::sin(phi0);
+            const float cos_phi0 = std::cos(phi0);
+            const float sin_phi1 = std::sin(phi1);
+            const float cos_phi1 = std::cos(phi1);
+
+            const ozz::math::Float3 p0{
+                sin_phi0 * std::cos(theta0),
+                cos_phi0,
+                sin_phi0 * std::sin(theta0)
+            };
+
+            const ozz::math::Float3 p1{
+                sin_phi0 * std::cos(theta1),
+                cos_phi0,
+                sin_phi0 * std::sin(theta1)
+            };
+
+            const ozz::math::Float3 p2{
+                sin_phi1 * std::cos(theta0),
+                cos_phi1,
+                sin_phi1 * std::sin(theta0)
+            };
+
+            const ozz::math::Float3 p3{
+                sin_phi1 * std::cos(theta1),
+                cos_phi1,
+                sin_phi1 * std::sin(theta1)
+            };
+
+            // Create two triangles for the quad
+            push_triangle(p0, p2, p1);
+            push_triangle(p1, p2, p3);
+        }
+    }
+
+    unit_sphere_vertex_count_ = static_cast<uint32_t>(vertices.size());
+    VkDeviceSize buffer_size = static_cast<VkDeviceSize>(vertices.size() * sizeof(InstanceVertex));
+
+    unit_sphere_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), buffer_size,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+    unit_sphere_buffer_.Upload(vertices.data(), buffer_size);
+
+    printf("* GenerateUnitSphere: %u vertices\n", unit_sphere_vertex_count_);
+}
+
 void DebugRenderer::DrawBoneShape(const ozz::math::Float3& head, const ozz::math::Float3& tail,
     float radius, const ozz::math::Float4& color) {
+    static int call_count = 0;
+    static int frame_calls = 0;
+    static int last_frame_report = 0;
+
+    call_count++;
+    frame_calls++;
+
+    // Report every 60 frames
+    if (call_count / 60 > last_frame_report) {
+        printf("! WARNING: DrawBoneShape (NON-BATCHED) called %d times in last 60 frames - batching NOT active!\n",
+               frame_calls);
+        frame_calls = 0;
+        last_frame_report = call_count / 60;
+    }
+
     const float final_radius = std::max(radius, 0.005f);
     DrawOctahedronBone(head, tail, final_radius, color);
 
@@ -589,6 +767,23 @@ void DebugRenderer::EndFrame() {
         }
         solid_buffer_dirty_ = false;
     }
+
+    if (instance_buffer_dirty_) {
+        // Combine bone_instances_ and sphere_instances_ into one buffer
+        // We'll draw them separately with different first instance indices
+        const size_t total_instances = bone_instances_.size() + sphere_instances_.size();
+        if (EnsureInstanceCapacity(total_instances) && total_instances > 0) {
+            // Combine both vectors into a single upload
+            xr_vector<InstanceData> all_instances;
+            all_instances.reserve(total_instances);
+            all_instances.insert(all_instances.end(), bone_instances_.begin(), bone_instances_.end());
+            all_instances.insert(all_instances.end(), sphere_instances_.begin(), sphere_instances_.end());
+
+            const VkDeviceSize upload_size = static_cast<VkDeviceSize>(all_instances.size() * sizeof(InstanceData));
+            instance_buffer_.Upload(all_instances.data(), upload_size);
+        }
+        instance_buffer_dirty_ = false;
+    }
 }
 
 void DebugRenderer::Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_proj) {
@@ -600,12 +795,20 @@ void DebugRenderer::Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_
 
     static int render_frame = 0;
     if (render_frame++ < 3) {
-        printf("* DebugRenderer::Render - line_vertices=%zu, solid_vertices=%zu\n",
-               line_vertices_.size(), solid_vertices_.size());
+        printf("* DebugRenderer::Render - line_vertices=%zu, solid_vertices=%zu, bone_instances=%zu, sphere_instances=%zu\n",
+               line_vertices_.size(), solid_vertices_.size(), bone_instances_.size(), sphere_instances_.size());
         if (!line_vertices_.empty()) {
             printf("  First line: (%.2f,%.2f,%.2f) -> (%.2f,%.2f,%.2f)\n",
                    line_vertices_[0].position[0], line_vertices_[0].position[1], line_vertices_[0].position[2],
                    line_vertices_[1].position[0], line_vertices_[1].position[1], line_vertices_[1].position[2]);
+        }
+        if (!bone_instances_.empty()) {
+            const auto& first = bone_instances_[0];
+            printf("  First bone instance transform: [%.3f,%.3f,%.3f,%.3f | %.3f,%.3f,%.3f,%.3f | %.3f,%.3f,%.3f,%.3f | %.3f,%.3f,%.3f,%.3f]\n",
+                   first.transform[0], first.transform[1], first.transform[2], first.transform[3],
+                   first.transform[4], first.transform[5], first.transform[6], first.transform[7],
+                   first.transform[8], first.transform[9], first.transform[10], first.transform[11],
+                   first.transform[12], first.transform[13], first.transform[14], first.transform[15]);
         }
     }
 
@@ -625,6 +828,44 @@ void DebugRenderer::Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_
         vkCmdBindVertexBuffers(cmd, 0, 1, buffers, offsets);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, solid_pipeline_.GetLayout(), 0, 1, &descriptor_set_, 0, nullptr);
         vkCmdDraw(cmd, static_cast<uint32_t>(solid_vertices_.size()), 1, 0, 0);
+    }
+
+    // GPU instanced rendering for bones and spheres
+    if (!bone_instances_.empty() || !sphere_instances_.empty()) {
+        bone_instanced_pipeline_.Bind(cmd);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bone_instanced_pipeline_.GetLayout(), 0, 1, &descriptor_set_, 0, nullptr);
+
+        // Draw octahedrons (bone shapes)
+        if (!bone_instances_.empty()) {
+            VkBuffer vertex_buffers[] = { unit_octahedron_buffer_.GetBuffer(), instance_buffer_.GetBuffer() };
+            VkDeviceSize vertex_offsets[] = { 0, 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 2, vertex_buffers, vertex_offsets);
+            // Use firstInstance=0 to read from start of instance buffer
+            vkCmdDraw(cmd, unit_octahedron_vertex_count_, static_cast<uint32_t>(bone_instances_.size()), 0, 0);
+
+            static int frame_count = 0;
+            if (frame_count++ < 3) {
+                printf("* GPU Instanced octahedrons: %u vertices × %zu instances = %zu total draws\n",
+                       unit_octahedron_vertex_count_, bone_instances_.size(),
+                       unit_octahedron_vertex_count_ * bone_instances_.size());
+            }
+        }
+
+        // Draw spheres (joint shapes)
+        if (!sphere_instances_.empty()) {
+            VkBuffer vertex_buffers[] = { unit_sphere_buffer_.GetBuffer(), instance_buffer_.GetBuffer() };
+            VkDeviceSize vertex_offsets[] = { 0, 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 2, vertex_buffers, vertex_offsets);
+            // Use firstInstance to skip past bone instances in the buffer
+            vkCmdDraw(cmd, unit_sphere_vertex_count_, static_cast<uint32_t>(sphere_instances_.size()), 0, static_cast<uint32_t>(bone_instances_.size()));
+
+            static int frame_count = 0;
+            if (frame_count++ < 3) {
+                printf("* GPU Instanced spheres: %u vertices × %zu instances = %zu total draws\n",
+                       unit_sphere_vertex_count_, sphere_instances_.size(),
+                       unit_sphere_vertex_count_ * sphere_instances_.size());
+            }
+        }
     }
 }
 
@@ -670,6 +911,29 @@ bool DebugRenderer::EnsureSolidCapacity(size_t vertex_count) {
     }
 
     solid_vertex_capacity_ = new_capacity;
+    return true;
+}
+
+bool DebugRenderer::EnsureInstanceCapacity(size_t instance_count) {
+    if (instance_count <= instance_buffer_capacity_) {
+        return true;
+    }
+
+    size_t new_capacity = std::max(instance_count, instance_buffer_capacity_ * 2);
+    if (new_capacity == 0) {
+        new_capacity = 512;  // Default capacity for instances
+    }
+
+    instance_buffer_.Destroy();
+    const VkDeviceSize buffer_size = static_cast<VkDeviceSize>(new_capacity * sizeof(InstanceData));
+    instance_buffer_.Create(device_->GetDevice(), device_->GetAllocator(), buffer_size,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+    if (instance_buffer_.GetBuffer() == VK_NULL_HANDLE) {
+        return false;
+    }
+
+    instance_buffer_capacity_ = new_capacity;
     return true;
 }
 
@@ -807,6 +1071,69 @@ bool DebugRenderer::CreateSolidPipeline() {
     return solid_pipeline_.Create(device_->GetDevice(), config);
 }
 
+bool DebugRenderer::CreateBoneInstancedPipeline() {
+    PipelineConfig config{};
+
+#ifdef OZZ_SHADER_BINARY_DIR
+    std::filesystem::path shader_root{ OZZ_SHADER_BINARY_DIR };
+    config.vertex_shader_path = (shader_root / "bone_instanced.vert.spv").string();
+    config.fragment_shader_path = (shader_root / "bone_instanced.frag.spv").string();
+#else
+    config.vertex_shader_path = "src/xrAnimation/tools/renderer/shaders/bone_instanced.vert.spv";
+    config.fragment_shader_path = "src/xrAnimation/tools/renderer/shaders/bone_instanced.frag.spv";
+#endif
+
+    // Binding 0: Per-vertex data (position + normal)
+    config.vertex_bindings.resize(2);
+    config.vertex_bindings[0].binding = 0;
+    config.vertex_bindings[0].stride = sizeof(InstanceVertex);
+    config.vertex_bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    // Binding 1: Per-instance data (transform + color)
+    config.vertex_bindings[1].binding = 1;
+    config.vertex_bindings[1].stride = sizeof(InstanceData);
+    config.vertex_bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+
+    // Attributes: 0=position, 1=normal, 2-5=transform cols, 6=color
+    config.vertex_attributes.resize(7);
+
+    // Per-vertex attributes
+    config.vertex_attributes[0].location = 0;
+    config.vertex_attributes[0].binding = 0;
+    config.vertex_attributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    config.vertex_attributes[0].offset = offsetof(InstanceVertex, position);
+
+    config.vertex_attributes[1].location = 1;
+    config.vertex_attributes[1].binding = 0;
+    config.vertex_attributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    config.vertex_attributes[1].offset = offsetof(InstanceVertex, normal);
+
+    // Per-instance attributes (mat4 transform = 4 vec4s)
+    for (int i = 0; i < 4; ++i) {
+        config.vertex_attributes[2 + i].location = 2 + i;
+        config.vertex_attributes[2 + i].binding = 1;
+        config.vertex_attributes[2 + i].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        config.vertex_attributes[2 + i].offset = offsetof(InstanceData, transform) + i * sizeof(float) * 4;
+    }
+
+    // Per-instance color
+    config.vertex_attributes[6].location = 6;
+    config.vertex_attributes[6].binding = 1;
+    config.vertex_attributes[6].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    config.vertex_attributes[6].offset = offsetof(InstanceData, color);
+
+    config.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    config.polygon_mode = VK_POLYGON_MODE_FILL;
+    config.cull_mode = VK_CULL_MODE_NONE;
+    config.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    config.depth_test_enable = true;
+    config.depth_write_enable = false;
+    config.blend_enable = true;
+    config.descriptor_set_layouts.push_back(descriptor_set_layout_);
+
+    return bone_instanced_pipeline_.Create(device_->GetDevice(), config);
+}
+
 void DebugRenderer::UpdateDescriptorSet() {
     VkDescriptorBufferInfo buffer_info{};
     buffer_info.buffer = uniform_buffer_.GetBuffer();
@@ -832,6 +1159,132 @@ void DebugRenderer::UpdateUniforms(const ozz::math::Float4x4& view_proj) {
         ozz::math::StorePtrU(view_proj.cols[col], matrix_data + col * 4);
     }
     uniform_buffer_.Upload(matrix_data, sizeof(matrix_data));
+}
+
+void DebugRenderer::DrawBoneShapesInstanced(const xr_vector<BoneInstance>& instances) {
+    // GPU instancing: push per-instance transform + color data
+    // The actual geometry (unit octahedron/sphere) is already on GPU
+    static int call_count = 0;
+    if (call_count++ < 5) {
+        printf("* DrawBoneShapesInstanced (GPU) called with %zu instances (call #%d)\n",
+               instances.size(), call_count);
+        if (instances.size() > 0) {
+            const auto& first = instances[0];
+            printf("  First bone: head=(%.3f,%.3f,%.3f) tail=(%.3f,%.3f,%.3f) radius=%.3f\n",
+                   first.head.x, first.head.y, first.head.z,
+                   first.tail.x, first.tail.y, first.tail.z, first.radius);
+        }
+    }
+
+    for (const auto& inst : instances) {
+        // Compute bone direction and length
+        const ozz::math::Float3 bone_vec = Sub(inst.tail, inst.head);
+        const float length = std::sqrt(bone_vec.x * bone_vec.x + bone_vec.y * bone_vec.y + bone_vec.z * bone_vec.z);
+
+        if (length <= kEpsilon) {
+            continue; // Skip degenerate bones
+        }
+
+        const ozz::math::Float3 bone_dir = Scale(bone_vec, 1.0f / length);
+
+        // Create perpendicular vectors for octahedron orientation
+        ozz::math::Float3 tangent = Cross(bone_dir, ozz::math::Float3::y_axis());
+        if (std::sqrt(tangent.x * tangent.x + tangent.y * tangent.y + tangent.z * tangent.z) <= kEpsilon) {
+            tangent = Cross(bone_dir, ozz::math::Float3::x_axis());
+        }
+        tangent = NormalizeSafe(tangent, ozz::math::Float3::x_axis());
+        const ozz::math::Float3 bitangent = NormalizeSafe(Cross(bone_dir, tangent), ozz::math::Float3::z_axis());
+
+        // Mid-point for octahedron
+        const ozz::math::Float3 mid = Add(inst.head, Scale(bone_dir, length * 0.5f));
+
+        // Build transform matrix for octahedron
+        // Unit octahedron has height 2 (from -1 to +1 on Y), so we scale by length/2
+        // and position at mid-point
+        InstanceData bone_inst{};
+
+        // Column 0: tangent * radius (X-axis)
+        bone_inst.transform[0] = tangent.x * inst.radius;
+        bone_inst.transform[1] = tangent.y * inst.radius;
+        bone_inst.transform[2] = tangent.z * inst.radius;
+        bone_inst.transform[3] = 0.0f;
+
+        // Column 1: bone_dir * length/2 (Y-axis, for height)
+        bone_inst.transform[4] = bone_dir.x * length * 0.5f;
+        bone_inst.transform[5] = bone_dir.y * length * 0.5f;
+        bone_inst.transform[6] = bone_dir.z * length * 0.5f;
+        bone_inst.transform[7] = 0.0f;
+
+        // Column 2: bitangent * radius (Z-axis)
+        bone_inst.transform[8] = bitangent.x * inst.radius;
+        bone_inst.transform[9] = bitangent.y * inst.radius;
+        bone_inst.transform[10] = bitangent.z * inst.radius;
+        bone_inst.transform[11] = 0.0f;
+
+        // Column 3: translation (mid-point)
+        bone_inst.transform[12] = mid.x;
+        bone_inst.transform[13] = mid.y;
+        bone_inst.transform[14] = mid.z;
+        bone_inst.transform[15] = 1.0f;
+
+        bone_inst.color[0] = inst.color.x;
+        bone_inst.color[1] = inst.color.y;
+        bone_inst.color[2] = inst.color.z;
+        bone_inst.color[3] = inst.color.w;
+
+        bone_instances_.push_back(bone_inst);
+
+        // Add sphere instances for head and tail joints
+        const float joint_radius = inst.radius * 0.7f;
+
+        // Head sphere
+        InstanceData head_sphere{};
+        // Identity rotation, scale by joint_radius, translate to head
+        head_sphere.transform[0] = joint_radius;
+        head_sphere.transform[1] = 0.0f;
+        head_sphere.transform[2] = 0.0f;
+        head_sphere.transform[3] = 0.0f;
+
+        head_sphere.transform[4] = 0.0f;
+        head_sphere.transform[5] = joint_radius;
+        head_sphere.transform[6] = 0.0f;
+        head_sphere.transform[7] = 0.0f;
+
+        head_sphere.transform[8] = 0.0f;
+        head_sphere.transform[9] = 0.0f;
+        head_sphere.transform[10] = joint_radius;
+        head_sphere.transform[11] = 0.0f;
+
+        head_sphere.transform[12] = inst.head.x;
+        head_sphere.transform[13] = inst.head.y;
+        head_sphere.transform[14] = inst.head.z;
+        head_sphere.transform[15] = 1.0f;
+
+        head_sphere.color[0] = inst.color.x;
+        head_sphere.color[1] = inst.color.y;
+        head_sphere.color[2] = inst.color.z;
+        head_sphere.color[3] = inst.color.w;
+
+        sphere_instances_.push_back(head_sphere);
+
+        // Tail sphere
+        InstanceData tail_sphere = head_sphere;
+        tail_sphere.transform[12] = inst.tail.x;
+        tail_sphere.transform[13] = inst.tail.y;
+        tail_sphere.transform[14] = inst.tail.z;
+
+        sphere_instances_.push_back(tail_sphere);
+    }
+
+    instance_buffer_dirty_ = true;
+}
+
+void DebugRenderer::DrawSpheresInstanced(const xr_vector<SphereInstance>& instances) {
+    // Batch generate geometry for all sphere instances
+    // This reduces per-sphere overhead by generating all geometry in one pass
+    for (const auto& inst : instances) {
+        DrawSolidSphere(inst.center, inst.radius, inst.color, 8);
+    }
 }
 
 } // namespace renderer

@@ -1095,6 +1095,49 @@ void VulkanRenderer::DrawAxes(const ozz::math::Float4x4& transform,
     debug_renderer_.DrawAxes(transform, scale, color_x, color_y, color_z);
 }
 
+void VulkanRenderer::DrawBoneShapesInstanced(const BoneInstance* instances, size_t count)
+{
+    if (count == 0 || !instances) {
+        return;
+    }
+
+    // Convert IDebugDrawContext::BoneInstance to DebugRenderer::BoneInstance
+    xr_vector<DebugRenderer::BoneInstance> debug_instances;
+    debug_instances.reserve(count);
+
+    for (size_t i = 0; i < count; ++i) {
+        DebugRenderer::BoneInstance inst;
+        inst.head = instances[i].head;
+        inst.tail = instances[i].tail;
+        inst.radius = instances[i].radius;
+        inst.color = instances[i].color;
+        debug_instances.push_back(inst);
+    }
+
+    debug_renderer_.DrawBoneShapesInstanced(debug_instances);
+}
+
+void VulkanRenderer::DrawSpheresInstanced(const SphereInstance* instances, size_t count)
+{
+    if (count == 0 || !instances) {
+        return;
+    }
+
+    // Convert IDebugDrawContext::SphereInstance to DebugRenderer::SphereInstance
+    xr_vector<DebugRenderer::SphereInstance> debug_instances;
+    debug_instances.reserve(count);
+
+    for (size_t i = 0; i < count; ++i) {
+        DebugRenderer::SphereInstance inst;
+        inst.center = instances[i].center;
+        inst.radius = instances[i].radius;
+        inst.color = instances[i].color;
+        debug_instances.push_back(inst);
+    }
+
+    debug_renderer_.DrawSpheresInstanced(debug_instances);
+}
+
 } // namespace renderer
 } // namespace animation
 } // namespace xray

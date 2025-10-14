@@ -203,6 +203,10 @@ if(_ozz_animation_viewer_supported AND Vulkan_FOUND)
         add_shader(ozz_animation_viewer shaded_bone.vert)
         add_shader(ozz_animation_viewer shaded_bone.frag)
 
+        # GPU instanced bone shaders
+        add_shader(ozz_animation_viewer bone_instanced.vert)
+        add_shader(ozz_animation_viewer bone_instanced.frag)
+
         # Skinned mesh instanced shaders
         add_shader(ozz_animation_viewer skinned_mesh_instanced.vert)
         add_shader(ozz_animation_viewer skinned_mesh_instanced.frag)

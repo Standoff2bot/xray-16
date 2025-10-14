@@ -46,6 +46,24 @@ public:
         float radius, const ozz::math::Float4& color);
     void DrawGrid(const ozz::math::Float3& center, float size, int divisions,
         const ozz::math::Float4& color_main, const ozz::math::Float4& color_sub);
+
+    // Instanced rendering API
+    struct BoneInstance {
+        ozz::math::Float3 head;
+        ozz::math::Float3 tail;
+        float radius;
+        ozz::math::Float4 color;
+    };
+
+    struct SphereInstance {
+        ozz::math::Float3 center;
+        float radius;
+        ozz::math::Float4 color;
+    };
+
+    void DrawBoneShapesInstanced(const xr_vector<BoneInstance>& instances);
+    void DrawSpheresInstanced(const xr_vector<SphereInstance>& instances);
+
     void EndFrame();
     void Render(VkCommandBuffer cmd, const ozz::math::Float4x4& view_proj);
 
@@ -61,14 +79,29 @@ private:
         float color[4];
     };
 
+    // GPU instancing structures
+    struct InstanceVertex {
+        float position[3];
+        float normal[3];
+    };
+
+    struct InstanceData {
+        float transform[16];  // mat4 (column-major)
+        float color[4];       // vec4
+    };
+
     static VkDeviceSize VertexBufferSize(size_t vertex_count);
     bool EnsureLineCapacity(size_t vertex_count);
     bool EnsureSolidCapacity(size_t vertex_count);
+    bool EnsureInstanceCapacity(size_t instance_count);
     bool CreateLinePipeline();
     bool CreateSolidPipeline();
+    bool CreateBoneInstancedPipeline();
     bool CreateDescriptorSetLayout();
     bool CreateDescriptorPool();
     bool CreateUniformBuffer();
+    void GenerateUnitOctahedron();
+    void GenerateUnitSphere(int segments = 8);
     void DrawOrientedBox(const ozz::math::Float4x4& transform, const Fobb& obb, const ozz::math::Float4& color);
     void DrawCapsuleShape(const ozz::math::Float4x4& transform, const Fcylinder& cylinder,
         const ozz::math::Float4& color, int segments);
@@ -86,18 +119,30 @@ private:
     VulkanBuffer solid_vertex_buffer_;
     VulkanBuffer uniform_buffer_;
 
+    // GPU instancing buffers
+    VulkanBuffer unit_octahedron_buffer_;  // Unit octahedron geometry
+    VulkanBuffer unit_sphere_buffer_;      // Unit sphere geometry
+    VulkanBuffer instance_buffer_;         // Per-instance data (transform + color)
+    uint32_t unit_octahedron_vertex_count_ = 0;
+    uint32_t unit_sphere_vertex_count_ = 0;
+    size_t instance_buffer_capacity_ = 0;
+
     VulkanPipeline line_pipeline_;
     VulkanPipeline solid_pipeline_;
+    VulkanPipeline bone_instanced_pipeline_;  // New instanced pipeline
     VkDescriptorSetLayout descriptor_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
 
     xr_vector<LineVertex> line_vertices_;
     xr_vector<SolidVertex> solid_vertices_;
+    xr_vector<InstanceData> bone_instances_;      // Octahedron instances
+    xr_vector<InstanceData> sphere_instances_;    // Sphere instances
     size_t line_vertex_capacity_ = 0;
     size_t solid_vertex_capacity_ = 0;
     bool line_buffer_dirty_ = false;
     bool solid_buffer_dirty_ = false;
+    bool instance_buffer_dirty_ = false;
     bool initialized_ = false;
 };
 
