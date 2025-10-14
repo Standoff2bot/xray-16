@@ -660,7 +660,10 @@ u32 player_hud::motion_length(const shared_str& anim_name, const shared_str& hud
         return 100; // ms TEMPORARY
     R_ASSERT2(pm,
         make_string("hudItem model [%s] has no motion with alias [%s]", hud_name.c_str(), anim_name.c_str()).c_str());
-    IKinematicsAnimated* model = pi->m_monolithic ? smart_cast<IKinematicsAnimated*>(PKinematics(pi->m_model->dcast_RenderVisual())) : nullptr;
+    IKinematicsAnimated* model = pi->m_monolithic ? smart_cast<IKinematicsAnimated*>(pi->m_model->dcast_PKinematicsAnimated()) : nullptr;
+
+    if (!model) // weird case for OzzKinematicsAnimated- yohji TODO: fix
+        model = m_model;
 
     if (!model)
         return 0;
