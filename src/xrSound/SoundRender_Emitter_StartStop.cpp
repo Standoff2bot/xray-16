@@ -5,6 +5,14 @@
 #include "SoundRender_Emitter.h"
 #include "SoundRender_Source.h"
 #include "SoundRender_Target.h"
+#include "SoundRender_Scene.h"
+#include "Sound.h"
+
+#ifdef USE_STEAMAUDIO
+#include "SteamAudio/SteamAudioContext.h"
+#include "SteamAudio/SteamAudioScene.h"
+#include "SteamAudio/SteamAudioSource.h"
+#endif
 
 void CSoundRender_Emitter::start(const ref_sound& _owner, u32 flags, float delay)
 {
@@ -49,18 +57,24 @@ void CSoundRender_Emitter::start(const ref_sound& _owner, u32 flags, float delay
     m_steamAudioStereoOutput = false;
 
     // Lazy initialization: Create Steam Audio source when we have audio format info
-    if (psSoundFlags.test(ss_UseSteamAudio) && SoundRender->ipl_context() && scene->ipl_simulator() && !m_steamAudioSource)
+    if (psSoundFlags.test(ss_UseSteamAudio) && SoundRender->GetSteamAudioContext() && scene->GetSteamAudioScene() && !m_steamAudioSource)
     {
-        const auto context = SoundRender->ipl_context();
-        const auto simulator = scene->ipl_simulator();
-        const auto hrtf = SoundRender->ipl_hrtf();
-        const auto& audioSettings = source()->ipl_audio_settings();
+        auto* steamContext = SoundRender->GetSteamAudioContext();
+        auto* steamScene = scene->GetSteamAudioScene();
 
-        // Create RAII wrapper (automatically manages all Steam Audio resources)
-        m_steamAudioSource = xr_new<SteamAudio::CSteamAudioSource>(
-            context, simulator, audioSettings, hrtf, data_info.channels);
+        if (steamContext && steamScene && steamContext->IsInitialized() && steamScene->IsValid())
+        {
+            const auto context = steamContext->GetContext();
+            const auto simulator = steamScene->GetSimulator();
+            const auto hrtf = steamContext->GetHRTF();
+            const auto& audioSettings = source()->ipl_audio_settings();
 
-        UpdateSteamAudioInputs();
+            // Create RAII wrapper (automatically manages all Steam Audio resources)
+            m_steamAudioSource = xr_new<SteamAudio::CSteamAudioSource>(
+                context, simulator, audioSettings, hrtf, data_info.channels);
+
+            UpdateSteamAudioInputs();
+        }
     }
 
     if (m_steamAudioSource)

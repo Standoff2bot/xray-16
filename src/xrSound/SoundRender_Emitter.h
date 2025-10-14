@@ -6,6 +6,11 @@
 #include "SoundRender_Environment.h"
 #include "SoundRender_Scene.h"
 
+#ifdef USE_STEAMAUDIO
+#include "SteamAudio/SteamAudioSource.h"
+#endif // STEAM_
+
+
 struct OggVorbis_File;
 
 class Task;

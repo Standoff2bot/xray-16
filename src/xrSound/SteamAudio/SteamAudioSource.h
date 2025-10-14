@@ -62,12 +62,14 @@ public:
      * @brief Apply binaural HRTF effect for 3D positioning
      * @param inputBuffer Input audio data (deinterleaved)
      * @param outputBuffer Output buffer for processed audio
+     * @param listenerPosition Listener position in world space
      * @param listenerAhead Listener forward direction
      * @param listenerUp Listener up direction
      * @param listenerRight Listener right direction
      */
     void ApplyBinauralEffect(float* inputBuffer, float* outputBuffer,
-                            const Fvector& listenerAhead, const Fvector& listenerUp, const Fvector& listenerRight);
+                            const Fvector& listenerPosition, const Fvector& listenerAhead,
+                            const Fvector& listenerUp, const Fvector& listenerRight);
 
     /**
      * @brief Check if this source is initialized and ready
@@ -81,7 +83,7 @@ public:
 
     struct DirectMetrics
     {
-        float occlusion[3]{};
+        float occlusion[3]{}; // Replicated to all bands (old API has single value)
         float transmission[3]{};
         float distanceAttenuation{ 1.0f };
         bool valid{ false };
@@ -89,8 +91,14 @@ public:
 
     [[nodiscard]] const DirectMetrics& GetDirectMetrics() const { return m_directMetrics; }
 
+    /**
+     * @brief Refresh direct metrics without applying audio processing.
+     * @return true if metrics were updated successfully.
+     */
+    bool UpdateDirectMetricsOnly();
+
 private:
-    void StoreDirectMetrics(const IPLDirectSimulationOutputs& outputs);
+    void StoreDirectMetrics(const IPLDirectEffectParams& params);
 
     // Steam Audio handles
     IPLContext m_context{};
@@ -114,11 +122,9 @@ private:
     int m_numChannels{ 1 };
 
     DirectMetrics m_directMetrics{};
+
+    // Cached source position for direction calculation
+    IPLVector3 m_sourcePosition{};
 };
 
 } // namespace SteamAudio
-    /**
-     * @brief Refresh direct metrics without applying audio processing.
-     * @return true if metrics were updated successfully.
-     */
-    bool UpdateDirectMetricsOnly();

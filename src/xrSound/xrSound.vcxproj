@@ -21,8 +21,8 @@
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(xrSdkDir)include\AL;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_USRDLL;XRSOUND_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(xrSdkDir)include;$(xrSdkDir)include\AL;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_USRDLL;XRSOUND_EXPORTS;USE_STEAMAUDIO;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>libogg_static.lib;libvorbis_static.lib;libvorbisfile.lib;OpenAL32.lib;phonon.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -47,6 +47,10 @@
     <ClInclude Include="SoundRender_Source.h" />
     <ClInclude Include="SoundRender_Target.h" />
     <ClInclude Include="SoundRender_TargetA.h" />
+    <ClInclude Include="SteamAudio\SteamAudioContext.h" />
+    <ClInclude Include="SteamAudio\SteamAudioMaterials.h" />
+    <ClInclude Include="SteamAudio\SteamAudioScene.h" />
+    <ClInclude Include="SteamAudio\SteamAudioSource.h" />
     <ClInclude Include="stdafx.h" />
   </ItemGroup>
   <ItemGroup>
@@ -70,6 +74,10 @@
     <ClCompile Include="SoundRender_Source.cpp" />
     <ClCompile Include="SoundRender_Target.cpp" />
     <ClCompile Include="SoundRender_TargetA.cpp" />
+    <ClCompile Include="SteamAudio\SteamAudioContext.cpp" />
+    <ClCompile Include="SteamAudio\SteamAudioMaterials.cpp" />
+    <ClCompile Include="SteamAudio\SteamAudioScene.cpp" />
+    <ClCompile Include="SteamAudio\SteamAudioSource.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>

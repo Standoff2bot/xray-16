@@ -3,6 +3,8 @@
 #include "xrCore/FS.h"
 #include "xrCore/xrCore.h"
 
+#include <algorithm> // for std::clamp
+
 namespace SteamAudio
 {
 
@@ -216,17 +218,17 @@ IPLMaterial CSteamAudioMaterials::ParseMaterialFromString(pcstr values) const
 
     if (parsed >= 3)
     {
-        material.absorption[0] = clamp(absorption[0], 0.0f, 1.0f);
-        material.absorption[1] = clamp(absorption[1], 0.0f, 1.0f);
-        material.absorption[2] = clamp(absorption[2], 0.0f, 1.0f);
+        material.absorption[0] = std::clamp(absorption[0], 0.0f, 1.0f);
+        material.absorption[1] = std::clamp(absorption[1], 0.0f, 1.0f);
+        material.absorption[2] = std::clamp(absorption[2], 0.0f, 1.0f);
     }
     if (parsed >= 4)
-        material.scattering = clamp(scattering, 0.0f, 1.0f);
+        material.scattering = std::clamp(scattering, 0.0f, 1.0f);
     if (parsed >= 7)
     {
-        material.transmission[0] = clamp(transmission[0], 0.0f, 1.0f);
-        material.transmission[1] = clamp(transmission[1], 0.0f, 1.0f);
-        material.transmission[2] = clamp(transmission[2], 0.0f, 1.0f);
+        material.transmission[0] = std::clamp(transmission[0], 0.0f, 1.0f);
+        material.transmission[1] = std::clamp(transmission[1], 0.0f, 1.0f);
+        material.transmission[2] = std::clamp(transmission[2], 0.0f, 1.0f);
     }
 
     return material;

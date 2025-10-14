@@ -8,6 +8,7 @@
 #include "SoundRender_Core.h"
 #include "SoundRender_Scene.h"
 #include "SoundRender_Emitter.h"
+#include "Sound.h"
 
 #ifdef USE_STEAMAUDIO
 #include "SteamAudio/SteamAudioScene.h"
@@ -24,6 +25,10 @@ using ImTextureID = void*;
 #endif
 
 #include <algorithm>
+
+XRSOUND_API extern int psSteamAudioDebugQueries;
+XRSOUND_API extern float psSteamAudioTransmissionStrength;
+XRSOUND_API extern float psSteamAudioOcclusionStrength;
 
 CSoundRender_Scene::CSoundRender_Scene()
 {

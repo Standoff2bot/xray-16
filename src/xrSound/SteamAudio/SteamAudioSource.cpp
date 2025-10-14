@@ -112,14 +112,16 @@ void CSteamAudioSource::UpdateInputs(const Fvector& position, const Fvector& ahe
         return;
 
     // Setup source inputs (position, orientation, directivity)
-    IPLSourceInputs inputs{};
+    IPLSimulationInputs inputs{};
     inputs.flags = static_cast<IPLSimulationFlags>(
         IPL_SIMULATIONFLAGS_DIRECT
         // Can add IPL_SIMULATIONFLAGS_REFLECTIONS, IPL_SIMULATIONFLAGS_PATHING later
     );
+    inputs.directFlags = static_cast<IPLDirectSimulationFlags>(0);
 
     // Source orientation in Steam Audio coordinate system
-    inputs.source.origin = reinterpret_cast<const IPLVector3&>(position);
+    m_sourcePosition = reinterpret_cast<const IPLVector3&>(position);
+    inputs.source.origin = m_sourcePosition;
     inputs.source.ahead = reinterpret_cast<const IPLVector3&>(ahead);
     inputs.source.up = reinterpret_cast<const IPLVector3&>(up);
     inputs.source.right = reinterpret_cast<const IPLVector3&>(right);
@@ -137,20 +139,42 @@ void CSteamAudioSource::UpdateInputs(const Fvector& position, const Fvector& ahe
     // Occlusion (will be computed by simulator)
     inputs.occlusionType = IPL_OCCLUSIONTYPE_RAYCAST;
     inputs.occlusionRadius = 1.0f; // Radius for partial occlusion
+    inputs.numOcclusionSamples = 32;
 
     // Transmission (sound through walls)
-    inputs.transmissionType = IPL_TRANSMISSIONTYPE_FREQINDEPENDENT;
+    // Note: transmissionType doesn't exist in IPLSimulationInputs, only in IPLDirectEffectParams
+
+    // Initialize optional fields
+    inputs.reverbScale[0] = inputs.reverbScale[1] = inputs.reverbScale[2] = 1.0f;
+    inputs.hybridReverbTransitionTime = 1.0f;
+    inputs.hybridReverbOverlapPercent = 0.25f;
+    inputs.baked = IPL_FALSE;
+    inputs.bakedDataIdentifier = {};
+    inputs.pathingProbes = nullptr;
+    inputs.visRadius = 1.0f;
+    inputs.visThreshold = 0.1f;
+    inputs.visRange = 1000.0f;
+    inputs.pathingOrder = 0;
+    inputs.enableValidation = IPL_FALSE;
+    inputs.findAlternatePaths = IPL_FALSE;
+    inputs.numTransmissionRays = 16;
+    inputs.deviationModel = nullptr;
 
     // Update the source
     iplSourceSetInputs(m_source, inputs.flags, &inputs);
 }
 
-void CSteamAudioSource::StoreDirectMetrics(const IPLDirectSimulationOutputs& outputs)
+void CSteamAudioSource::StoreDirectMetrics(const IPLDirectEffectParams& params)
 {
     m_directMetrics.valid = true;
-    m_directMetrics.distanceAttenuation = outputs.distanceAttenuation;
-    std::memcpy(m_directMetrics.occlusion, outputs.occlusion, sizeof(m_directMetrics.occlusion));
-    std::memcpy(m_directMetrics.transmission, outputs.transmission, sizeof(m_directMetrics.transmission));
+    m_directMetrics.distanceAttenuation = params.distanceAttenuation;
+
+    // Old Steam Audio API: occlusion is single float, replicate to all bands
+    m_directMetrics.occlusion[0] = params.occlusion;
+    m_directMetrics.occlusion[1] = params.occlusion;
+    m_directMetrics.occlusion[2] = params.occlusion;
+
+    std::memcpy(m_directMetrics.transmission, params.transmission, sizeof(m_directMetrics.transmission));
 }
 
 void CSteamAudioSource::ApplyDirectEffect(float* inputBuffer, float* outputBuffer, int numSamples)
@@ -190,7 +214,8 @@ void CSteamAudioSource::ApplyDirectEffect(float* inputBuffer, float* outputBuffe
 }
 
 void CSteamAudioSource::ApplyBinauralEffect(float* inputBuffer, float* outputBuffer,
-                                           const Fvector& listenerAhead, const Fvector& listenerUp, const Fvector& listenerRight)
+                                           const Fvector& listenerPosition, const Fvector& listenerAhead,
+                                           const Fvector& listenerUp, const Fvector& listenerRight)
 {
     if (!m_binauralEffect || !m_source)
     {
@@ -200,20 +225,35 @@ void CSteamAudioSource::ApplyBinauralEffect(float* inputBuffer, float* outputBuf
         return;
     }
 
-    // Get source position outputs
-    IPLSimulationOutputs outputs{};
-    iplSourceGetOutputs(m_source, IPL_SIMULATIONFLAGS_DIRECT, &outputs);
+    // Calculate direction from listener to source
+    IPLVector3 direction;
+    direction.x = m_sourcePosition.x - listenerPosition.x;
+    direction.y = m_sourcePosition.y - listenerPosition.y;
+    direction.z = m_sourcePosition.z - listenerPosition.z;
+
+    // Normalize direction
+    const float length = sqrtf(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+    if (length > 0.0001f)
+    {
+        direction.x /= length;
+        direction.y /= length;
+        direction.z /= length;
+    }
+    else
+    {
+        // Source and listener at same position, use forward direction
+        direction = reinterpret_cast<const IPLVector3&>(listenerAhead);
+    }
 
     // Setup binaural effect parameters
     IPLBinauralEffectParams binauralParams{};
-    binauralParams.direction = outputs.direct.direction;
+    binauralParams.direction = direction;
     binauralParams.interpolation = IPL_HRTFINTERPOLATION_NEAREST; // or IPL_HRTFINTERPOLATION_BILINEAR for quality
     binauralParams.spatialBlend = 1.0f; // Full spatial audio
     binauralParams.hrtf = m_hrtf;
 
     // Setup peaking EQ (for HRTF-based distance attenuation)
     binauralParams.peakDelays = nullptr;
-    binauralParams.peakAmplitudes = nullptr;
 
     // Deinterleave input if not already done
     iplAudioBufferDeinterleave(m_context, inputBuffer, &m_inputBuffer);

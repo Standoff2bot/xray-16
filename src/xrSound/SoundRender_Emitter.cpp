@@ -322,10 +322,11 @@ std::pair<u8*, size_t> CSoundRender_Emitter::obtain_block()
 
         if (useHRTF)
         {
-            const auto listener = SoundRender->listener_params();
+            const auto& listener = SoundRender->listener_params();
             m_steamAudioSource->ApplyBinauralEffect(
                 directBuffer,
                 stereoOut,
+                listener.position,
                 listener.orientation[0],
                 listener.orientation[1],
                 listener.orientation[2]);

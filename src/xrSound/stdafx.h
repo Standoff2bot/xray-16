@@ -9,7 +9,10 @@
 
 #include "Sound.h"
 
-#if __has_include(<phonon.h>) && defined(XR_PLATFORM_WINDOWS)
+// Steam Audio integration
+#ifdef USE_STEAMAUDIO
+#   include <phonon.h>
+#elif __has_include(<phonon.h>) && defined(XR_PLATFORM_WINDOWS)
 #   include <phonon.h>
 #   define USE_STEAMAUDIO
 #endif

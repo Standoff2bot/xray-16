@@ -6,6 +6,7 @@
 #include <cstring>
 #include "xrCore/xrCore.h"
 #include "xrCore/Threading/TaskManager.hpp"
+#include "xrCore/_fbox.h" // for Fbox3 definition
 #include "xrMaterialSystem/GameMtlLib.h"
 
 namespace SteamAudio

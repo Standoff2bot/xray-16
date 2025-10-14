@@ -76,6 +76,23 @@ target_sources_grouped(
 
 set_source_files_properties(guids.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
+# Steam Audio integration (conditional - enabled if phonon.h is found)
+if (EXISTS "${CMAKE_SOURCE_DIR}/sdk/include/phonon.h")
+    target_sources_grouped(
+        TARGET xrSound
+        NAME "SteamAudio"
+        FILES
+        SteamAudio/SteamAudioContext.cpp
+        SteamAudio/SteamAudioContext.h
+        SteamAudio/SteamAudioScene.cpp
+        SteamAudio/SteamAudioScene.h
+        SteamAudio/SteamAudioSource.cpp
+        SteamAudio/SteamAudioSource.h
+        SteamAudio/SteamAudioMaterials.cpp
+        SteamAudio/SteamAudioMaterials.h
+    )
+endif()
+
 target_sources_grouped(
     TARGET xrSound
     NAME "Source"
@@ -122,6 +139,7 @@ target_include_directories(xrSound
     PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
     "${CMAKE_SOURCE_DIR}/src/xrEngine"
+    "${CMAKE_SOURCE_DIR}/sdk/include"
 )
 
 target_link_libraries(xrSound
@@ -136,6 +154,18 @@ target_link_libraries(xrSound
     Vorbis::Vorbis
     Vorbis::VorbisFile
 )
+
+# Link Steam Audio if available
+if (EXISTS "${CMAKE_SOURCE_DIR}/sdk/include/phonon.h")
+    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+        # 64-bit build
+        target_link_libraries(xrSound PRIVATE "${CMAKE_SOURCE_DIR}/sdk/libraries/x64/phonon.lib")
+    else()
+        # 32-bit build
+        target_link_libraries(xrSound PRIVATE "${CMAKE_SOURCE_DIR}/sdk/libraries/x86/phonon.lib")
+    endif()
+    message(STATUS "Steam Audio enabled for xrSound")
+endif()
 
 target_compile_definitions(xrSound
     PRIVATE

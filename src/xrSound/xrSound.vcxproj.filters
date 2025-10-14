@@ -34,6 +34,9 @@
     <Filter Include="Scene">
       <UniqueIdentifier>{764beefb-01ae-4d1b-9504-a66144a44420}</UniqueIdentifier>
     </Filter>
+    <Filter Include="SteamAudio">
+      <UniqueIdentifier>{c8f5e9d2-5a1b-4f3c-9e8d-7b4c6d5e8f9a}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Sound.h">
@@ -77,6 +80,18 @@
     </ClInclude>
     <ClInclude Include="SoundRender_Scene.h">
       <Filter>Scene</Filter>
+    </ClInclude>
+    <ClInclude Include="SteamAudio\SteamAudioContext.h">
+      <Filter>SteamAudio</Filter>
+    </ClInclude>
+    <ClInclude Include="SteamAudio\SteamAudioMaterials.h">
+      <Filter>SteamAudio</Filter>
+    </ClInclude>
+    <ClInclude Include="SteamAudio\SteamAudioScene.h">
+      <Filter>SteamAudio</Filter>
+    </ClInclude>
+    <ClInclude Include="SteamAudio\SteamAudioSource.h">
+      <Filter>SteamAudio</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -133,6 +148,18 @@
     </ClCompile>
     <ClCompile Include="SoundRender_Scene.cpp">
       <Filter>Scene</Filter>
+    </ClCompile>
+    <ClCompile Include="SteamAudio\SteamAudioContext.cpp">
+      <Filter>SteamAudio</Filter>
+    </ClCompile>
+    <ClCompile Include="SteamAudio\SteamAudioMaterials.cpp">
+      <Filter>SteamAudio</Filter>
+    </ClCompile>
+    <ClCompile Include="SteamAudio\SteamAudioScene.cpp">
+      <Filter>SteamAudio</Filter>
+    </ClCompile>
+    <ClCompile Include="SteamAudio\SteamAudioSource.cpp">
+      <Filter>SteamAudio</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

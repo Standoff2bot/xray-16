@@ -441,6 +441,11 @@ target_compile_definitions(xrEngine
     PURE_DYNAMIC_CAST
 )
 
+# Add Steam Audio preprocessor definition if available
+if (EXISTS "${CMAKE_SOURCE_DIR}/sdk/include/phonon.h")
+    target_compile_definitions(xrEngine PRIVATE USE_STEAMAUDIO)
+endif()
+
 set_target_properties(xrEngine PROPERTIES
     PREFIX ""
 )
