@@ -64,12 +64,30 @@ CSteamAudioSource::CSteamAudioSource(IPLContext context, IPLSimulator simulator,
         Msg("! SOUND: SteamAudio: Failed to create reflection effect, error: %d", static_cast<int>(result));
     }
 
-    // Create path effect (indirect sound paths)
-    IPLPathEffectSettings pathSettings{ 1, IPL_TRUE, {}, m_hrtf };
-    result = iplPathEffectCreate(m_context, &m_audioSettings, &pathSettings, &m_pathEffect);
-    if (result != IPL_STATUS_SUCCESS)
+    // Create path effect (indirect sound paths) - only if HRTF is available
+    if (m_hrtf)
     {
-        Msg("! SOUND: SteamAudio: Failed to create path effect, error: %d", static_cast<int>(result));
+        // Use stereo speaker layout for HRTF-based spatialization
+        IPLSpeakerLayout stereoLayout{};
+        stereoLayout.type = IPL_SPEAKERLAYOUTTYPE_STEREO;
+        stereoLayout.numSpeakers = 0; // Only used for custom layouts
+        stereoLayout.speakers = nullptr; // Only used for custom layouts
+
+        IPLPathEffectSettings pathSettings{};
+        pathSettings.maxOrder = 1; // First-order Ambisonics
+        pathSettings.spatialize = IPL_TRUE; // Spatialize the output
+        pathSettings.speakerLayout = stereoLayout;
+        pathSettings.hrtf = m_hrtf;
+
+        result = iplPathEffectCreate(m_context, &m_audioSettings, &pathSettings, &m_pathEffect);
+        if (result != IPL_STATUS_SUCCESS)
+        {
+            Msg("! SOUND: SteamAudio: Failed to create path effect, error: %d", static_cast<int>(result));
+        }
+    }
+    else
+    {
+        Msg("~ SOUND: SteamAudio: Path effect not created (HRTF is null)");
     }
 
     // Allocate audio buffers
