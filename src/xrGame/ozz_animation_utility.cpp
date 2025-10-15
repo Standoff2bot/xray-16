@@ -259,7 +259,7 @@ void COzzAnimationUtility::DrawAnimationPanel()
                     MotionID motion = current_object_->ID_Cycle_Safe(anim_name);
                     if (motion.valid())
                     {
-                        current_object_->PlayCycle(motion, TRUE, nullptr, nullptr, 0);
+                        current_object_->PlayCycle(motion, FALSE, nullptr, nullptr, 0);
                         playback_.playing = true;
                         playback_.time_ratio = 0.0f;
                     }
@@ -604,7 +604,7 @@ void COzzAnimationUtility::DrawAnimatedObjectPanel(const char* object_name, OzzK
                         MotionID motion = anim_obj->ID_Cycle_Safe(anim_name);
                         if (motion.valid())
                         {
-                            anim_obj->PlayCycle(motion, TRUE, nullptr, nullptr, 0);
+                            anim_obj->PlayCycle(motion, FALSE, nullptr, nullptr, 0);
                             playback.playing = true;
                             playback.time_ratio = 0.0f;
                         }
