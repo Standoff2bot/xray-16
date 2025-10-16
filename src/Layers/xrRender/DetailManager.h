@@ -7,6 +7,7 @@
 #include "xrCore/xrPool.h"
 #include "DetailFormat.h"
 #include "DetailModel.h"
+#include "DetailManager_Compute.h"
 
 namespace xray::render::RENDER_NAMESPACE
 {
@@ -171,6 +172,7 @@ public:
 
     void UpdateVisibleM();
     void UpdateVisibleS();
+    void BuildGPUInstanceList(); // Build instance list for GPU culling
 
 #ifdef _EDITOR
     virtual ObjectList* GetSnapList() = 0;
@@ -191,6 +193,11 @@ public:
     VertexStagingBuffer hw_VB;
     IndexStagingBuffer hw_IB;
 
+    // GPU instancing geometry (simple base geometry for GPU path)
+    ref_geom gpu_Geom;
+    VertexStagingBuffer gpu_VB;
+    IndexStagingBuffer gpu_IB;
+
     ref_constant hwc_consts;
     ref_constant hwc_wave;
     ref_constant hwc_wind;
@@ -198,6 +205,10 @@ public:
     ref_constant hwc_s_consts;
     ref_constant hwc_s_xform;
     ref_constant hwc_s_array;
+
+    // GPU instancing shader (for GPU compute culling path)
+    ref_shader gpu_detail_shader;
+
     void hw_Load();
     void hw_Load_Geom();
     void hw_Load_Shaders();
@@ -226,6 +237,9 @@ public:
 
     /// MT stuff
     Task* m_calc_task{};
+
+    /// GPU compute culling
+    DetailComputeManager* m_compute_manager{};
 
     void DispatchMTCalc();
 

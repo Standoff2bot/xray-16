@@ -41,6 +41,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\xrRenderGL\Blender_Recorder_GL.cpp" />
+    <ClCompile Include="..\xrRenderGL\glDetailManager_Compute.cpp" />
     <ClCompile Include="..\xrRenderGL\glResourceManager_Resources.cpp" />
     <ClCompile Include="..\xrRenderGL\glResourceManager_Scripting.cpp" />
     <ClCompile Include="..\xrRenderGL\glr_constants.cpp" />

@@ -5,23 +5,34 @@
 
 #include "DetailFormat.h"
 
+// Forward declarations for DirectX types
+struct ID3D11Buffer;
+struct ID3D11ShaderResourceView;
+struct ID3D11UnorderedAccessView;
+typedef ID3D11Buffer ID3DBuffer;
+typedef ID3D11ShaderResourceView ID3DShaderResourceView;
+typedef ID3D11UnorderedAccessView ID3DUnorderedAccessView;
+
 namespace xray::render::RENDER_NAMESPACE
 {
+// Forward declarations
+class CDetailManager;
+class CDetail;
 
 // ===========================
 // GPU Data Structures
 // ===========================
 
 // Must match HLSL layout - tightly packed for GPU consumption
-// Size: 128 bytes (cache-friendly, 2 per cache line)
+// Size: 112 bytes to match shader definition
 #pragma pack(push, 1)
 struct DetailInstanceGPU
 {
-    // Transform data (48 bytes)
+    // Transform data (32 bytes)
     Fvector position;        // World position (12 bytes)
     float scale;             // Uniform scale (4 bytes)
     float rotation_y;        // Y-axis rotation in radians (4 bytes)
-    float padding0[7];       // Alignment padding (28 bytes)
+    float padding0[3];       // Alignment padding (12 bytes) - matches float3 in shader
 
     // Rendering data (32 bytes)
     float c_hemi;            // Hemispherical lighting [0..1] (4 bytes)
@@ -45,7 +56,7 @@ struct DetailInstanceGPU
 };
 #pragma pack(pop)
 
-static_assert(sizeof(DetailInstanceGPU) == 128, "DetailInstanceGPU must be 128 bytes");
+static_assert(sizeof(DetailInstanceGPU) == 112, "DetailInstanceGPU must be 112 bytes to match shader");
 
 // GPU-friendly frustum planes (64 bytes)
 struct FrustumGPU
@@ -53,7 +64,7 @@ struct FrustumGPU
     Fvector4 planes[6];  // Left, Right, Top, Bottom, Near, Far
 };
 
-// Culling parameters passed to compute shader (64 bytes)
+// Culling parameters passed to compute shader (160 bytes)
 struct DetailCullParams
 {
     Fvector camera_pos;         // Camera world position (12 bytes)
@@ -67,7 +78,7 @@ struct DetailCullParams
     u32 instance_count;         // Total number of instances to process (4 bytes)
     u32 frame_number;           // Current frame for temporal throttling (4 bytes)
 
-    float padding[4];           // Alignment to 64 bytes (16 bytes)
+    Fvector4 frustum_planes[6]; // Frustum planes for culling (96 bytes)
 };
 
 // Indirect draw arguments structure (must match D3D11_DRAW_INDEXED_ARGUMENTS)
@@ -95,6 +106,10 @@ public:
     void Shutdown();
     bool IsInitialized() const { return m_initialized; }
 
+    // Set geometry info (index count for indirect draw args)
+    void SetGeometryInfo(u32 index_count) { m_index_count = index_count; }
+    u32 GetIndexCount() const { return m_index_count; }
+
     // Instance management
     void BeginInstanceUpdate();
     void AddInstance(const DetailInstanceGPU& instance);
@@ -115,6 +130,9 @@ public:
     };
     const Stats& GetStats() const { return m_stats; }
     void ResetStats();
+
+    // Debug
+    void ReadDebugData();  // Read debug buffer and print culling statistics
 
 private:
     // GPU Resources
@@ -142,7 +160,12 @@ private:
         ref_cs cull_shader;                            // Frustum culling compute shader
 
         // Staging for readback (debug/stats only)
-        HostBufferHandle counter_readback;
+        void* counter_readback;  // ID3DBuffer* for readback staging
+
+        // Debug buffers (optional - for debugging only)
+        ID3DBuffer* debug_buffer;                      // Debug output buffer
+        ID3DUnorderedAccessView* debug_buffer_uav;     // UAV for writing debug data
+        void* debug_readback;                          // ID3DBuffer* for debug readback
     };
 
     GPUResources m_gpu;
@@ -151,6 +174,7 @@ private:
     xr_vector<DetailInstanceGPU> m_instance_staging;  // CPU staging for uploads
     u32 m_instance_count;
     u32 m_max_instances;
+    u32 m_index_count;  // Index count for base geometry (for indirect draw args)
 
     // State
     bool m_initialized;
@@ -242,46 +266,12 @@ inline FrustumGPU BuildFrustumGPU(const Fmatrix& view_proj)
     return frustum;
 }
 
-// Convert CPU SlotItem to GPU instance
-inline DetailInstanceGPU ConvertToGPUInstance(
-    const CDetailManager::SlotItem& item,
+// Convert CPU SlotItem to GPU instance (implementation in .cpp to avoid circular dependency)
+DetailInstanceGPU ConvertToGPUInstance(
+    const void* item_ptr,      // CDetailManager::SlotItem*
     u32 object_id,
-    const CDetail& detail_object,
+    const void* detail_ptr,    // CDetail*
     int slot_x,
-    int slot_z)
-{
-    DetailInstanceGPU gpu_inst = {};
-
-    // Extract position from transform matrix
-    gpu_inst.position.set(item.mRotY._41, item.mRotY._42, item.mRotY._43);
-    gpu_inst.scale = item.scale;
-
-    // Extract rotation (assuming rotation around Y axis)
-    // atan2(m31, m33) gives Y rotation
-    gpu_inst.rotation_y = atan2f(item.mRotY._31, item.mRotY._33);
-
-    // Rendering data
-    gpu_inst.c_hemi = item.c_hemi;
-    gpu_inst.c_sun = item.c_sun;
-    gpu_inst.object_id = object_id;
-    gpu_inst.vis_id = item.vis_ID;
-
-#if RENDER == R_R1
-    gpu_inst.color_rgb = item.c_rgb;
-#endif
-
-    // Bounding data (from detail object)
-    gpu_inst.bounds_min = detail_object.bv_bb.vMin;
-    gpu_inst.bounds_max = detail_object.bv_bb.vMax;
-    gpu_inst.bounds_radius = detail_object.bv_sphere.R;
-
-    // Metadata
-    gpu_inst.slot_x = slot_x;
-    gpu_inst.slot_z = slot_z;
-    gpu_inst.flags = 0;
-    gpu_inst.fade_distance_sqr = item.distance;  // Already squared by CPU culling
-
-    return gpu_inst;
-}
+    int slot_z);
 
 } // namespace xray::render::RENDER_NAMESPACE

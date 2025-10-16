@@ -119,5 +119,13 @@ void CDetailManager::hw_Unload()
         hw_IB.Release();
     if (hw_VB)
         hw_VB.Release();
+
+    // Destroy GPU instancing geometry
+    if (gpu_Geom)
+        gpu_Geom.destroy();
+    if (gpu_IB)
+        gpu_IB.Release();
+    if (gpu_VB)
+        gpu_VB.Release();
 }
 } // namespace xray::render::RENDER_NAMESPACE

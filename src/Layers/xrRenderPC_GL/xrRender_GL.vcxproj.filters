@@ -708,6 +708,9 @@
     <ClCompile Include="..\..\..\sdk\include\glad\gl.c">
       <Filter>Refactored\HW\glad</Filter>
     </ClCompile>
+    <ClCompile Include="..\xrRenderGL\glDetailManager_Compute.cpp">
+      <Filter>Details</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stdafx.h">

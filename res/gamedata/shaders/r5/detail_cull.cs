@@ -10,11 +10,11 @@
 
 struct DetailInstanceGPU
 {
-    // Transform data (48 bytes)
-    float3 position;
-    float scale;
-    float rotation_y;
-    float3 padding0;
+    // Transform data (32 bytes)
+    float3 position;        // 12 bytes
+    float scale;            // 4 bytes
+    float rotation_y;       // 4 bytes
+    float3 padding0;        // 12 bytes = 32 total
 
     // Rendering data (32 bytes)
     float c_hemi;
@@ -86,8 +86,16 @@ RWStructuredBuffer<uint> g_visible_wave2 : register(u2);     // vis_id = 2
 // Atomic counters for each vis_id
 RWStructuredBuffer<uint> g_counters : register(u3);  // [0]=still, [1]=wave1, [2]=wave2
 
-// Indirect draw arguments per vis_id
-RWStructuredBuffer<IndirectDrawArgs> g_indirect_args : register(u4);
+// Indirect draw arguments per vis_id (RAW buffers for DrawIndexedInstancedIndirect)
+// Must use RWByteAddressBuffer because DX11 doesn't allow DRAWINDIRECT_ARGS + STRUCTURED flags
+RWByteAddressBuffer g_indirect_args_still : register(u4);
+RWByteAddressBuffer g_indirect_args_wave1 : register(u5);
+RWByteAddressBuffer g_indirect_args_wave2 : register(u6);
+
+// Debug output buffer (optional - for debugging only)
+// Format: uint4 = (instance_idx, cull_reason, vis_id, padding)
+// cull_reason: 0=visible, 1=distance, 2=frustum, 3=ssa
+RWStructuredBuffer<uint4> g_debug_output : register(u7);
 
 // ===========================
 // Culling Functions
@@ -129,9 +137,40 @@ float ComputeSSA(float3 world_pos, float radius, float scale)
 // ===========================
 
 [numthreads(256, 1, 1)]
-void main(uint3 dispatch_thread_id : SV_DispatchThreadID)
+void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_GroupID)
 {
     uint instance_idx = dispatch_thread_id.x;
+
+    // Initialize indirect draw arguments on first thread of first group
+    // ByteAddressBuffer layout: [index_count, instance_count, start_index, base_vertex, start_instance]
+    if (dispatch_thread_id.x == 0)
+    {
+        // Initialize indirect draw args for all vis_ids using Store()
+        // offset 0: index_count (SET BY CPU - do NOT overwrite!)
+        // offset 4: instance_count (will be incremented atomically)
+        // offset 8: start_index
+        // offset 12: base_vertex (signed int)
+        // offset 16: start_instance
+
+        // NOTE: We do NOT write to offset 0 (index_count) - it's initialized by CPU!
+        g_indirect_args_still.Store(4, 0);     // instance_count - start at 0
+        g_indirect_args_still.Store(8, 0);     // start_index
+        g_indirect_args_still.Store(12, 0);    // base_vertex
+        g_indirect_args_still.Store(16, 0);    // start_instance
+
+        g_indirect_args_wave1.Store(4, 0);     // instance_count - start at 0
+        g_indirect_args_wave1.Store(8, 0);     // start_index
+        g_indirect_args_wave1.Store(12, 0);    // base_vertex
+        g_indirect_args_wave1.Store(16, 0);    // start_instance
+
+        g_indirect_args_wave2.Store(4, 0);     // instance_count - start at 0
+        g_indirect_args_wave2.Store(8, 0);     // start_index
+        g_indirect_args_wave2.Store(12, 0);    // base_vertex
+        g_indirect_args_wave2.Store(16, 0);    // start_instance
+    }
+
+    // Ensure all threads wait for initialization
+    GroupMemoryBarrierWithGroupSync();
 
     // Early exit if beyond instance count
     if (instance_idx >= g_instance_count)
@@ -148,7 +187,11 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID)
 
     // Fade limit culling
     if (dist_sqr > g_fade_limit_sqr)
+    {
+        // Debug: culled by distance
+        g_debug_output[instance_idx] = uint4(instance_idx, 1, inst.vis_id, 0);
         return;  // Too far, cull
+    }
 
     // =========================
     // Frustum Culling
@@ -156,14 +199,22 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID)
     // Use bounding sphere for conservative culling
     float world_radius = inst.bounds_radius * inst.scale;
     if (!FrustumCullSphere(inst.position, world_radius))
+    {
+        // Debug: culled by frustum
+        g_debug_output[instance_idx] = uint4(instance_idx, 2, inst.vis_id, 0);
         return;  // Outside frustum, cull
+    }
 
     // =========================
     // SSA (Screen Space Area) Culling
     // =========================
     float ssa = ComputeSSA(inst.position, inst.bounds_radius, inst.scale);
     if (ssa < g_r_ssa_discard)
+    {
+        // Debug: culled by SSA
+        g_debug_output[instance_idx] = uint4(instance_idx, 3, inst.vis_id, 0);
         return;  // Too small, cull
+    }
 
     // =========================
     // Fade Factor (for future use)
@@ -180,23 +231,38 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID)
     // =========================
     uint output_idx = 0;
 
+    // Debug: instance is visible
+    g_debug_output[instance_idx] = uint4(instance_idx, 0, inst.vis_id, asuint(dist_sqr));
+
     // Determine which output buffer based on vis_id
     if (inst.vis_id == 0)
     {
         // Still (no animation)
         InterlockedAdd(g_counters[0], 1, output_idx);
         g_visible_still[output_idx] = instance_idx;
+
+        // Update indirect draw instance count (offset 4 = instance_count field)
+        uint original_value;
+        g_indirect_args_still.InterlockedAdd(4, 1, original_value);
     }
     else if (inst.vis_id == 1)
     {
         // Wave 1
         InterlockedAdd(g_counters[1], 1, output_idx);
         g_visible_wave1[output_idx] = instance_idx;
+
+        // Update indirect draw instance count (offset 4 = instance_count field)
+        uint original_value;
+        g_indirect_args_wave1.InterlockedAdd(4, 1, original_value);
     }
     else // inst.vis_id == 2
     {
         // Wave 2
         InterlockedAdd(g_counters[2], 1, output_idx);
         g_visible_wave2[output_idx] = instance_idx;
+
+        // Update indirect draw instance count (offset 4 = instance_count field)
+        uint original_value;
+        g_indirect_args_wave2.InterlockedAdd(4, 1, original_value);
     }
 }

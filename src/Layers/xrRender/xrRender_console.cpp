@@ -316,6 +316,7 @@ float ps_r2_dof_kernel_size = 5.0f; //  7.0f
 
 u32 ps_steep_parallax = 0;
 int ps_r__detail_radius = 49;
+int ps_r__gpu_culling = 0; // GPU-driven frustum culling (0=CPU, 1=GPU)
 
 u32 dm_size = 24;
 u32 dm_cache1_line = 12; //dm_size*2/dm_cache1_count
@@ -981,6 +982,7 @@ void xrRender_initconsole()
     CMD4(CCC_Float, "r__detail_density", &ps_current_detail_density/*&ps_r__Detail_density*/, 0.1f, 0.99f);
     CMD4(CCC_detail_radius, "r__detail_radius", &ps_r__detail_radius, 49, 300);
     CMD4(CCC_Float, "r__detail_height", &ps_r__Detail_height, 1, 2);
+    CMD4(CCC_Integer, "r__gpu_culling", &ps_r__gpu_culling, 0, 1); // Toggle GPU-driven culling
 
 #ifdef DEBUG
     CMD4(CCC_Float, "r__detail_l_ambient", &ps_r__Detail_l_ambient, .5f, .95f);

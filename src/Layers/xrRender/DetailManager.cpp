@@ -39,6 +39,10 @@ const int dbgItems = 128;
 //--------------------------------------------------- Decompression
 static int magic4x4[4][4] = {{0, 14, 3, 13}, {11, 5, 8, 6}, {12, 2, 15, 1}, {7, 9, 4, 10}};
 
+extern ECORE_API float r_ssaDISCARD;
+extern int ps_r__gpu_culling; // GPU-driven frustum culling toggle
+extern int ps_r__detail_radius;
+
 void bwdithermap(int levels, int magic[16][16])
 {
     /* Get size of each step */
@@ -215,6 +219,19 @@ void CDetailManager::Load()
     else
         soft_Load();
 
+    // Initialize GPU compute manager (always - can be toggled at runtime with r__gpu_culling)
+    m_compute_manager = xr_new<DetailComputeManager>();
+    m_compute_manager->Initialize(100000); // Max 100K instances
+
+    // Set geometry info for GPU rendering (index count from first object)
+    if (!objects.empty())
+    {
+        m_compute_manager->SetGeometryInfo(objects[0]->number_indices);
+        Msg("* [DetailManager] GPU geometry: %u indices", objects[0]->number_indices);
+    }
+
+    Msg("* [DetailManager] GPU compute manager initialized (toggle with r__gpu_culling)");
+
     // swing desc
     // normal
     swing_desc[0].amp1 = pSettings->r_float("details", "swing_normal_amp1");
@@ -230,9 +247,18 @@ void CDetailManager::Load()
     swing_desc[1].speed = pSettings->r_float("details", "swing_fast_speed");
 }
 #endif
+
 void CDetailManager::Unload()
 {
     ZoneScoped;
+
+    // Shutdown GPU compute manager
+    if (m_compute_manager)
+    {
+        m_compute_manager->Shutdown();
+        xr_delete(m_compute_manager);
+    }
+
     if (UseVS())
         hw_Unload();
     else
@@ -251,7 +277,65 @@ void CDetailManager::Unload()
     FS.r_close(dtFS);
 }
 
-extern ECORE_API float r_ssaDISCARD;
+void CDetailManager::BuildGPUInstanceList()
+{
+    ZoneScoped;
+
+    if (!m_compute_manager)
+        return;
+
+    // Begin building instance list
+    m_compute_manager->BeginInstanceUpdate();
+
+    // Iterate through all cached slots and build GPU instance list
+    for (u32 _mz = 0; _mz < dm_cache1_line; _mz++)
+    {
+        for (u32 _mx = 0; _mx < dm_cache1_line; _mx++)
+        {
+            CacheSlot1& MS = cache_level1[_mz][_mx];
+            if (MS.empty)
+                continue;
+
+            u32 dwCC = dm_cache1_count * dm_cache1_count;
+            for (u32 _i = 0; _i < dwCC; _i++)
+            {
+                Slot* PS = *MS.slots[_i];
+                Slot& S = *PS;
+
+                if (S.empty)
+                    continue;
+
+                // Process all objects in this slot
+                for (int sp_id = 0; sp_id < dm_obj_in_slot; sp_id++)
+                {
+                    SlotPart& sp = S.G[sp_id];
+                    if (sp.id == DetailSlot::ID_Empty)
+                        continue;
+
+                    // Get the detail object
+                    CDetail& detail = *objects[sp.id];
+
+                    // Convert all instances in this slot part
+                    for (SlotItem* item : sp.items)
+                    {
+                        DetailInstanceGPU gpu_inst = ConvertToGPUInstance(
+                            item,       // void* to SlotItem
+                            sp.id,      // object_id
+                            &detail,    // void* to CDetail
+                            S.sx,       // slot_x
+                            S.sz        // slot_z
+                        );
+
+                        m_compute_manager->AddInstance(gpu_inst);
+                    }
+                }
+            }
+        }
+    }
+
+    // Finish building instance list
+    m_compute_manager->EndInstanceUpdate();
+}
 
 void CDetailManager::UpdateVisibleM()
 {
@@ -425,10 +509,79 @@ void CDetailManager::Render(CBackend& cmd_list)
 
     cmd_list.set_CullMode(CULL_NONE);
     cmd_list.set_xform_world(Fidentity);
-    if (UseVS())
-        hw_Render(cmd_list);
-    else
-        soft_Render();
+
+    // GPU compute culling path
+    if (ps_r__gpu_culling && m_compute_manager)
+    {
+        // Build instance list from all loaded cache slots
+        BuildGPUInstanceList();
+
+        // Dispatch GPU culling compute shader
+        m_compute_manager->DispatchCulling(cmd_list, Device.mFullTransform);
+
+        // Debug: Read back culling statistics every 60 frames
+        static u32 debug_frame_counter = 0;
+        if ((++debug_frame_counter % 60) == 0)
+        {
+            m_compute_manager->ReadDebugData();
+        }
+
+        // Set up GPU instancing geometry (simple base geometry)
+        if (!gpu_Geom)
+        {
+            Msg("! [DetailManager] GPU geometry not created, cannot render");
+            return;
+        }
+        cmd_list.set_Geometry(gpu_Geom);
+
+        // Render using indirect draws
+        // Use GPU instancing shader (all objects use the same shader)
+        if (!gpu_detail_shader)
+        {
+            Msg("! [DetailManager] GPU instancing shader not loaded, cannot render");
+        }
+        else
+        {
+            // Loop through all object types and visibility lists
+            for (u32 object_id = 0; object_id < objects.size(); object_id++)
+            {
+                CDetail& Object = *objects[object_id];
+
+                // Render each visibility list (still=0, wave1=1, wave2=2)
+                for (u32 vis_id = 0; vis_id < 3; vis_id++)
+                {
+                    // Use LOD0 for GPU path (simpler geometry)
+                    u32 lod_id = 4;
+
+                    // Set GPU instancing shader element
+                    if (gpu_detail_shader->E[lod_id])
+                    {
+                        cmd_list.set_Element(gpu_detail_shader->E[lod_id], 0);
+
+                        // Set texture from object's material
+                        if (Object.shader && Object.shader->E[lod_id])
+                        {
+                            cmd_list.apply_lmaterial();
+                        }
+
+                        // TODO: Set constants (wave, wind params, etc.) - for now, GPU path uses defaults
+                        // The actual animation will need to be handled in the vertex shader
+
+                        // Execute indirect draw
+                        m_compute_manager->RenderIndirect(cmd_list, object_id, vis_id, lod_id);
+                    }
+                }
+            }
+        }
+    }
+    else // CPU rendering path
+    {
+        if (UseVS())
+            hw_Render(cmd_list);
+        else
+            soft_Render();
+    }
+
     cmd_list.set_CullMode(CULL_CCW);
 
     g_pGamePersistent->m_pGShaderConstants->m_blender_mode.w = 0.0f; //--#SM+#-- Флаг конца рендера травы [end of grass render]
@@ -459,7 +612,11 @@ void CDetailManager::DispatchMTCalc()
         cache_Update(s_x, s_z, EYE);
         RImplementation.BasicStats.DetailCache.End();
 
-        UpdateVisibleM();
+        // CPU culling path (skip if GPU culling enabled)
+        if (!ps_r__gpu_culling)
+        {
+            UpdateVisibleM();
+        }
     });
 }
 

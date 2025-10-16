@@ -26,6 +26,84 @@ void CDetailManager::hw_Load_Shaders()
     hwc_s_consts = T1.get("consts");
     hwc_s_xform = T1.get("xform");
     hwc_s_array = T1.get("array");
+
+    // Load GPU instancing shader (for GPU compute culling path)
+    gpu_detail_shader.create("details_lod_gpu");
+    if (!gpu_detail_shader)
+    {
+        Msg("! [DetailManager] Failed to load GPU instancing shader 'details_lod_gpu'");
+    }
+    else
+    {
+        Msg("* [DetailManager] GPU instancing shader loaded successfully");
+    }
+
+    // Create GPU instancing geometry (simple base geometry)
+    // For now, use first object only - TODO: support multiple objects
+    if (!objects.empty())
+    {
+        const CDetail& D = *objects[0];
+
+        // GPU vertex format: pos(3) + normal(3) + tc(2) = 32 bytes
+        struct vertGPU
+        {
+            float x, y, z;
+            float nx, ny, nz;
+            float u, v;
+        };
+
+        static VertexElement gpu_decl[] =
+        {
+            {0, 0,  D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+            {0, 12, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL, 0},
+            {0, 24, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+            D3DDECL_END()
+        };
+
+        u32 vSize = sizeof(vertGPU);
+        u32 vCount = D.number_vertices;
+        u32 iCount = D.number_indices;
+
+        Msg("* [DETAILS GPU] Creating base geometry: %d verts, %d indices", vCount, iCount);
+
+        // Fill VB
+        gpu_VB.Create(vCount * vSize);
+        {
+            vertGPU* pV = static_cast<vertGPU*>(gpu_VB.Map());
+            for (u32 v = 0; v < vCount; v++)
+            {
+                const Fvector& vP = D.vertices[v].P;
+                pV->x = vP.x;
+                pV->y = vP.y;
+                pV->z = vP.z;
+
+                // Use default upward normal for grass (we don't have normals in source data)
+                // For grass, this is fine since lighting is computed per-instance anyway
+                pV->nx = 0.0f;
+                pV->ny = 1.0f;
+                pV->nz = 0.0f;
+
+                pV->u = D.vertices[v].u;
+                pV->v = D.vertices[v].v;
+                pV++;
+            }
+            gpu_VB.Unmap(true);
+        }
+
+        // Fill IB
+        gpu_IB.Create(iCount * sizeof(u16));
+        {
+            u16* pI = static_cast<u16*>(gpu_IB.Map());
+            for (u32 i = 0; i < iCount; i++)
+                pI[i] = D.indices[i];
+            gpu_IB.Unmap(true);
+        }
+
+        // Create geometry
+        gpu_Geom.create(gpu_decl, gpu_VB, gpu_IB);
+
+        Msg("* [DETAILS GPU] Base geometry created successfully");
+    }
 }
 
 void CDetailManager::hw_Render(CBackend& cmd_list)
