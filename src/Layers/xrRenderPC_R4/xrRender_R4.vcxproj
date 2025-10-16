@@ -82,6 +82,7 @@
     <ClInclude Include="..\xrRenderDX11\dx11ComputeTest_Matrices.h" />
     <ClInclude Include="..\xrRenderDX11\dx11ComputeTest_SIMD.h" />
     <ClInclude Include="..\xrRender\blenders\Blender_Blur.h" />
+    <ClInclude Include="..\xrRender\blenders\Blender_Detail_GPU.h" />
     <ClInclude Include="..\xrRender\blenders\blender_dof.h" />
     <ClInclude Include="..\xrRender\blenders\blender_gasmask_drops.h" />
     <ClInclude Include="..\xrRender\blenders\blender_gasmask_dudv.h" />
@@ -254,6 +255,7 @@
     <ClCompile Include="..\xrRenderDX11\StateManager\dx11StateCache.cpp" />
     <ClCompile Include="..\xrRender\blenders\Blender_Blur.cpp" />
     <ClCompile Include="..\xrRender\blenders\Blender_BmmD_deferred.cpp" />
+    <ClCompile Include="..\xrRender\blenders\Blender_Detail_GPU.cpp" />
     <ClCompile Include="..\xrRender\blenders\Blender_detail_still_deferred.cpp" />
     <ClCompile Include="..\xrRender\blenders\blender_dof.cpp" />
     <ClCompile Include="..\xrRender\blenders\blender_gasmask_drops.cpp" />

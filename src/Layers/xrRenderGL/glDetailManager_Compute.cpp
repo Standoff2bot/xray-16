@@ -82,7 +82,7 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
     // Stub - GL path uses CPU culling
 }
 
-void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 object_id, u32 vis_id, u32 lod_id)
+void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 vis_id)
 {
     // Stub - GL path uses regular rendering
 }

@@ -127,5 +127,9 @@ void CDetailManager::hw_Unload()
         gpu_IB.Release();
     if (gpu_VB)
         gpu_VB.Release();
+
+    // Destroy GPU shader
+    if (gpu_detail_shader)
+        gpu_detail_shader.destroy();
 }
 } // namespace xray::render::RENDER_NAMESPACE

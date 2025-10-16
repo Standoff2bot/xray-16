@@ -1,8 +1,10 @@
 #include "stdafx.h"
 #include "Layers/xrRender/DetailManager.h"
+#include "Layers/xrRender/Shader.h"
 #include "xrEngine/IGame_Persistent.h"
 #include "xrEngine/Environment.h"
 #include "Layers/xrRender/BufferUtils.h"
+#include "Layers/xrRender/blenders/Blender_Detail_GPU.h"
 
 namespace xray::render::RENDER_NAMESPACE
 {
@@ -14,28 +16,43 @@ extern const int quant;
 
 void CDetailManager::hw_Load_Shaders()
 {
-    // Create shader to access constant storage
-    ref_shader S;
-    S.create("details\\set");
-    R_constant_table& T0 = *(S->E[0]->passes[0]->constants);
-    R_constant_table& T1 = *(S->E[1]->passes[0]->constants);
-    hwc_consts = T0.get("consts");
-    hwc_wave = T0.get("wave");
-    hwc_wind = T0.get("dir2D");
-    hwc_array = T0.get("array");
-    hwc_s_consts = T1.get("consts");
-    hwc_s_xform = T1.get("xform");
-    hwc_s_array = T1.get("array");
 
-    // Load GPU instancing shader (for GPU compute culling path)
-    gpu_detail_shader.create("details_lod_gpu");
+    // Load GPU instancing shader using custom blender with level-specific build_details texture
+    // Following the blender pattern from gunsl (like CBlender_Blur, CBlender_Fisheye, etc.)
+    CBlender_Detail_GPU blender_gpu;
+    gpu_detail_shader.create(&blender_gpu, "detail_gpu");
+
     if (!gpu_detail_shader)
     {
-        Msg("! [DetailManager] Failed to load GPU instancing shader 'details_lod_gpu'");
+        Msg("! [DetailManager] Failed to create GPU instancing shader");
     }
     else
     {
-        Msg("* [DetailManager] GPU instancing shader loaded successfully");
+        Msg("* [DetailManager] GPU instancing shader created successfully with blender");
+
+        // Debug: Log what texture the shader actually has
+        if (gpu_detail_shader->E[1])
+        {
+            STextureList* textures = gpu_detail_shader->E[1]->passes[0]->T._get();
+            if (textures)
+            {
+                Msg("  [DEBUG] Shader element E[1] has %u textures:", textures->size());
+                for (u32 i = 0; i < textures->size(); ++i)
+                {
+                    auto& tex_pair = (*textures)[i];
+                    if (tex_pair.second._get())
+                        Msg("    [%u] stage=%u, name='%s'", i, tex_pair.first, tex_pair.second._get()->cName.c_str());
+                }
+            }
+            else
+            {
+                Msg("! [DEBUG] Shader element E[1] has NULL texture list!");
+            }
+        }
+        else
+        {
+            Msg("! [DetailManager] Shader element E[1] is NULL!");
+        }
     }
 
     // Create GPU instancing geometry (simple base geometry)

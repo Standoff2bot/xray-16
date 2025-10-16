@@ -15,6 +15,10 @@ target_sources(xrRenderPC_R4 PRIVATE
     stdafx.cpp
     stdafx.h
     xrRender_R4.cpp
+
+    # GPU instanced detail rendering blender
+    ../xrRender/blenders/Blender_Detail_GPU.h
+    ../xrRender/blenders/Blender_Detail_GPU.cpp
 )
 
 target_include_directories(xrRenderPC_R4

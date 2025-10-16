@@ -46,6 +46,7 @@ void CRender::level_Load(IReader* fs)
             *delim = 0;
             xr_strcpy(n_tlist, delim + 1);
             Shaders[i] = Resources->Create(n_sh, n_tlist);
+            Msg("Loading Level Shader %s %s", n_sh, n_tlist);
         }
         chunk->close();
     }

@@ -561,6 +561,10 @@ HRESULT CRender::shader_compile(pcstr name, IReader* fs, pcstr pFunctionName,
                 {
 #ifdef DEBUG
                     Log("* Loading shader:", file_name);
+                    if (xr_strcmp(file_name, "c:\\games\\scop\\_appdata_\\shaders_cache_oxr\\r4\\deffer_detail_w_flat.vs\\204811110011000000010010000011123111011113281000000") == 0)
+                    {
+                        Msg("Yohji debug");
+                    }
 #endif
                     _result =
                         create_shader(pTarget, (DWORD*)file->pointer(), file->elapsed(),

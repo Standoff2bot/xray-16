@@ -238,6 +238,24 @@ void DetailComputeManager::CreateBuffers(u32 max_instances)
     }
 
     // ===========================
+    // Staging Buffer for Indirect Args Readback (debug only)
+    // ===========================
+    {
+        D3D_BUFFER_DESC desc = {};
+        desc.ByteWidth = sizeof(IndirectDrawArgs);
+        desc.Usage = D3D_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = D3D_CPU_ACCESS_READ;
+        desc.MiscFlags = 0;
+
+        ID3DBuffer* buffer = nullptr;
+        CHK_DX(device->CreateBuffer(&desc, nullptr, &buffer));
+        m_gpu.indirect_args_readback = buffer;
+
+        Msg("    Indirect args readback: %u bytes", sizeof(IndirectDrawArgs));
+    }
+
+    // ===========================
     // Debug Buffer (UAV + Readback)
     // ===========================
     {
@@ -304,6 +322,12 @@ void DetailComputeManager::DestroyBuffers()
         auto* buf = static_cast<ID3DBuffer*>(m_gpu.counter_readback);
         _RELEASE(buf);
         m_gpu.counter_readback = nullptr;
+    }
+    if (m_gpu.indirect_args_readback)
+    {
+        auto* buf = static_cast<ID3DBuffer*>(m_gpu.indirect_args_readback);
+        _RELEASE(buf);
+        m_gpu.indirect_args_readback = nullptr;
     }
 
     // Release debug buffers
@@ -452,6 +476,20 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
     u32 zeros[3] = { 0, 0, 0 };
     context->UpdateSubresource(m_gpu.counter_buffer, 0, nullptr, zeros, 0, 0);
 
+    // Clear debug buffer to 0xFFFFFFFF pattern so we can see if compute shader writes ANYTHING
+    // If we read back all 0xFF values, the shader isn't writing; if we see different values, it is
+    {
+        xr_vector<u32> clear_pattern(m_instance_count * 4, 0xFFFFFFFF);
+        D3D11_BOX box = {};
+        box.left = 0;
+        box.right = m_instance_count * 16;  // uint4 = 16 bytes
+        box.top = 0;
+        box.bottom = 1;
+        box.front = 0;
+        box.back = 1;
+        context->UpdateSubresource(m_gpu.debug_buffer, 0, &box, clear_pattern.data(), 0, 0);
+    }
+
     // Initialize indirect draw arguments with correct index count
     IndirectDrawArgs init_args = {};
     init_args.index_count = m_index_count;  // Set by DetailManager after creating GPU geometry
@@ -520,7 +558,7 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
 // Indirect Rendering
 // ===========================
 
-void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 object_id, u32 vis_id, u32 lod_id)
+void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 vis_id)
 {
     if (!m_initialized || m_instance_count == 0)
         return;
@@ -545,10 +583,10 @@ void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 object_id, u32
 
     // Debug: Log first indirect draw call per frame
     static u32 last_frame = 0;
-    if (Device.dwFrame != last_frame && vis_id == 0)
+    if (Device.dwFrame != last_frame && !(Device.dwFrame % 1000) && vis_id == 0)
     {
         // Read back indirect args to see what we're actually drawing
-        ID3DBuffer* readback_buf = static_cast<ID3DBuffer*>(m_gpu.counter_readback);
+        ID3DBuffer* readback_buf = static_cast<ID3DBuffer*>(m_gpu.indirect_args_readback);
         context->CopyResource(readback_buf, m_gpu.indirect_args[vis_id]);
 
         D3D11_MAPPED_SUBRESOURCE mapped;
@@ -597,6 +635,10 @@ void DetailComputeManager::ReadDebugData()
 #if defined(USE_DX11)
     auto* context = HW.get_context(CHW::IMM_CTX_ID);
 
+    // Force GPU to finish all pending work before reading debug data
+    // This ensures the compute shader has actually written to the debug buffer
+    context->Flush();
+
     // Copy debug buffer from GPU to staging
     auto* readback = static_cast<ID3DBuffer*>(m_gpu.debug_readback);
     context->CopyResource(readback, m_gpu.debug_buffer);
@@ -624,6 +666,14 @@ void DetailComputeManager::ReadDebugData()
 
     // Sample every Nth instance to avoid too much processing
     const u32 sample_stride = (m_instance_count > 1000) ? (m_instance_count / 1000) : 1;
+
+    // Debug: Print first 10 entries to see what's actually in the buffer
+    Msg("  [DEBUG] First 10 debug entries:");
+    for (u32 i = 0; i < _min(10u, m_instance_count); i++)
+    {
+        Msg("    [%u]: idx=%u, cull=%u, vis=%u, dist=%u",
+            i, data[i].instance_idx, data[i].cull_reason, data[i].vis_id, data[i].dist_sqr);
+    }
 
     for (u32 i = 0; i < m_instance_count; i += sample_stride)
     {

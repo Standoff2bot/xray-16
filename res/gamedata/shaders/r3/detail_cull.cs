@@ -93,7 +93,7 @@ RWByteAddressBuffer g_indirect_args_wave1 : register(u5);
 RWByteAddressBuffer g_indirect_args_wave2 : register(u6);
 
 // Debug output buffer (optional - for debugging only)
-// Format: uint4 = (instance_idx, cull_reason, vis_id, padding)
+// Format: uint4 = (instance_idx, cull_reason, vis_id, dist_sqr)
 // cull_reason: 0=visible, 1=distance, 2=frustum, 3=ssa
 RWStructuredBuffer<uint4> g_debug_output : register(u7);
 
@@ -167,6 +167,9 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
         g_indirect_args_wave2.Store(8, 0);     // start_index
         g_indirect_args_wave2.Store(12, 0);    // base_vertex
         g_indirect_args_wave2.Store(16, 0);    // start_instance
+
+        // DIAGNOSTIC: Write test pattern from thread 0 to verify UAV binding works
+        g_debug_output[0] = uint4(0xDEADBEEF, 0xCAFEBABE, 0x12345678, 0x87654321);
     }
 
     // Ensure all threads wait for initialization
@@ -189,7 +192,7 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
     if (dist_sqr > g_fade_limit_sqr)
     {
         // Debug: culled by distance
-        g_debug_output[instance_idx] = uint4(instance_idx, 1, inst.vis_id, 0);
+        g_debug_output[instance_idx] = uint4(instance_idx, 1, inst.vis_id, asuint(dist_sqr));
         return;  // Too far, cull
     }
 
@@ -201,7 +204,7 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
     if (!FrustumCullSphere(inst.position, world_radius))
     {
         // Debug: culled by frustum
-        g_debug_output[instance_idx] = uint4(instance_idx, 2, inst.vis_id, 0);
+        g_debug_output[instance_idx] = uint4(instance_idx, 2, inst.vis_id, asuint(dist_sqr));
         return;  // Outside frustum, cull
     }
 
@@ -212,7 +215,7 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
     if (ssa < g_r_ssa_discard)
     {
         // Debug: culled by SSA
-        g_debug_output[instance_idx] = uint4(instance_idx, 3, inst.vis_id, 0);
+        g_debug_output[instance_idx] = uint4(instance_idx, 3, inst.vis_id, asuint(dist_sqr));
         return;  // Too small, cull
     }
 

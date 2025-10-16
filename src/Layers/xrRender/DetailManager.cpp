@@ -287,6 +287,9 @@ void CDetailManager::BuildGPUInstanceList()
     // Begin building instance list
     m_compute_manager->BeginInstanceUpdate();
 
+    u32 slot_count = 0;
+    u32 non_empty_slots = 0;
+
     // Iterate through all cached slots and build GPU instance list
     for (u32 _mz = 0; _mz < dm_cache1_line; _mz++)
     {
@@ -302,8 +305,11 @@ void CDetailManager::BuildGPUInstanceList()
                 Slot* PS = *MS.slots[_i];
                 Slot& S = *PS;
 
+                slot_count++;
                 if (S.empty)
                     continue;
+
+                non_empty_slots++;
 
                 // Process all objects in this slot
                 for (int sp_id = 0; sp_id < dm_obj_in_slot; sp_id++)
@@ -335,6 +341,20 @@ void CDetailManager::BuildGPUInstanceList()
 
     // Finish building instance list
     m_compute_manager->EndInstanceUpdate();
+
+    // Debug: Log instance count changes
+    static u32 last_instance_count = 0;
+    static u32 last_non_empty_slots = 0;
+    u32 current_count = m_compute_manager->GetInstanceCount();
+
+    if (current_count != last_instance_count || non_empty_slots != last_non_empty_slots)
+    {
+        Msg("* [GPU Instances] Total: %u (changed from %u), Non-empty slots: %u (changed from %u), Camera pos: (%.1f, %.1f, %.1f)",
+            current_count, last_instance_count, non_empty_slots, last_non_empty_slots,
+            Device.vCameraPosition.x, Device.vCameraPosition.y, Device.vCameraPosition.z);
+        last_instance_count = current_count;
+        last_non_empty_slots = non_empty_slots;
+    }
 }
 
 void CDetailManager::UpdateVisibleM()
@@ -542,35 +562,25 @@ void CDetailManager::Render(CBackend& cmd_list)
         }
         else
         {
-            // Loop through all object types and visibility lists
-            for (u32 object_id = 0; object_id < objects.size(); object_id++)
+            // GPU path renders all objects together in 3 draws (one per vis_id)
+            // Script shader details_lod_gpu.s uses "normal" function which maps to E[1]
+            // (normal→E[0]/E[1], l_point→E[2], l_special→E[4])
+            u32 shader_element = 1;
+
+            if (!gpu_detail_shader->E[shader_element])
             {
-                CDetail& Object = *objects[object_id];
+                Msg("! [DetailManager] GPU shader element %u not found", shader_element);
+                return;
+            }
 
-                // Render each visibility list (still=0, wave1=1, wave2=2)
-                for (u32 vis_id = 0; vis_id < 3; vis_id++)
-                {
-                    // Use LOD0 for GPU path (simpler geometry)
-                    u32 lod_id = 4;
+            // Set the shader element BEFORE rendering
+            cmd_list.set_Element(gpu_detail_shader->E[shader_element], 0);
+            cmd_list.apply_lmaterial();
 
-                    // Set GPU instancing shader element
-                    if (gpu_detail_shader->E[lod_id])
-                    {
-                        cmd_list.set_Element(gpu_detail_shader->E[lod_id], 0);
-
-                        // Set texture from object's material
-                        if (Object.shader && Object.shader->E[lod_id])
-                        {
-                            cmd_list.apply_lmaterial();
-                        }
-
-                        // TODO: Set constants (wave, wind params, etc.) - for now, GPU path uses defaults
-                        // The actual animation will need to be handled in the vertex shader
-
-                        // Execute indirect draw
-                        m_compute_manager->RenderIndirect(cmd_list, object_id, vis_id, lod_id);
-                    }
-                }
+            // Render each visibility list (still=0, wave1=1, wave2=2)
+            for (u32 vis_id = 0; vis_id < 3; vis_id++)
+            {
+                m_compute_manager->RenderIndirect(cmd_list, vis_id);
             }
         }
     }

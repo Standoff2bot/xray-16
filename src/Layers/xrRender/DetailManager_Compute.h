@@ -118,7 +118,7 @@ public:
 
     // Culling & rendering
     void DispatchCulling(CBackend& cmd_list, const Fmatrix& view_proj);
-    void RenderIndirect(CBackend& cmd_list, u32 object_id, u32 vis_id, u32 lod_id);
+    void RenderIndirect(CBackend& cmd_list, u32 vis_id);
 
     // Statistics
     struct Stats
@@ -160,7 +160,8 @@ private:
         ref_cs cull_shader;                            // Frustum culling compute shader
 
         // Staging for readback (debug/stats only)
-        void* counter_readback;  // ID3DBuffer* for readback staging
+        void* counter_readback;        // ID3DBuffer* for counter readback staging
+        void* indirect_args_readback;  // ID3DBuffer* for indirect args readback staging
 
         // Debug buffers (optional - for debugging only)
         ID3DBuffer* debug_buffer;                      // Debug output buffer
