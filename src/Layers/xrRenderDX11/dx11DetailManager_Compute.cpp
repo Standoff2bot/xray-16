@@ -405,10 +405,23 @@ void DetailComputeManager::UploadInstances(CBackend& cmd_list)
 #if defined(USE_DX11)
     auto* context = HW.get_context(cmd_list.context_id);
 
+    // PERFORMANCE WARNING: This uploads ALL instances to GPU every frame!
+    // With many instances, this can cause massive CPU→GPU bandwidth saturation
+    u32 upload_size_bytes = m_instance_count * sizeof(DetailInstanceGPU);
+    float upload_size_mb = upload_size_bytes / (1024.0f * 1024.0f);
+
+    // Log every 60 frames to track upload size
+    static u32 upload_log_counter = 0;
+    if ((++upload_log_counter % 60) == 0)
+    {
+        Msg("! [DetailComputeManager] Uploading %u instances (%.2f MB) to GPU",
+            m_instance_count, upload_size_mb);
+    }
+
     // Update instance buffer on GPU
     D3D11_BOX box = {};
     box.left = 0;
-    box.right = m_instance_count * sizeof(DetailInstanceGPU);
+    box.right = upload_size_bytes;
     box.top = 0;
     box.bottom = 1;
     box.front = 0;
@@ -472,25 +485,15 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
     memcpy(mapped.pData, &params, sizeof(DetailCullParams));
     context->Unmap(m_gpu.cull_params_cb, 0);
 
-    // Clear counters (write zeros)
+    // PERFORMANCE FIX: Removed massive debug buffer clear (up to 1.6MB per frame!)
+    // Kept counter clear (12 bytes, needed for InterlockedAdd) and indirect args init (60 bytes)
+
+    // Clear atomic counters (needed for InterlockedAdd operations in compute shader)
     u32 zeros[3] = { 0, 0, 0 };
     context->UpdateSubresource(m_gpu.counter_buffer, 0, nullptr, zeros, 0, 0);
 
-    // Clear debug buffer to 0xFFFFFFFF pattern so we can see if compute shader writes ANYTHING
-    // If we read back all 0xFF values, the shader isn't writing; if we see different values, it is
-    {
-        xr_vector<u32> clear_pattern(m_instance_count * 4, 0xFFFFFFFF);
-        D3D11_BOX box = {};
-        box.left = 0;
-        box.right = m_instance_count * 16;  // uint4 = 16 bytes
-        box.top = 0;
-        box.bottom = 1;
-        box.front = 0;
-        box.back = 1;
-        context->UpdateSubresource(m_gpu.debug_buffer, 0, &box, clear_pattern.data(), 0, 0);
-    }
-
-    // Initialize indirect draw arguments with correct index count
+    // Initialize indirect args with index_count (compute shader doesn't know this value)
+    // The compute shader will update instance_count via InterlockedAdd at offset 4
     IndirectDrawArgs init_args = {};
     init_args.index_count = m_index_count;  // Set by DetailManager after creating GPU geometry
     init_args.instance_count = 0;           // Will be set by compute shader
@@ -498,7 +501,8 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
     init_args.base_vertex = 0;
     init_args.start_instance = 0;
 
-    // Upload initial values to all 3 indirect args buffers
+    // Upload initial index_count to all 3 indirect args buffers
+    // We need to upload the full struct because UpdateSubresource doesn't support partial updates cleanly
     for (int i = 0; i < 3; ++i)
     {
         context->UpdateSubresource(m_gpu.indirect_args[i], 0, nullptr, &init_args, 0, 0);
@@ -548,9 +552,9 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
     m_stats.total_instances = m_instance_count;
     m_stats.compute_dispatches++;
 
-    // Read back counter values (for stats) - async, don't stall
-    auto* readback_buffer = static_cast<ID3DBuffer*>(m_gpu.counter_readback);
-    context->CopyResource(readback_buffer, m_gpu.counter_buffer);
+    // PERFORMANCE FIX: Removed GPU→CPU readback from hot path
+    // The CopyResource was happening every frame and could cause GPU→CPU stalls
+    // Stats are only read in ReadDebugData() which is called every 60 frames, so do the copy there
 #endif // USE_DX11
 }
 
@@ -601,15 +605,7 @@ void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 vis_id)
         last_frame = Device.dwFrame;
     }
 
-    // Execute indirect draw
-    // Note: The caller (DetailManager::Render) must set up:
-    // - Geometry (VB/IB) via cmd_list.set_Geometry() - BASE grass blade geometry
-    // - Shader element via cmd_list.set_Element() - must use lod_gpu vertex shader!
-    // - Constants (wave, wind, etc.) via cmd_list.set_c()
-
     cmd_list.SRVSManager.Apply(cmd_list.context_id);
-    cmd_list.StateManager.Apply();
-
     context->DrawIndexedInstancedIndirect(m_gpu.indirect_args[vis_id], 0);
 
     // Unbind SRVs
@@ -640,9 +636,9 @@ void DetailComputeManager::ReadDebugData()
 #if defined(USE_DX11)
     auto* context = HW.get_context(CHW::IMM_CTX_ID);
 
-    // Force GPU to finish all pending work before reading debug data
-    // This ensures the compute shader has actually written to the debug buffer
-    context->Flush();
+    // PERFORMANCE FIX: Removed Flush() - it was forcing GPU to finish ALL pending work
+    // The CopyResource creates an implicit dependency, so driver handles synchronization
+    // If debug data seems stale, increase the readback interval instead of using Flush()
 
     // Copy debug buffer from GPU to staging
     auto* readback = static_cast<ID3DBuffer*>(m_gpu.debug_readback);

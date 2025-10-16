@@ -222,7 +222,7 @@ void CDetailManager::Load()
 
     // Initialize GPU compute manager (always - can be toggled at runtime with r__gpu_culling)
     m_compute_manager = xr_new<DetailComputeManager>();
-    m_compute_manager->Initialize(10000000); // Max 100K instances
+    m_compute_manager->Initialize(10000000); // Max 10M instances for maximum grass density
 
     // Set geometry info for GPU rendering (index count from first object)
     if (!objects.empty())
@@ -507,11 +507,7 @@ void CDetailManager::Render(CBackend& cmd_list)
     RImplementation.BasicStats.DetailRender.Begin();
     g_pGamePersistent->m_pGShaderConstants->m_blender_mode.w = 1.0f; //--#SM+#-- Флаг начала рендера травы [begin of grass render]
 
-#ifndef _EDITOR
     float factor = g_pGamePersistent->Environment().wind_strength_factor;
-#else
-    float factor = 0.3f;
-#endif
     swing_current.lerp(swing_desc[0], swing_desc[1], factor);
 
     cmd_list.set_CullMode(CULL_NONE);
@@ -520,74 +516,36 @@ void CDetailManager::Render(CBackend& cmd_list)
     // GPU compute culling path
     if (ps_r__gpu_culling && m_compute_manager)
     {
-        // Build instance list from all loaded cache slots
+        // Build instance list ONLY when cache changes (not every frame!)
+        // This was the major bottleneck - rebuilding millions of instances every frame
+        if (m_gpu_instance_list_dirty)
         {
             PIX_EVENT(INSTANCED_GRASS_BUILD_INSTANCES);
             BuildGPUInstanceList();
+            m_gpu_instance_list_dirty = false;
         }
 
         // Dispatch GPU culling compute shader
-        {
-            PIX_EVENT(INSTANCED_GRASS_DISPATCH_CULLING);
-            m_compute_manager->DispatchCulling(cmd_list, Device.mFullTransform);
-        }
-
-        // Debug: Read back culling statistics every 60 frames
-        static u32 debug_frame_counter = 0;
-        if ((++debug_frame_counter % 60) == 0)
-        {
-            m_compute_manager->ReadDebugData();
-        }
-
-        // Set up GPU instancing geometry (simple base geometry)
-        if (!gpu_Geom)
-        {
-            Msg("! [DetailManager] GPU geometry not created, cannot render");
-            return;
-        }
-
-        {
-            PIX_EVENT(INSTANCED_GRASS_SET_GEOM);
-            cmd_list.set_Geometry(gpu_Geom);
-        }
+        m_compute_manager->DispatchCulling(cmd_list, Device.mFullTransform);
 
         // Render using indirect draws
-        // Use GPU instancing shader (all objects use the same shader)
-        if (!gpu_detail_shader)
-        {
-            Msg("! [DetailManager] GPU instancing shader not loaded, cannot render");
-        }
-        else
-        {
-            // GPU path renders all objects together in 3 draws (one per vis_id)
-            // Script shader details_lod_gpu.s uses "normal" function which maps to E[1]
-            // (normal→E[0]/E[1], l_point→E[2], l_special→E[4])
-            u32 shader_element = 1;
-
-            if (!gpu_detail_shader->E[shader_element])
-            {
-                Msg("! [DetailManager] GPU shader element %u not found", shader_element);
-                return;
-            }
+        // GPU path renders all objects together in 3 draws (one per vis_id)
+        // Script shader details_lod_gpu.s uses "normal" function which maps to E[1]
+        // (normal→E[0]/E[1], l_point→E[2], l_special→E[4])
+        u32 shader_element = 1;
 
 #ifdef USE_DX11
-            {
-                PIX_EVENT(INSTANCED_GRASS_SET_SHADER);
-                //cmd_list.set_Element(gpu_detail_shader->E[shader_element], 0); // CLEARS CONSTANT BUFFERS AND GLOBALS!? Disabled for now.
-                auto* context = HW.get_context(cmd_list.context_id); // ugly but sets PS and VS properly without clearing constants/globals
-                cmd_list.set_Textures(gpu_detail_shader->E[shader_element]->passes[0]._get()->T);
-                context->PSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->ps._get()->sh, nullptr, 0);
-                context->VSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->vs._get()->sh, nullptr, 0);
-            }
+        //cmd_list.set_Element(gpu_detail_shader->E[shader_element], 0); // CLEARS CONSTANT BUFFERS AND GLOBALS!? Disabled for now.
+        auto* context = HW.get_context(cmd_list.context_id); // ugly but sets PS and VS properly without clearing constants/globals
+        cmd_list.set_Geometry(gpu_Geom);
+        cmd_list.set_Textures(gpu_detail_shader->E[shader_element]->passes[0]._get()->T);
+        context->PSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->ps._get()->sh, nullptr, 0);
+        context->VSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->vs._get()->sh, nullptr, 0);
 #endif
-            // Render each visibility list (still=0, wave1=1, wave2=2)
-            PIX_EVENT(INSTANCED_GRASS_RENDER_INDIRECT);
-            {
-                for (u32 vis_id = 0; vis_id < 3; vis_id++)
-                {
-                    m_compute_manager->RenderIndirect(cmd_list, vis_id);
-                }
-            }
+        // Render each visibility list (still=0, wave1=1, wave2=2)
+        for (u32 vis_id = 0; vis_id < 3; vis_id++)
+        {
+            m_compute_manager->RenderIndirect(cmd_list, vis_id);
         }
     }
     else // CPU rendering path

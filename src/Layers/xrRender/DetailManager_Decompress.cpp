@@ -300,5 +300,8 @@ gray255[3]						=	255.f*float(c_pal->a3)/15.f;
     D.vis.clear();
     D.vis.box.set(Bounds);
     D.vis.box.getsphere(D.vis.sphere.P, D.vis.sphere.R);
+
+    // Mark GPU instance list as dirty - cache changed, need to rebuild on next render
+    m_gpu_instance_list_dirty = true;
 }
 } // namespace xray::render::RENDER_NAMESPACE

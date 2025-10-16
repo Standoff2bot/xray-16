@@ -241,6 +241,7 @@ public:
 
     /// GPU compute culling
     DetailComputeManager* m_compute_manager{};
+    bool m_gpu_instance_list_dirty{true}; // Dirty flag: rebuild instance list when cache changes
 
     void DispatchMTCalc();
 
