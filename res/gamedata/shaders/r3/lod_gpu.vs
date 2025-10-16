@@ -13,6 +13,10 @@ struct vv
 
 #include "common.h"
 
+float4x4 m_view;
+float4x4 m_project;
+float4x4 m_viewproject; 
+
 // Instance data structure (matches C++ DetailInstanceGPU - 112 bytes)
 struct DetailInstanceGPU
 {

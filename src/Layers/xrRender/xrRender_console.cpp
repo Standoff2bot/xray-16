@@ -980,7 +980,7 @@ void xrRender_initconsole()
     //CMD4(CCC_Float, "r__geometry_lod_pow", &ps_r__LOD_Power, 0, 2);
 
     CMD4(CCC_Float, "r__detail_density", &ps_current_detail_density/*&ps_r__Detail_density*/, 0.1f, 0.99f);
-    CMD4(CCC_detail_radius, "r__detail_radius", &ps_r__detail_radius, 49, 300);
+    CMD4(CCC_detail_radius, "r__detail_radius", &ps_r__detail_radius, 49, 30000);
     CMD4(CCC_Float, "r__detail_height", &ps_r__Detail_height, 1, 2);
     CMD4(CCC_Integer, "r__gpu_culling", &ps_r__gpu_culling, 0, 1); // Toggle GPU-driven culling
 

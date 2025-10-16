@@ -222,7 +222,7 @@ void CDetailManager::Load()
 
     // Initialize GPU compute manager (always - can be toggled at runtime with r__gpu_culling)
     m_compute_manager = xr_new<DetailComputeManager>();
-    m_compute_manager->Initialize(100000); // Max 100K instances
+    m_compute_manager->Initialize(10000000); // Max 100K instances
 
     // Set geometry info for GPU rendering (index count from first object)
     if (!objects.empty())
@@ -342,20 +342,6 @@ void CDetailManager::BuildGPUInstanceList()
 
     // Finish building instance list
     m_compute_manager->EndInstanceUpdate();
-
-    // Debug: Log instance count changes
-    static u32 last_instance_count = 0;
-    static u32 last_non_empty_slots = 0;
-    u32 current_count = m_compute_manager->GetInstanceCount();
-
-    if (current_count != last_instance_count || non_empty_slots != last_non_empty_slots)
-    {
-        Msg("* [GPU Instances] Total: %u (changed from %u), Non-empty slots: %u (changed from %u), Camera pos: (%.1f, %.1f, %.1f)",
-            current_count, last_instance_count, non_empty_slots, last_non_empty_slots,
-            Device.vCameraPosition.x, Device.vCameraPosition.y, Device.vCameraPosition.z);
-        last_instance_count = current_count;
-        last_non_empty_slots = non_empty_slots;
-    }
 }
 
 void CDetailManager::UpdateVisibleM()
@@ -535,10 +521,16 @@ void CDetailManager::Render(CBackend& cmd_list)
     if (ps_r__gpu_culling && m_compute_manager)
     {
         // Build instance list from all loaded cache slots
-        BuildGPUInstanceList();
+        {
+            PIX_EVENT(INSTANCED_GRASS_BUILD_INSTANCES);
+            BuildGPUInstanceList();
+        }
 
         // Dispatch GPU culling compute shader
-        m_compute_manager->DispatchCulling(cmd_list, Device.mFullTransform);
+        {
+            PIX_EVENT(INSTANCED_GRASS_DISPATCH_CULLING);
+            m_compute_manager->DispatchCulling(cmd_list, Device.mFullTransform);
+        }
 
         // Debug: Read back culling statistics every 60 frames
         static u32 debug_frame_counter = 0;
@@ -553,7 +545,11 @@ void CDetailManager::Render(CBackend& cmd_list)
             Msg("! [DetailManager] GPU geometry not created, cannot render");
             return;
         }
-        cmd_list.set_Geometry(gpu_Geom);
+
+        {
+            PIX_EVENT(INSTANCED_GRASS_SET_GEOM);
+            cmd_list.set_Geometry(gpu_Geom);
+        }
 
         // Render using indirect draws
         // Use GPU instancing shader (all objects use the same shader)
@@ -574,13 +570,23 @@ void CDetailManager::Render(CBackend& cmd_list)
                 return;
             }
 
-            // Set the shader element BEFORE rendering
-            cmd_list.set_Element(gpu_detail_shader->E[shader_element], 0);
-
-            // Render each visibility list (still=0, wave1=1, wave2=2)
-            for (u32 vis_id = 0; vis_id < 3; vis_id++)
+#ifdef USE_DX11
             {
-                m_compute_manager->RenderIndirect(cmd_list, vis_id);
+                PIX_EVENT(INSTANCED_GRASS_SET_SHADER);
+                //cmd_list.set_Element(gpu_detail_shader->E[shader_element], 0); // CLEARS CONSTANT BUFFERS AND GLOBALS!? Disabled for now.
+                auto* context = HW.get_context(cmd_list.context_id); // ugly but sets PS and VS properly without clearing constants/globals
+                cmd_list.set_Textures(gpu_detail_shader->E[shader_element]->passes[0]._get()->T);
+                context->PSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->ps._get()->sh, nullptr, 0);
+                context->VSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->vs._get()->sh, nullptr, 0);
+            }
+#endif
+            // Render each visibility list (still=0, wave1=1, wave2=2)
+            PIX_EVENT(INSTANCED_GRASS_RENDER_INDIRECT);
+            {
+                for (u32 vis_id = 0; vis_id < 3; vis_id++)
+                {
+                    m_compute_manager->RenderIndirect(cmd_list, vis_id);
+                }
             }
         }
     }
