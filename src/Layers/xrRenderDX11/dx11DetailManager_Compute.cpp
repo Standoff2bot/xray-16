@@ -403,7 +403,7 @@ void DetailComputeManager::UploadInstances(CBackend& cmd_list)
         return;
 
 #if defined(USE_DX11)
-    auto* context = HW.get_context(CHW::IMM_CTX_ID);
+    auto* context = HW.get_context(cmd_list.context_id);
 
     // Update instance buffer on GPU
     D3D11_BOX box = {};
@@ -441,7 +441,7 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
         return;
 
 #if defined(USE_DX11)
-    auto* context = HW.get_context(CHW::IMM_CTX_ID);
+    auto* context = HW.get_context(cmd_list.context_id);
 
     // Upload instances if needed
     UploadInstances(cmd_list);
@@ -570,7 +570,8 @@ void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 vis_id)
     }
 
 #if defined(USE_DX11)
-    auto* context = HW.get_context(CHW::IMM_CTX_ID);
+
+    auto* context = HW.get_context(cmd_list.context_id);
 
     // Bind shader resources for GPU instanced rendering
     // t0 = visible_indices[vis_id] - maps SV_InstanceID to actual instance index
@@ -605,6 +606,10 @@ void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 vis_id)
     // - Geometry (VB/IB) via cmd_list.set_Geometry() - BASE grass blade geometry
     // - Shader element via cmd_list.set_Element() - must use lod_gpu vertex shader!
     // - Constants (wave, wind, etc.) via cmd_list.set_c()
+
+    cmd_list.SRVSManager.Apply(cmd_list.context_id);
+    cmd_list.StateManager.Apply();
+
     context->DrawIndexedInstancedIndirect(m_gpu.indirect_args[vis_id], 0);
 
     // Unbind SRVs

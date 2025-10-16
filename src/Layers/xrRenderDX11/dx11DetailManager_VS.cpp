@@ -16,11 +16,25 @@ extern const int quant;
 
 void CDetailManager::hw_Load_Shaders()
 {
+    // Create shader to access constant storage
+    ref_shader S;
+    S.create("details\\set");
+    R_constant_table& T0 = *(S->E[0]->passes[0]->constants);
+    R_constant_table& T1 = *(S->E[1]->passes[0]->constants);
+    hwc_consts = T0.get("consts");
+    hwc_wave = T0.get("wave");
+    hwc_wind = T0.get("dir2D");
+    hwc_array = T0.get("array");
+    hwc_s_consts = T1.get("consts");
+    hwc_s_xform = T1.get("xform");
+    hwc_s_array = T1.get("array");
 
     // Load GPU instancing shader using custom blender with level-specific build_details texture
     // Following the blender pattern from gunsl (like CBlender_Blur, CBlender_Fisheye, etc.)
-    CBlender_Detail_GPU blender_gpu;
-    gpu_detail_shader.create(&blender_gpu, "detail_gpu");
+    // Get level name for build_details texture path
+    extern ENGINE_API IGame_Level* g_pGameLevel;
+    b_detail_gpu = xr_new<CBlender_Detail_GPU>();
+    gpu_detail_shader.create(b_detail_gpu, nullptr, "build_details");
 
     if (!gpu_detail_shader)
     {

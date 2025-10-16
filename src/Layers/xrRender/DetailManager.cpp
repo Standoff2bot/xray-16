@@ -100,6 +100,7 @@ CDetailManager::CDetailManager() : xrc("detail manager")
     soft_Geom = nullptr;
     hw_Geom = nullptr;
     hw_BatchSize = 0;
+    b_detail_gpu = nullptr;
     m_time_rot_1 = 0;
     m_time_rot_2 = 0;
     m_time_pos = 0;
@@ -575,7 +576,6 @@ void CDetailManager::Render(CBackend& cmd_list)
 
             // Set the shader element BEFORE rendering
             cmd_list.set_Element(gpu_detail_shader->E[shader_element], 0);
-            cmd_list.apply_lmaterial();
 
             // Render each visibility list (still=0, wave1=1, wave2=2)
             for (u32 vis_id = 0; vis_id < 3; vis_id++)

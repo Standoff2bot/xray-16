@@ -207,6 +207,7 @@ public:
     ref_constant hwc_s_array;
 
     // GPU instancing shader (for GPU compute culling path)
+    IBlender* b_detail_gpu; // Blender for GPU instancing
     ref_shader gpu_detail_shader;
 
     void hw_Load();

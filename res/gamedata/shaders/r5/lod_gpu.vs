@@ -1,14 +1,17 @@
 // lod_gpu.vs - GPU instanced grass rendering
 // Uses compute shader culled instance list for indirect drawing
-#include "common.h"
 
-// Simple base vertex format (one grass blade geometry)
+// NOTE: Define vertex input BEFORE including common.h to avoid conflicts
+// Simple base vertex format (one grass blade geometry) - 32 bytes total
+// IMPORTANT: Semantic indices must match C++ D3D11_INPUT_ELEMENT_DESC exactly!
 struct vv
 {
-	float3 pos		: POSITION;		// Local space position
-	float3 normal	: NORMAL;		// Local space normal
-	float2 tc		: TEXCOORD0;	// Texture coordinates
+	float3 pos		: POSITION0;	// Local space position (12 bytes) - offset 0
+	float3 normal	: NORMAL0;		// Local space normal (12 bytes) - offset 12
+	float2 tc		: TEXCOORD0;	// Texture coordinates (8 bytes) - offset 24
 };
+
+#include "common.h"
 
 // Instance data structure (matches C++ DetailInstanceGPU - 112 bytes)
 struct DetailInstanceGPU
@@ -40,12 +43,12 @@ struct DetailInstanceGPU
     float fade_distance_sqr;
 };
 
-// Output to pixel shader
+// Output to pixel shader - matches p_flat struct
 struct vf
 {
-	float3	Pe		: TEXCOORD0;
- 	float2 	tc		: TEXCOORD1;
-	float4 	af		: COLOR1;		// alpha&factor
+	float2	tc		: TEXCOORD0;	// Texture coordinates (matches p_flat.tcdh)
+	float4	position: TEXCOORD1;	// World position + hemi (matches p_flat.position)
+	float3	N		: TEXCOORD2;	// World-space normal (matches p_flat.N)
 	float4 	hpos	: SV_Position;
 };
 
@@ -78,22 +81,26 @@ vf main(vv I, uint instance_id : SV_InstanceID)
 	float3 local_pos = mul(rot_matrix, I.pos * inst.scale);
 	float4 world_pos = float4(local_pos + inst.position, 1.0);
 
-	// Transform normal
+	// Transform normal to world space
 	float3 world_normal = normalize(mul(rot_matrix, I.normal));
 
 	// Output transformed position
 	o.hpos = mul(m_VP, world_pos);
-	o.Pe = mul(m_V, world_pos);
+
+	// Position in view space (for pixel shader)
+	float3 view_pos = mul(m_V, world_pos);
 
 	// Texture coordinates
 	o.tc = I.tc;
 
 	// Lighting (use instance data)
 	float h = inst.c_hemi * L_SCALE;
-	float sun = inst.c_sun;
-	float alpha = 1.0; // TODO: compute alpha from distance
 
-	o.af = float4(h, h, alpha, 0.5); // factor = 0.5 for mid-LOD
+	// Pack position + hemi into TEXCOORD1 (matches p_flat.position)
+	o.position = float4(view_pos, h);
+
+	// Transform normal to view space (matches p_flat.N expectation)
+	o.N = normalize(mul((float3x3)m_V, world_normal));
 
 	return o;
 }

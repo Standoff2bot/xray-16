@@ -7,7 +7,7 @@ namespace xray::render::RENDER_NAMESPACE
 {
 CBlender_Detail_GPU::CBlender_Detail_GPU()
 {
-    description.CLS = B_DETAIL; // Reuse B_DETAIL class ID
+    description.CLS = 0; // Reuse B_DETAIL class ID
 }
 
 LPCSTR CBlender_Detail_GPU::getComment()
@@ -20,20 +20,8 @@ void CBlender_Detail_GPU::Compile(CBlender_Compile& C)
 {
     IBlender::Compile(C);
 
-    // Get current level name to construct texture path
-    extern ENGINE_API IGame_Level* g_pGameLevel;
-    string256 texture_path;
-
-    if (g_pGameLevel)
-    {
-        shared_str level_name = g_pGameLevel->name();
-        xr_sprintf(texture_path, sizeof(texture_path), "levels\\%s\\build_details", level_name.c_str());
-    }
-    else
-    {
-        // Fallback if level not loaded yet
-        xr_strcpy(texture_path, "build_details");
-    }
+    VERIFY(!C.L_textures.empty());
+    LPCSTR texture_path = C.L_textures[0].c_str();
 
     bool bUseATOC = (RImplementation.o.msaa_alphatest == CRender::MSAA_ATEST_DX10_0_ATOC);
 
