@@ -4,18 +4,12 @@
 #include "GPUGrassData.h"
 
 #include "xrCommon/xr_map.h"
-#include "xrCDB/Intersect.hpp"
-#include "xrCDB/xrXRC.h"
-#include "xrEngine/IGame_Level.h"
-#include "xrMaterialSystem/GameMtlLib.h"
 #include "xrCore/Threading/ParallelFor.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cfloat>
 #include <cstring>
 #include <limits>
-
-extern ENGINE_API IGame_Level* g_pGameLevel;
 
 namespace xray::render::RENDER_NAMESPACE::gpu_grass
 {
@@ -328,9 +322,6 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
                 result.asset.slot_table[slot_table_index] = slot_ref;
                 slot_tile_indices[slot_ref.slot_index] = static_cast<u32>(idx);
 
-                const u32 lut_index = slot_ref.slot_local_z * ctx.tile_span + slot_ref.slot_local_x;
-                slot_lookup[lut_index] = static_cast<int>(slot_table_index);
-
                 int sx, sz;
                 ctx.header->slot_x_z(slot_ref.slot_index, sx, sz);
 
@@ -348,6 +339,11 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
                 const float slot_top = slot_base + slot.r_yheight();
                 tile_min_y = std::min(tile_min_y, slot_base);
                 tile_max_y = std::max(tile_max_y, slot_top);
+
+                const u32 lut_index = slot_ref.slot_local_z * ctx.tile_span + slot_ref.slot_local_x;
+                slot_lookup[lut_index] = static_cast<int>(slot_table_index);
+                slot_min[lut_index] = std::min(slot_min[lut_index], slot_base);
+                slot_max[lut_index] = std::max(slot_max[lut_index], slot_top);
 
                 const u32 texel_index = slot_ref.slot_local_z * ctx.tile_span + slot_ref.slot_local_x;
                 for (u32 obj = 0; obj < ctx.palette_layers; ++obj)
@@ -379,101 +375,24 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
                 tile_max_y += 5.f;
             }
 
-            xr_vector<u16> height_quant(ctx.tile_sample_count, QuantizeHeight(tile_min_y));
+            xr_vector<u16> height_quant(ctx.tile_sample_count);
             float local_min_height = FLT_MAX;
             float local_max_height = -FLT_MAX;
-            u32 valid_samples = 0;
-            if (g_pGameLevel)
+
+            for (u32 z = 0; z < ctx.tile_resolution; ++z)
             {
-                const CDB::MODEL* model = g_pGameLevel->ObjectSpace.GetStaticModel();
-                const CDB::TRI* tris = g_pGameLevel->ObjectSpace.GetStaticTris();
-                const Fvector* verts = g_pGameLevel->ObjectSpace.GetStaticVerts();
-
-                if (model && tris && verts)
+                for (u32 x = 0; x < ctx.tile_resolution; ++x)
                 {
-                    Fbox tile_bounds;
-                    const float tile_origin_x = static_cast<float>(key.first * ctx.tile_span) * DETAIL_SLOT_SIZE;
-                    const float tile_origin_z = static_cast<float>(key.second * ctx.tile_span) * DETAIL_SLOT_SIZE;
-                    tile_bounds.vMin.set(tile_origin_x, tile_min_y, tile_origin_z);
-                    tile_bounds.vMax.set(tile_origin_x + config.tile_world_size, tile_max_y, tile_origin_z + config.tile_world_size);
-
-                    Fvector center, dims;
-                    tile_bounds.get_CD(center, dims);
-
-                    xrXRC tile_query;
-                    tile_query.box_query(CDB::OPT_FULL_TEST, model, center, dims);
-
-                    const u32 tri_count = tile_query.r_count();
-                    if (tri_count > 0)
-                    {
-                        const auto* results = tile_query.r_begin();
-                        const float step = config.tile_world_size / static_cast<float>(ctx.tile_resolution);
-                        const float ray_start = tile_max_y + 0.1f;
-                        const Fvector dir = {0.f, -1.f, 0.f};
-
-                        for (u32 z = 0; z < ctx.tile_resolution; ++z)
-                        {
-                            for (u32 x = 0; x < ctx.tile_resolution; ++x)
-                            {
-                                const u32 sample_index = z * ctx.tile_resolution + x;
-
-                                Fvector origin;
-                                origin.x = tile_origin_x + (static_cast<float>(x) + 0.5f) * step;
-                                origin.z = tile_origin_z + (static_cast<float>(z) + 0.5f) * step;
-                                origin.y = ray_start;
-
-                                float best_y = -FLT_MAX;
-                                for (u32 tri_idx = 0; tri_idx < tri_count; ++tri_idx)
-                                {
-                                    const CDB::TRI& tri = tris[results[tri_idx].id];
-                                    SGameMtl* mtl = GMLib.GetMaterialByIdx(tri.material);
-                                    if (mtl && mtl->Flags.test(SGameMtl::flPassable))
-                                        continue;
-
-                                    Fvector tv[3] = {verts[tri.verts[0]], verts[tri.verts[1]], verts[tri.verts[2]]};
-                                    float r_u, r_v, r_range;
-                                    if (CDB::TestRayTri(origin, dir, tv, r_u, r_v, r_range, TRUE) && r_range >= 0.f)
-                                    {
-                                        const float hit_y = origin.y - r_range;
-                                        if (hit_y > best_y)
-                                            best_y = hit_y;
-                                    }
-                                }
-
-                                float final_height;
-                                if (best_y <= -FLT_MAX * 0.5f)
-                                {
-                                    final_height = tile_min_y;
-                                }
-                                else
-                                {
-                                    final_height = best_y;
-                                    ++valid_samples;
-                                }
-
-                                local_min_height = std::min(local_min_height, final_height);
-                                local_max_height = std::max(local_max_height, final_height);
-                                height_quant[sample_index] = QuantizeHeight(final_height);
-
-                                const float norm_x = (static_cast<float>(x) + 0.5f) / static_cast<float>(ctx.tile_resolution);
-                                const float norm_z = (static_cast<float>(z) + 0.5f) / static_cast<float>(ctx.tile_resolution);
-                                const u32 slot_x = std::min<u32>(ctx.tile_span - 1, static_cast<u32>(norm_x * ctx.tile_span));
-                                const u32 slot_z = std::min<u32>(ctx.tile_span - 1, static_cast<u32>(norm_z * ctx.tile_span));
-                                const u32 lut_index = slot_z * ctx.tile_span + slot_x;
-                                const int slot_table_index = slot_lookup[lut_index];
-                                if (slot_table_index >= 0)
-                                {
-                                    slot_min[lut_index] = std::min(slot_min[lut_index], final_height);
-                                    slot_max[lut_index] = std::max(slot_max[lut_index], final_height);
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        local_min_height = tile_min_y;
-                        local_max_height = tile_max_y;
-                    }
+                    const u32 sample_index = z * ctx.tile_resolution + x;
+                    const float norm_x = (static_cast<float>(x) + 0.5f) / static_cast<float>(ctx.tile_resolution);
+                    const float norm_z = (static_cast<float>(z) + 0.5f) / static_cast<float>(ctx.tile_resolution);
+                    const u32 slot_x = std::min<u32>(ctx.tile_span - 1, static_cast<u32>(norm_x * ctx.tile_span));
+                    const u32 slot_z = std::min<u32>(ctx.tile_span - 1, static_cast<u32>(norm_z * ctx.tile_span));
+                    const u32 lut_index = slot_z * ctx.tile_span + slot_x;
+                    const float final_height = slot_min[lut_index];
+                    local_min_height = std::min(local_min_height, final_height);
+                    local_max_height = std::max(local_max_height, final_height);
+                    height_quant[sample_index] = QuantizeHeight(final_height);
                 }
             }
 
@@ -482,7 +401,7 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
             if (local_max_height == -FLT_MAX)
                 local_max_height = tile_max_y;
 
-            tile_valid_samples[idx] = valid_samples;
+            tile_valid_samples[idx] = ctx.tile_sample_count;
             tile_min_height[idx] = local_min_height;
             tile_max_height[idx] = local_max_height;
 

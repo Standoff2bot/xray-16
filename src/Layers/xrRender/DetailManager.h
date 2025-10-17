@@ -10,6 +10,7 @@
 #include "DetailManager_Compute.h"
 #include "GPUGrassData.h"
 #include "GPUGrassResidency.h"
+#include "GPUGrassPlacement.h"
 
 namespace xray::render::RENDER_NAMESPACE
 {
@@ -205,6 +206,7 @@ public:
     gpu_grass::OfflineAsset m_gpu_grass_asset;
     gpu_grass::SlotToTileMap m_gpu_slot_tile_map;
     gpu_grass::ResidencyManager m_gpu_residency;
+    gpu_grass::PlacementStreamingContext m_gpu_placement;
 
     ref_constant hwc_consts;
     ref_constant hwc_wave;

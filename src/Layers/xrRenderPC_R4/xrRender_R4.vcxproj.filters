@@ -672,6 +672,9 @@
     <ClInclude Include="..\xrRender\GPUGrassResidency.h">
       <Filter>Details</Filter>
     </ClInclude>
+    <ClInclude Include="..\xrRender\GPUGrassPlacement.h">
+      <Filter>Details</Filter>
+    </ClInclude>
     <ClInclude Include="..\xrRender\light.h">
       <Filter>Lights</Filter>
     </ClInclude>
@@ -816,6 +819,9 @@
       <Filter>Details</Filter>
     </ClCompile>
     <ClCompile Include="..\xrRender\GPUGrassResidency.cpp">
+      <Filter>Details</Filter>
+    </ClCompile>
+    <ClCompile Include="..\xrRender\GPUGrassPlacement.cpp">
       <Filter>Details</Filter>
     </ClCompile>
     <ClCompile Include="..\xrRender\DetailModel.cpp">

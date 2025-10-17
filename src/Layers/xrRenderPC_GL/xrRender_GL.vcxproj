@@ -167,6 +167,7 @@
     <ClCompile Include="..\xrRender\DetailModel.cpp" />
     <ClCompile Include="..\xrRender\GPUGrassData.cpp" />
     <ClCompile Include="..\xrRender\GPUGrassResidency.cpp" />
+    <ClCompile Include="..\xrRender\GPUGrassPlacement.cpp" />
     <ClCompile Include="..\xrRender\dxParticleCustom.cpp" />
     <ClCompile Include="..\xrRender\ETextureParams.cpp" />
     <ClCompile Include="..\xrRender\FBasicVisual.cpp" />
@@ -323,6 +324,7 @@
     <ClInclude Include="..\xrRender\DetailManager.h" />
     <ClInclude Include="..\xrRender\GPUGrassData.h" />
     <ClInclude Include="..\xrRender\GPUGrassResidency.h" />
+    <ClInclude Include="..\xrRender\GPUGrassPlacement.h" />
     <ClInclude Include="..\xrRender\DetailModel.h" />
     <ClInclude Include="..\xrRender\dxParticleCustom.h" />
     <ClInclude Include="..\xrRender\ETextureParams.h" />

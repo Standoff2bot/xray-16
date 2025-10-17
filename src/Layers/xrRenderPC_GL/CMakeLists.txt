@@ -43,6 +43,8 @@ target_sources(xrRender_GL PRIVATE
     ../xrRender/GPUGrassData.h
     ../xrRender/GPUGrassResidency.cpp
     ../xrRender/GPUGrassResidency.h
+    ../xrRender/GPUGrassPlacement.cpp
+    ../xrRender/GPUGrassPlacement.h
     ../xrRender/du_box.cpp
     ../xrRender/du_box.h
     ../xrRender/du_cone.cpp

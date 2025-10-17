@@ -327,6 +327,9 @@
     <ClCompile Include="..\xrRender\GPUGrassResidency.cpp">
       <Filter>Details</Filter>
     </ClCompile>
+    <ClCompile Include="..\xrRender\GPUGrassPlacement.cpp">
+      <Filter>Details</Filter>
+    </ClCompile>
     <ClCompile Include="..\xrRenderGL\glDetailManager_VS.cpp">
       <Filter>Details</Filter>
     </ClCompile>
@@ -894,6 +897,9 @@
       <Filter>Details</Filter>
     </ClInclude>
     <ClInclude Include="..\xrRender\GPUGrassResidency.h">
+      <Filter>Details</Filter>
+    </ClInclude>
+    <ClInclude Include="..\xrRender\GPUGrassPlacement.h">
       <Filter>Details</Filter>
     </ClInclude>
     <ClInclude Include="..\xrRender\HOM.h">
