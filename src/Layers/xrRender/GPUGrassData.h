@@ -66,8 +66,12 @@ struct alignas(16) PlacementSeed
     u32 slot_x;
     u32 slot_z;
     u32 base_seed;         // Pre-mixed slot seed used by deterministic hashing
-    u64 object_mask;       // Bitmask of detail objects enabled in this slot
+    u32 object_mask_low;   // Bitmask [0..31]
+    u32 object_mask_high;  // Bitmask [32..63]
     float density_scale;   // Density multiplier extracted from palette
+    float c_hemi;          // Slot hemispherical lighting
+    float c_sun;           // Slot sun lighting
+    float pad;             // Padding for 16-byte alignment
 };
 
 // Container describing the full baked dataset ready for runtime upload.
@@ -83,6 +87,7 @@ struct OfflineAsset
         float max_height = 0.f;
     };
     xr_vector<SlotHeightInfo> slot_heights;
+    xr_vector<u8> slot_object_ids; // 4 entries per slot (id0..id3)
     xr_vector<u8> palette_bytes;
     xr_vector<u8> height_bytes;
 };

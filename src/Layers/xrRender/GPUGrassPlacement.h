@@ -11,6 +11,10 @@ struct TileResourceSlice
     u32 tile_index = 0;
     TilePayload payload{};
 
+    u32 tile_span = 0;
+    u32 tile_resolution = 0;
+    float tile_world_size = 0.f;
+
     const PlacementSeed* seeds = nullptr;
     u32 seed_count = 0;
 
@@ -21,6 +25,8 @@ struct TileResourceSlice
 
     const u8* palette_data = nullptr;
     u32 palette_bytes = 0;
+
+    const u8* object_ids = nullptr; // 4 entries per slot (id0..id3)
 
     const u8* height_data = nullptr;
     u32 height_bytes = 0;

@@ -2,6 +2,10 @@
 #pragma hdrstop
 
 #include "GPUGrassPlacement.h"
+#include "GPUGrassData.h"
+#include "DetailFormat.h"
+
+#include <algorithm>
 
 namespace xray::render::RENDER_NAMESPACE::gpu_grass
 {
@@ -14,11 +18,15 @@ TileResourceSlice BuildTileSlice(const OfflineAsset& asset, u32 tile_index)
     const TilePayload& payload = asset.tiles[tile_index];
     slice.tile_index = tile_index;
     slice.payload = payload;
+    slice.tile_span = std::max<u32>(1, static_cast<u32>(asset.header.config.tile_world_size / DETAIL_SLOT_SIZE + 0.5f));
+    slice.tile_resolution = asset.header.config.tile_resolution;
+    slice.tile_world_size = asset.header.config.tile_world_size;
     slice.slot_refs = asset.slot_table.data() + payload.slot_offset;
     slice.slot_count = payload.slot_count;
     slice.seeds = asset.placement_seeds.data() + payload.slot_offset;
     slice.seed_count = payload.slot_count;
     slice.slot_heights = asset.slot_heights.data() + payload.slot_offset;
+    slice.object_ids = asset.slot_object_ids.data() + payload.slot_offset * 4;
 
     if (payload.palette_bytes > 0)
     {

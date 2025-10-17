@@ -92,9 +92,19 @@ struct PlacementParamsGPU
     u32 instance_offset;
     u32 slot_offset;
     u32 slot_count;
+    u32 tile_span;
+    u32 tile_resolution;
+    u32 samples_per_slot;
+    u32 sample_dim;
     u32 max_instances;
     float slot_size;
-    float padding0[3];
+    float density;
+    float jitter_amplitude;
+    float detail_height_scale;
+    float tile_origin_x;
+    float tile_origin_z;
+    float pad0;
+    float pad1;
 };
 
 // GPU-friendly frustum planes (64 bytes)

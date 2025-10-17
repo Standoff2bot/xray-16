@@ -313,9 +313,9 @@ void CDetailManager::BuildGPUGrassOfflineData()
     input.header = &dtH;
     input.slots = dtSlots;
     input.config.tile_world_size = 32.f;
-    input.config.tile_resolution = 256;
+    input.config.tile_resolution = 24;
     input.config.ring_count = 3;
-    input.config.max_tiles_per_ring = 128;
+    input.config.max_tiles_per_ring = 24;
 
     gpu_grass::OfflineBakeResult result;
     gpu_grass::OfflineBaker baker;

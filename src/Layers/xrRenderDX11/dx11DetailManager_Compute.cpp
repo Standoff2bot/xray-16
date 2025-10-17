@@ -5,10 +5,16 @@
 #include "Layers/xrRender/DetailManager_Compute.h"
 #include "Layers/xrRender/DetailManager.h"
 #include "Layers/xrRender/GPUGrassPlacement.h"
+
+#include <array>
+#include <cmath>
+#include <iterator>
 #include "Layers/xrRender/GPUGrassData.h"
 #include "dx11HW.h"
 
 using xray::render::RENDER_NAMESPACE::gpu_grass::PlacementSeed;
+using xray::render::RENDER_NAMESPACE::gpu_grass::kHeightQuantOffset;
+using xray::render::RENDER_NAMESPACE::gpu_grass::kHeightQuantStep;
 
 namespace xray::render::RENDER_NAMESPACE
 {
@@ -23,8 +29,9 @@ struct PlacementSeedGPUData
     u32 object_mask_low;
     u32 object_mask_high;
     float density_scale;
+    float c_hemi;
+    float c_sun;
     float pad0;
-    float pad1;
 };
 
 struct SlotReferenceGPUData
@@ -580,12 +587,19 @@ void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_ve
     if (!m_gpu.placement_shader || !m_gpu.detail_object_srv)
         return;
 
+    const float density = ps_current_detail_density > EPS ? ps_current_detail_density : DETAIL_SLOT_SIZE;
+    const u32 sample_dim = static_cast<u32>(std::ceil(DETAIL_SLOT_SIZE / density)) + 1u;
+    const u32 samples_per_slot = sample_dim * sample_dim;
+    const u32 threads_per_group = 64;
+
     for (const auto& tile : tiles)
     {
         if (tile.seed_count == 0)
             continue;
         DispatchPlacement(cmd_list, tile);
-        ++m_stats.compute_dispatches;
+        const u32 total_samples = tile.seed_count * samples_per_slot;
+        const u32 dispatch_x = (total_samples + threads_per_group - 1u) / threads_per_group;
+        m_stats.compute_dispatches += dispatch_x;
     }
 
     m_needs_upload = false;
@@ -689,9 +703,11 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
         gpu_seed.slot_x = seed.slot_x;
         gpu_seed.slot_z = seed.slot_z;
         gpu_seed.base_seed = seed.base_seed;
-        gpu_seed.object_mask_low = static_cast<u32>(seed.object_mask & 0xFFFFFFFFull);
-        gpu_seed.object_mask_high = static_cast<u32>((seed.object_mask >> 32) & 0xFFFFFFFFull);
+        gpu_seed.object_mask_low = seed.object_mask_low;
+        gpu_seed.object_mask_high = seed.object_mask_high;
         gpu_seed.density_scale = seed.density_scale;
+        gpu_seed.c_hemi = seed.c_hemi;
+        gpu_seed.c_sun = seed.c_sun;
         seeds_gpu.emplace_back(gpu_seed);
     }
 
@@ -714,6 +730,48 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
         h.min_height = tile.slot_heights[i].min_height;
         h.max_height = tile.slot_heights[i].max_height;
         heights_gpu.emplace_back(h);
+    }
+
+    xr_vector<std::array<u32, 4>> objects_gpu;
+    objects_gpu.reserve(tile.slot_count);
+    for (u32 i = 0; i < tile.slot_count; ++i)
+    {
+        const u8* src = tile.object_ids + i * 4;
+        objects_gpu.push_back({ { src[0], src[1], src[2], src[3] } });
+    }
+
+    xr_vector<Fvector4> palette_gpu;
+    palette_gpu.reserve(tile.slot_count * 4);
+    const u32 tile_span = tile.tile_span;
+    const u32 tile_texels = tile_span * tile_span;
+    const u32 layer_stride_bytes = tile_texels * 4;
+    const u8* palette_src = tile.palette_data;
+
+    for (u32 slot_idx = 0; slot_idx < tile.slot_count; ++slot_idx)
+    {
+        const u32 texel_index = tile.slot_refs[slot_idx].slot_local_z * tile_span + tile.slot_refs[slot_idx].slot_local_x;
+        for (u32 layer = 0; layer < 4; ++layer)
+        {
+            const u8* src = palette_src + layer * layer_stride_bytes + texel_index * 4;
+            Fvector4 val;
+            val.x = src[0] / 255.0f;
+            val.y = src[1] / 255.0f;
+            val.z = src[2] / 255.0f;
+            val.w = src[3] / 255.0f;
+            palette_gpu.emplace_back(val);
+        }
+    }
+
+    xr_vector<float> heightmap_gpu;
+    if (tile.height_bytes > 0)
+    {
+        const u16* height_src = reinterpret_cast<const u16*>(tile.height_data);
+        const size_t height_count = tile.height_bytes / sizeof(u16);
+        heightmap_gpu.resize(height_count);
+        for (size_t i = 0; i < height_count; ++i)
+        {
+            heightmap_gpu[i] = float(height_src[i]) * kHeightQuantStep - kHeightQuantOffset;
+        }
     }
 
     auto createStructuredBuffer = [&](const void* data, u32 stride, u32 count, ID3DBuffer** outBuffer, ID3DShaderResourceView** outSrv)
@@ -759,12 +817,39 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
     ID3DShaderResourceView* height_srv = nullptr;
     createStructuredBuffer(heights_gpu.data(), sizeof(SlotHeightGPUData), static_cast<u32>(heights_gpu.size()), &height_buffer, &height_srv);
 
+    ID3DBuffer* object_buffer = nullptr;
+    ID3DShaderResourceView* object_srv = nullptr;
+    createStructuredBuffer(objects_gpu.data(), sizeof(std::array<u32, 4>), static_cast<u32>(objects_gpu.size()), &object_buffer, &object_srv);
+
+    ID3DBuffer* palette_buffer = nullptr;
+    ID3DShaderResourceView* palette_srv = nullptr;
+    createStructuredBuffer(palette_gpu.data(), sizeof(Fvector4), static_cast<u32>(palette_gpu.size()), &palette_buffer, &palette_srv);
+
+    ID3DBuffer* heightmap_buffer = nullptr;
+    ID3DShaderResourceView* heightmap_srv = nullptr;
+    if (!heightmap_gpu.empty())
+        createStructuredBuffer(heightmap_gpu.data(), sizeof(float), static_cast<u32>(heightmap_gpu.size()), &heightmap_buffer, &heightmap_srv);
+
+    const float density = ps_current_detail_density > EPS ? ps_current_detail_density : DETAIL_SLOT_SIZE;
+    const u32 sample_dim = static_cast<u32>(std::ceil(DETAIL_SLOT_SIZE / density)) + 1u;
+    const u32 samples_per_slot = sample_dim * sample_dim;
+    const float jitter = density / 1.7f;
+
     PlacementParamsGPU params = {};
     params.instance_offset = 0;
     params.slot_offset = 0;
     params.slot_count = tile.seed_count;
+    params.tile_span = tile.tile_span;
+    params.tile_resolution = (heightmap_srv != nullptr) ? tile.tile_resolution : 0u;
+    params.samples_per_slot = samples_per_slot;
+    params.sample_dim = sample_dim;
     params.max_instances = m_max_instances;
     params.slot_size = DETAIL_SLOT_SIZE;
+    params.density = density;
+    params.jitter_amplitude = jitter;
+    params.detail_height_scale = ps_current_detail_height;
+    params.tile_origin_x = float(tile.payload.coord.region_x) * float(tile.tile_span) * DETAIL_SLOT_SIZE;
+    params.tile_origin_z = float(tile.payload.coord.region_z) * float(tile.tile_span) * DETAIL_SLOT_SIZE;
 
     D3D11_MAPPED_SUBRESOURCE mapped = {};
     CHK_DX(context->Map(m_gpu.placement_params_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
@@ -774,8 +859,8 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
     ID3DBuffer* cbs[] = { m_gpu.placement_params_cb };
     context->CSSetConstantBuffers(0, 1, cbs);
 
-    ID3D11ShaderResourceView* srvs[] = { seed_srv, slot_srv, height_srv, m_gpu.detail_object_srv };
-    context->CSSetShaderResources(0, 4, srvs);
+    ID3D11ShaderResourceView* srvs[] = { seed_srv, slot_srv, height_srv, m_gpu.detail_object_srv, object_srv, palette_srv, heightmap_srv };
+    context->CSSetShaderResources(0, static_cast<UINT>(std::size(srvs)), srvs);
 
     ID3D11UnorderedAccessView* uavs[] = { m_gpu.instance_buffer_uav, m_gpu.instance_counter_uav };
     UINT initial_counts[2] = { D3D11_APPEND_ALIGNED_ELEMENT, D3D11_APPEND_ALIGNED_ELEMENT };
@@ -784,11 +869,12 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
     context->CSSetShader(m_gpu.placement_shader->sh, nullptr, 0);
 
     const u32 threads_per_group = 64;
-    const u32 dispatch_x = (tile.seed_count + threads_per_group - 1) / threads_per_group;
+    const u32 total_samples = tile.seed_count * samples_per_slot;
+    const u32 dispatch_x = (total_samples + threads_per_group - 1u) / threads_per_group;
     context->Dispatch(dispatch_x, 1, 1);
 
-    ID3D11ShaderResourceView* null_srvs[4] = { nullptr, nullptr, nullptr, nullptr };
-    context->CSSetShaderResources(0, 4, null_srvs);
+    ID3D11ShaderResourceView* null_srvs[7] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+    context->CSSetShaderResources(0, 7, null_srvs);
     ID3D11UnorderedAccessView* null_uavs[2] = { nullptr, nullptr };
     UINT dummy_counts[2] = { 0, 0 };
     context->CSSetUnorderedAccessViews(0, 2, null_uavs, dummy_counts);
@@ -802,6 +888,14 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
     _RELEASE(slot_buffer);
     _RELEASE(height_srv);
     _RELEASE(height_buffer);
+    _RELEASE(object_srv);
+    _RELEASE(object_buffer);
+    _RELEASE(palette_srv);
+    _RELEASE(palette_buffer);
+    if (heightmap_srv)
+        _RELEASE(heightmap_srv);
+    if (heightmap_buffer)
+        _RELEASE(heightmap_buffer);
 #else
     XR_UNUSED(cmd_list);
     XR_UNUSED(tile);
