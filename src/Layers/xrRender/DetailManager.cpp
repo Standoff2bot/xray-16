@@ -306,6 +306,7 @@ void CDetailManager::BuildGPUGrassOfflineData()
     {
         m_gpu_grass_asset = std::move(result.asset);
         m_gpu_slot_tile_map = std::move(result.slot_to_tile);
+        m_gpu_residency.Initialize(&m_gpu_grass_asset);
 
         float min_height = FLT_MAX;
         float max_height = -FLT_MAX;
@@ -358,8 +359,29 @@ void CDetailManager::BuildGPUGrassOfflineData()
     {
         m_gpu_grass_asset = {};
         m_gpu_slot_tile_map.clear();
+        m_gpu_residency.Reset();
         Msg("! [DetailManager] GPU grass offline bake failed");
     }
+}
+
+void CDetailManager::UpdateGPUGrassResidency(const Fvector& camera_position)
+{
+    m_gpu_residency.Update(camera_position);
+    const auto& events = m_gpu_residency.PendingEvents();
+    if (!events.empty())
+    {
+        size_t loads = 0;
+        size_t unloads = 0;
+        for (const auto& evt : events)
+        {
+            if (evt.type == gpu_grass::TileEvent::Type::Load)
+                ++loads;
+            else if (evt.type == gpu_grass::TileEvent::Type::Unload)
+                ++unloads;
+        }
+        Msg("* [DetailManager] GPU grass residency update: +%zu / -%zu tiles", loads, unloads);
+    }
+    m_gpu_residency.ClearPendingEvents();
 }
 
 void CDetailManager::BuildGPUInstanceList()
@@ -431,6 +453,8 @@ void CDetailManager::BuildGPUInstanceList()
 void CDetailManager::UpdateVisibleM()
 {
     ZoneScoped;
+
+    UpdateGPUGrassResidency(EYE);
 
     for (int i = 0; i != 3; ++i)
         for (auto& vis : m_visibles[i])

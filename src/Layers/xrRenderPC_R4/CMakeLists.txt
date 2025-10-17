@@ -17,6 +17,8 @@ target_sources(xrRenderPC_R4 PRIVATE
     xrRender_R4.cpp
     ../xrRender/GPUGrassData.cpp
     ../xrRender/GPUGrassData.h
+    ../xrRender/GPUGrassResidency.cpp
+    ../xrRender/GPUGrassResidency.h
 
     # GPU instanced detail rendering blender
     ../xrRender/blenders/Blender_Detail_GPU.h
