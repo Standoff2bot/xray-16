@@ -93,17 +93,17 @@ struct PlacementParamsGPU
     u32 slot_offset;
     u32 slot_count;
     u32 tile_span;
-    u32 tile_resolution;
     u32 samples_per_slot;
     u32 sample_dim;
     u32 max_instances;
+    u32 pad0;
     float slot_size;
     float density;
     float jitter_amplitude;
     float detail_height_scale;
     float tile_origin_x;
     float tile_origin_z;
-    float pad0;
+    float invalid_height_value;
     float pad1;
 };
 

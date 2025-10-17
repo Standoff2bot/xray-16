@@ -9,29 +9,37 @@
 #include <array>
 #include <cmath>
 #include <iterator>
+#include <numeric>
 #include "Layers/xrRender/GPUGrassData.h"
 #include "dx11HW.h"
 
 using xray::render::RENDER_NAMESPACE::gpu_grass::PlacementSeed;
 using xray::render::RENDER_NAMESPACE::gpu_grass::kHeightQuantOffset;
 using xray::render::RENDER_NAMESPACE::gpu_grass::kHeightQuantStep;
+using xray::render::RENDER_NAMESPACE::gpu_grass::kInvalidHeightSample;
+using xray::render::RENDER_NAMESPACE::gpu_grass::kInvalidHeightSentinel;
 
 namespace xray::render::RENDER_NAMESPACE
 {
 
 namespace
 {
+constexpr bool kForceAllGrassVisible = true;
+
 struct PlacementSeedGPUData
 {
-    u32 slot_x;
-    u32 slot_z;
+    s32 slot_x;
+    s32 slot_z;
     u32 base_seed;
     u32 object_mask_low;
     u32 object_mask_high;
     float density_scale;
     float c_hemi;
     float c_sun;
+    float world_base_x;
+    float world_base_z;
     float pad0;
+    float pad1;
 };
 
 struct SlotReferenceGPUData
@@ -585,22 +593,52 @@ void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_ve
 {
 #if defined(USE_DX11)
     if (!m_gpu.placement_shader || !m_gpu.detail_object_srv)
+    {
+        Msg("! [DetailComputeManager] Placement skipped - shader or detail object SRV missing");
         return;
+    }
 
-    const float density = ps_current_detail_density > EPS ? ps_current_detail_density : DETAIL_SLOT_SIZE;
-    const u32 sample_dim = static_cast<u32>(std::ceil(DETAIL_SLOT_SIZE / density)) + 1u;
-    const u32 samples_per_slot = sample_dim * sample_dim;
     const u32 threads_per_group = 64;
+
+    u32 total_tiles = static_cast<u32>(tiles.size());
+    u32 dispatched_tiles = 0;
+    u32 tiles_missing_height = 0;
+    u32 tiles_missing_samples = 0;
+    u32 total_seeds = 0;
+    u32 total_slots = 0;
+    u64 total_samples = 0;
 
     for (const auto& tile : tiles)
     {
+        total_seeds += tile.seed_count;
+        total_slots += tile.slot_count;
+        if (tile.height_bytes == 0)
+            ++tiles_missing_height;
+        if (tile.samples_per_slot == 0)
+            ++tiles_missing_samples;
+
+        const u32 samples_per_slot = tile.samples_per_slot ? tile.samples_per_slot : 1u;
+
         if (tile.seed_count == 0)
             continue;
+
         DispatchPlacement(cmd_list, tile);
-        const u32 total_samples = tile.seed_count * samples_per_slot;
-        const u32 dispatch_x = (total_samples + threads_per_group - 1u) / threads_per_group;
+        ++dispatched_tiles;
+
+        const u32 tile_samples = tile.seed_count * samples_per_slot;
+        total_samples += tile_samples;
+        const u32 dispatch_x = (tile_samples + threads_per_group - 1u) / threads_per_group;
         m_stats.compute_dispatches += dispatch_x;
     }
+
+    Msg("* [DetailComputeManager] PlacementTiles: tiles=%u dispatched=%u seeds=%u slots=%u samples=%llu missingHeight=%u missingSamples=%u",
+        total_tiles,
+        dispatched_tiles,
+        total_seeds,
+        total_slots,
+        total_samples,
+        tiles_missing_height,
+        tiles_missing_samples);
 
     m_needs_upload = false;
 #else
@@ -615,6 +653,13 @@ void DetailComputeManager::FinalizePlacement(CBackend& cmd_list)
     m_instance_count = ReadInstanceCounter(cmd_list);
     m_stats.total_instances = m_instance_count;
     m_needs_upload = false;
+
+    static u32 s_last_reported_instances = u32(-1);
+    if (m_instance_count != s_last_reported_instances)
+    {
+        Msg("* [DetailComputeManager] Placement finalized - GPU instances: %u", m_instance_count);
+        s_last_reported_instances = m_instance_count;
+    }
 #else
     XR_UNUSED(cmd_list);
 #endif
@@ -708,6 +753,10 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
         gpu_seed.density_scale = seed.density_scale;
         gpu_seed.c_hemi = seed.c_hemi;
         gpu_seed.c_sun = seed.c_sun;
+        gpu_seed.world_base_x = seed.world_base_x;
+        gpu_seed.world_base_z = seed.world_base_z;
+        gpu_seed.pad0 = 0.f;
+        gpu_seed.pad1 = 0.f;
         seeds_gpu.emplace_back(gpu_seed);
     }
 
@@ -770,7 +819,10 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
         heightmap_gpu.resize(height_count);
         for (size_t i = 0; i < height_count; ++i)
         {
-            heightmap_gpu[i] = float(height_src[i]) * kHeightQuantStep - kHeightQuantOffset;
+            if (height_src[i] == kInvalidHeightSample)
+                heightmap_gpu[i] = kInvalidHeightSentinel;
+            else
+                heightmap_gpu[i] = float(height_src[i]) * kHeightQuantStep - kHeightQuantOffset;
         }
     }
 
@@ -831,16 +883,15 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
         createStructuredBuffer(heightmap_gpu.data(), sizeof(float), static_cast<u32>(heightmap_gpu.size()), &heightmap_buffer, &heightmap_srv);
 
     const float density = ps_current_detail_density > EPS ? ps_current_detail_density : DETAIL_SLOT_SIZE;
-    const u32 sample_dim = static_cast<u32>(std::ceil(DETAIL_SLOT_SIZE / density)) + 1u;
-    const u32 samples_per_slot = sample_dim * sample_dim;
     const float jitter = density / 1.7f;
+    const u32 samples_per_slot = tile.samples_per_slot;
+    const u32 sample_dim = tile.sample_dim;
 
     PlacementParamsGPU params = {};
     params.instance_offset = 0;
     params.slot_offset = 0;
     params.slot_count = tile.seed_count;
     params.tile_span = tile.tile_span;
-    params.tile_resolution = (heightmap_srv != nullptr) ? tile.tile_resolution : 0u;
     params.samples_per_slot = samples_per_slot;
     params.sample_dim = sample_dim;
     params.max_instances = m_max_instances;
@@ -848,8 +899,11 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
     params.density = density;
     params.jitter_amplitude = jitter;
     params.detail_height_scale = ps_current_detail_height;
-    params.tile_origin_x = float(tile.payload.coord.region_x) * float(tile.tile_span) * DETAIL_SLOT_SIZE;
-    params.tile_origin_z = float(tile.payload.coord.region_z) * float(tile.tile_span) * DETAIL_SLOT_SIZE;
+    params.tile_origin_x = tile.world_origin_x;
+    params.tile_origin_z = tile.world_origin_z;
+    params.invalid_height_value = kInvalidHeightSentinel;
+    params.pad0 = 0;
+    params.pad1 = 0;
 
     D3D11_MAPPED_SUBRESOURCE mapped = {};
     CHK_DX(context->Map(m_gpu.placement_params_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
@@ -869,7 +923,8 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
     context->CSSetShader(m_gpu.placement_shader->sh, nullptr, 0);
 
     const u32 threads_per_group = 64;
-    const u32 total_samples = tile.seed_count * samples_per_slot;
+    const u32 effective_samples_per_slot = samples_per_slot > 0 ? samples_per_slot : 1u;
+    const u32 total_samples = tile.seed_count * effective_samples_per_slot;
     const u32 dispatch_x = (total_samples + threads_per_group - 1u) / threads_per_group;
     context->Dispatch(dispatch_x, 1, 1);
 
@@ -920,6 +975,38 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
 
     // Upload instances if needed
     UploadInstances(cmd_list);
+
+    if (kForceAllGrassVisible)
+    {
+        if (m_instance_count > 0)
+        {
+            xr_vector<u32> identity(m_instance_count);
+            std::iota(identity.begin(), identity.end(), 0u);
+            const UINT row_pitch = static_cast<UINT>(identity.size() * sizeof(u32));
+
+            for (int i = 0; i < 3; ++i)
+            {
+                if (m_gpu.visible_indices[i])
+                    context->UpdateSubresource(m_gpu.visible_indices[i], 0, nullptr, identity.data(), row_pitch, 0);
+
+                if (m_gpu.indirect_args[i])
+                {
+                    IndirectDrawArgs args = {};
+                    args.index_count = m_index_count;
+                    args.instance_count = m_instance_count;
+                    args.start_index = 0;
+                    args.base_vertex = 0;
+                    args.start_instance = 0;
+                    context->UpdateSubresource(m_gpu.indirect_args[i], 0, nullptr, &args, 0, 0);
+                }
+            }
+
+            Msg("* [DetailComputeManager] Force-all-visible override wrote %u instances", m_instance_count);
+        }
+
+        m_stats.total_instances = m_instance_count;
+        return;
+    }
 
     // Build frustum from view-projection matrix
     FrustumGPU frustum = BuildFrustumGPU(view_proj);

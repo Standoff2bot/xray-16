@@ -6,8 +6,10 @@
 
 namespace xray::render::RENDER_NAMESPACE::gpu_grass
 {
-constexpr float kHeightQuantOffset = 200.f; // Matches legacy DetailSlot base encoding
-constexpr float kHeightQuantStep = 0.02f;   // 2cm resolution keeps range within 16 bits
+constexpr float kHeightQuantOffset = 200.f;      // Matches legacy DetailSlot base encoding
+constexpr float kHeightQuantStep = 0.02f;        // 2cm resolution keeps range within 16 bits
+constexpr u16 kInvalidHeightSample = 0xFFFFu;    // Sentinel marking a missing raycast hit
+constexpr float kInvalidHeightSentinel = -3.402823466e38f; // AsFloat(0xFF7FFFFF)
 
 // Clipmap configuration describing residency rings and tile resolution.
 struct ClipmapConfig
@@ -38,6 +40,8 @@ struct TilePayload
     u32 palette_bytes = 0;      // Size of palette data for this tile
     u32 height_offset = 0;      // Offset in bytes into height clipmap data
     u32 height_bytes = 0;       // Size of height data for this tile
+    float world_origin_x = 0.f; // World-space origin of the tile (minimum X of covered slots)
+    float world_origin_z = 0.f; // World-space origin of the tile (minimum Z of covered slots)
 };
 
 // Flattened slot table entry referencing the original level.details slot.
@@ -52,7 +56,7 @@ struct SlotReference
 struct OfflineAssetHeader
 {
     static constexpr u32 kMagic = 0x47525047; // 'GPGR'
-    static constexpr u32 kVersion = 1;
+    static constexpr u32 kVersion = 2;
 
     u32 magic = kMagic;
     u32 version = kVersion;
@@ -63,15 +67,18 @@ struct OfflineAssetHeader
 // Deterministic seed data used by the GPU placement shader.
 struct alignas(16) PlacementSeed
 {
-    u32 slot_x;
-    u32 slot_z;
+    s32 slot_x;
+    s32 slot_z;
     u32 base_seed;         // Pre-mixed slot seed used by deterministic hashing
     u32 object_mask_low;   // Bitmask [0..31]
     u32 object_mask_high;  // Bitmask [32..63]
     float density_scale;   // Density multiplier extracted from palette
     float c_hemi;          // Slot hemispherical lighting
     float c_sun;           // Slot sun lighting
-    float pad;             // Padding for 16-byte alignment
+    float world_base_x;    // World-space slot min X
+    float world_base_z;    // World-space slot min Z
+    float pad0;            // Padding for 16-byte alignment
+    float pad1;
 };
 
 // Container describing the full baked dataset ready for runtime upload.
@@ -90,6 +97,8 @@ struct OfflineAsset
     xr_vector<u8> slot_object_ids; // 4 entries per slot (id0..id3)
     xr_vector<u8> palette_bytes;
     xr_vector<u8> height_bytes;
+    u32 sample_dim = 0;
+    u32 samples_per_slot = 0;
 };
 
 // Mapping type for quick lookup of baked tile payloads by slot index.

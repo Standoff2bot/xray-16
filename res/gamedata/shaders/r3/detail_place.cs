@@ -1,13 +1,17 @@
 struct PlacementSeedGPU
 {
-    uint slot_x;
-    uint slot_z;
+    int slot_x;
+    int slot_z;
     uint base_seed;
     uint object_mask_low;
     uint object_mask_high;
     float density_scale;
     float c_hemi;
     float c_sun;
+    float world_base_x;
+    float world_base_z;
+    float pad0;
+    float pad1;
 };
 
 struct SlotReferenceGPU
@@ -80,17 +84,17 @@ cbuffer PlacementParams : register(b0)
     uint slot_offset;
     uint slot_count;
     uint tile_span;
-    uint tile_resolution;
     uint samples_per_slot;
     uint sample_dim;
     uint max_instances;
+    uint pad0;
     float slot_size;
     float density;
     float jitter_amplitude;
     float detail_height_scale;
     float tile_origin_x;
     float tile_origin_z;
-    float pad0;
+    float invalid_height_value;
     float pad1;
 };
 
@@ -148,38 +152,11 @@ float InterpolateAlpha(float4 alpha, float fx, float fz)
     return lerp(c01, c23, fz);
 }
 
-float SampleHeight(float local_x, float local_z)
-{
-    if (tile_resolution == 0)
-        return 0.0f;
-
-    float max_extent = float(tile_span) * slot_size;
-    float u = saturate(local_x / max_extent) * (tile_resolution - 1);
-    float v = saturate(local_z / max_extent) * (tile_resolution - 1);
-
-    uint x0 = (uint)floor(u);
-    uint z0 = (uint)floor(v);
-    uint x1 = min(x0 + 1, tile_resolution - 1);
-    uint z1 = min(z0 + 1, tile_resolution - 1);
-
-    float fx = u - x0;
-    float fz = v - z0;
-
-    float h00 = g_height_samples[z0 * tile_resolution + x0];
-    float h10 = g_height_samples[z0 * tile_resolution + x1];
-    float h01 = g_height_samples[z1 * tile_resolution + x0];
-    float h11 = g_height_samples[z1 * tile_resolution + x1];
-
-    float hx0 = lerp(h00, h10, fx);
-    float hx1 = lerp(h01, h11, fx);
-    return lerp(hx0, hx1, fz);
-}
-
 [numthreads(64, 1, 1)]
 void main(uint3 dtid : SV_DispatchThreadID)
 {
     const uint thread_index = dtid.x;
-    const uint total_samples = slot_count * samples_per_slot;
+    const uint total_samples = (samples_per_slot > 0u) ? slot_count * samples_per_slot : slot_count;
     if (thread_index >= total_samples)
         return;
 
@@ -199,7 +176,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
     const float fx = (sample_dim > 1u) ? float(sample_x) / float(sample_dim_m1) : 0.0f;
     const float fz = (sample_dim > 1u) ? float(sample_z) / float(sample_dim_m1) : 0.0f;
 
-    const uint base_hash = Hash(seed.slot_x, seed.slot_z, sample_index, seed.base_seed);
+    const uint base_hash = Hash((uint)seed.slot_x, (uint)seed.slot_z, sample_index, seed.base_seed);
     const uint shift_hash = Hash(base_hash, 1u, 0u, seed.base_seed ^ 0xB5297A4Du);
     const uint jitter_hash = Hash(base_hash, 2u, 0u, seed.base_seed ^ 0x68E31DA4u);
 
@@ -245,15 +222,22 @@ void main(uint3 dtid : SV_DispatchThreadID)
 
     const DetailObjectGPU detail_obj = g_detail_objects[object_id];
 
-    const float world_base_x = float(seed.slot_x) * slot_size;
-    const float world_base_z = float(seed.slot_z) * slot_size;
+    const float world_base_x = seed.world_base_x;
+    const float world_base_z = seed.world_base_z;
     const float world_x = world_base_x + fx * slot_size + jitter_x;
     const float world_z = world_base_z + fz * slot_size + jitter_z;
 
     const float local_tile_x = world_x - tile_origin_x;
     const float local_tile_z = world_z - tile_origin_z;
 
-    float height = tile_resolution > 0 ? SampleHeight(local_tile_x, local_tile_z) : slot_height.min_height;
+    float height = slot_height.min_height;
+    if (samples_per_slot > 0u && g_height_samples.Length > 0)
+    {
+        const uint sample_offset = (slot_offset + slot_index) * samples_per_slot + sample_index;
+        const float encoded_height = g_height_samples[sample_offset];
+        if (encoded_height > invalid_height_value)
+            height = encoded_height;
+    }
 
     uint counter = 0;
     InterlockedAdd(g_instance_counter[0], 1u, counter);

@@ -19,8 +19,11 @@ TileResourceSlice BuildTileSlice(const OfflineAsset& asset, u32 tile_index)
     slice.tile_index = tile_index;
     slice.payload = payload;
     slice.tile_span = std::max<u32>(1, static_cast<u32>(asset.header.config.tile_world_size / DETAIL_SLOT_SIZE + 0.5f));
-    slice.tile_resolution = asset.header.config.tile_resolution;
     slice.tile_world_size = asset.header.config.tile_world_size;
+    slice.sample_dim = asset.sample_dim;
+    slice.samples_per_slot = asset.samples_per_slot;
+    slice.world_origin_x = payload.world_origin_x;
+    slice.world_origin_z = payload.world_origin_z;
     slice.slot_refs = asset.slot_table.data() + payload.slot_offset;
     slice.slot_count = payload.slot_count;
     slice.seeds = asset.placement_seeds.data() + payload.slot_offset;

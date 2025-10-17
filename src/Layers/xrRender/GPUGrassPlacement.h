@@ -12,8 +12,11 @@ struct TileResourceSlice
     TilePayload payload{};
 
     u32 tile_span = 0;
-    u32 tile_resolution = 0;
     float tile_world_size = 0.f;
+    u32 sample_dim = 0;
+    u32 samples_per_slot = 0;
+    float world_origin_x = 0.f;
+    float world_origin_z = 0.f;
 
     const PlacementSeed* seeds = nullptr;
     u32 seed_count = 0;

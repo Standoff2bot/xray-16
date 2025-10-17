@@ -347,26 +347,27 @@ void CDetailManager::BuildGPUGrassOfflineData()
             height_bytes / (1024.f * 1024.f));
         Msg("* [DetailManager] GPU grass slot height range: [%.2f .. %.2f]", min_height, max_height);
 
-        const u32 tile_resolution = std::max<u32>(1, m_gpu_grass_asset.header.config.tile_resolution);
-        const size_t expected_tile_height_bytes = size_t(tile_resolution) * size_t(tile_resolution) * sizeof(u16);
+        const u32 samples_per_slot = m_gpu_grass_asset.samples_per_slot;
         bool mismatched_tile = false;
-        for (const auto& tile : m_gpu_grass_asset.tiles)
+        if (samples_per_slot > 0)
         {
-            if (tile.height_bytes != expected_tile_height_bytes)
+            for (const auto& tile : m_gpu_grass_asset.tiles)
             {
-                Msg("! [DetailManager] Tile (%d,%d) has unexpected height byte size: %u (expected %zu)",
-                    tile.coord.region_x,
-                    tile.coord.region_z,
-                    tile.height_bytes,
-                    expected_tile_height_bytes);
-                mismatched_tile = true;
-                break;
+                const size_t expected_tile_bytes = size_t(tile.slot_count) * size_t(samples_per_slot) * sizeof(u16);
+                if (tile.height_bytes != expected_tile_bytes)
+                {
+                    Msg("! [DetailManager] Tile (%d,%d) has unexpected height byte size: %u (expected %zu)",
+                        tile.coord.region_x,
+                        tile.coord.region_z,
+                        tile.height_bytes,
+                        expected_tile_bytes);
+                    mismatched_tile = true;
+                    break;
+                }
             }
-        }
-        if (!mismatched_tile && expected_tile_height_bytes != 0)
-        {
-            const size_t expected_total = expected_tile_height_bytes * m_gpu_grass_asset.tiles.size();
-            if (expected_total != height_bytes)
+
+            const size_t expected_total = size_t(samples_per_slot) * m_gpu_grass_asset.slot_table.size() * sizeof(u16);
+            if (!mismatched_tile && expected_total != height_bytes)
             {
                 Msg("! [DetailManager] Height byte total mismatch: %zu (expected %zu)",
                     height_bytes,
@@ -418,15 +419,45 @@ void CDetailManager::BuildGPUInstanceList(CBackend& cmd_list)
 {
     ZoneScoped;
 
-    if (!ps_r__gpu_culling || !m_compute_manager || m_gpu_grass_asset.tiles.empty())
+    static bool s_last_cpu = false;
+
+    auto fallback_to_cpu = [&](const char* reason)
     {
+        if (!s_last_cpu)
+            Msg("! [DetailManager] GPU grass falling back to CPU instance build (%s)", reason);
+        s_last_cpu = true;
         BuildGPUInstanceListCPU();
+    };
+
+    if (!ps_r__gpu_culling)
+    {
+        fallback_to_cpu("ps_r__gpu_culling disabled");
         return;
     }
+
+    if (!m_compute_manager)
+    {
+        fallback_to_cpu("compute manager unavailable");
+        return;
+    }
+
+    if (m_gpu_grass_asset.tiles.empty())
+    {
+        fallback_to_cpu("no baked tiles loaded");
+        return;
+    }
+
+    s_last_cpu = false;
 
     xr_vector<u32> resident_indices = m_gpu_residency.GetResidentTileIndices();
     if (resident_indices.empty())
     {
+        static u32 s_last_empty_frame = u32(-1);
+        if (Device.dwFrame != s_last_empty_frame)
+        {
+            Msg("~ [DetailManager] GPU grass residency empty - skipping placement this frame");
+            s_last_empty_frame = Device.dwFrame;
+        }
         m_compute_manager->ResetInstanceAllocator(cmd_list);
         m_compute_manager->FinalizePlacement(cmd_list);
         return;
@@ -680,7 +711,7 @@ void CDetailManager::Render(CBackend& cmd_list)
         }
 
         // Dispatch GPU culling compute shader
-        m_compute_manager->DispatchCulling(cmd_list, Device.mFullTransform);
+        //m_compute_manager->DispatchCulling(cmd_list, Device.mFullTransform);
 
         // Render using indirect draws
         // GPU path renders all objects together in 3 draws (one per vis_id)
