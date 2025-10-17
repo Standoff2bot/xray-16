@@ -233,6 +233,8 @@ void CDetailManager::Load()
 
     Msg("* [DetailManager] GPU compute manager initialized (toggle with r__gpu_culling)");
 
+    BuildGPUGrassOfflineData();
+
     // swing desc
     // normal
     swing_desc[0].amp1 = pSettings->r_float("details", "swing_normal_amp1");
@@ -276,6 +278,32 @@ void CDetailManager::Unload()
     m_visibles[1].clear();
     m_visibles[2].clear();
     FS.r_close(dtFS);
+}
+
+void CDetailManager::BuildGPUGrassOfflineData()
+{
+    gpu_grass::OfflineBakeInput input = {};
+    input.header = &dtH;
+    input.slots = dtSlots;
+    input.config.tile_world_size = 32.f;
+    input.config.tile_resolution = 256;
+    input.config.ring_count = 3;
+    input.config.max_tiles_per_ring = 128;
+
+    gpu_grass::OfflineBakeResult result;
+    gpu_grass::OfflineBaker baker;
+    if (baker.Build(input, result))
+    {
+        m_gpu_grass_asset = std::move(result.asset);
+        m_gpu_slot_tile_map = std::move(result.slot_to_tile);
+        Msg("* [DetailManager] GPU grass offline bake generated %u tiles (%zu slots)", m_gpu_grass_asset.header.tile_count, size_t(m_gpu_grass_asset.slot_table.size()));
+    }
+    else
+    {
+        m_gpu_grass_asset = {};
+        m_gpu_slot_tile_map.clear();
+        Msg("! [DetailManager] GPU grass offline bake failed");
+    }
 }
 
 void CDetailManager::BuildGPUInstanceList()

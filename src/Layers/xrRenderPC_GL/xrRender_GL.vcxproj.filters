@@ -321,6 +321,9 @@
     <ClCompile Include="..\xrRender\DetailModel.cpp">
       <Filter>Details</Filter>
     </ClCompile>
+    <ClCompile Include="..\xrRender\GPUGrassData.cpp">
+      <Filter>Details</Filter>
+    </ClCompile>
     <ClCompile Include="..\xrRenderGL\glDetailManager_VS.cpp">
       <Filter>Details</Filter>
     </ClCompile>

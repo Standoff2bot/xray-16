@@ -39,6 +39,8 @@ target_sources(xrRender_GL PRIVATE
     ../xrRender/DetailManager_VS.cpp
     ../xrRender/DetailModel.cpp
     ../xrRender/DetailModel.h
+    ../xrRender/GPUGrassData.cpp
+    ../xrRender/GPUGrassData.h
     ../xrRender/du_box.cpp
     ../xrRender/du_box.h
     ../xrRender/du_cone.cpp

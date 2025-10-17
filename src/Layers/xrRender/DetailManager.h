@@ -174,6 +174,7 @@ public:
     void UpdateVisibleM();
     void UpdateVisibleS();
     void BuildGPUInstanceList(); // Build instance list for GPU culling
+    void BuildGPUGrassOfflineData(); // Precompute GPU grass assets (Phase 1 prototype)
 
 #ifdef _EDITOR
     virtual ObjectList* GetSnapList() = 0;
@@ -198,6 +199,9 @@ public:
     ref_geom gpu_Geom;
     VertexStagingBuffer gpu_VB;
     IndexStagingBuffer gpu_IB;
+
+    gpu_grass::OfflineAsset m_gpu_grass_asset;
+    gpu_grass::SlotToTileMap m_gpu_slot_tile_map;
 
     ref_constant hwc_consts;
     ref_constant hwc_wave;

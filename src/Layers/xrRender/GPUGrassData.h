@@ -57,23 +57,26 @@ struct OfflineAssetHeader
     u32 tile_count = 0;
 };
 
+// Deterministic seed data used by the GPU placement shader.
+struct alignas(16) PlacementSeed
+{
+    u32 slot_x;
+    u32 slot_z;
+    u32 base_seed;         // Pre-mixed slot seed used by deterministic hashing
+    u64 object_mask;       // Bitmask of detail objects enabled in this slot
+    float density_scale;   // Density multiplier extracted from palette
+};
+
 // Container describing the full baked dataset ready for runtime upload.
 struct OfflineAsset
 {
     OfflineAssetHeader header;
     xr_vector<TilePayload> tiles;
     xr_vector<SlotReference> slot_table;
+    xr_vector<PlacementSeed> placement_seeds;
+    xr_vector<Fvector2> slot_heights; // x = base height, y = height delta
     xr_vector<u8> palette_bytes;
     xr_vector<u8> height_bytes;
-};
-
-// Deterministic seed data used by the GPU placement shader.
-struct alignas(16) PlacementSeed
-{
-    u32 slot_x;
-    u32 slot_z;
-    u32 object_mask;       // Bitmask of detail objects enabled in this slot
-    float density_scale;   // Density multiplier extracted from palette
 };
 
 // Mapping type for quick lookup of baked tile payloads by slot index.
@@ -96,12 +99,7 @@ class OfflineBaker
 {
 public:
     OfflineBaker() = default;
-    bool Build(const OfflineBakeInput& input, OfflineBakeResult& result)
-    {
-        (void)input;
-        result = {};
-        return false;
-    }
+    bool Build(const OfflineBakeInput& input, OfflineBakeResult& result);
 };
 
 } // namespace xray::render::RENDER_NAMESPACE::gpu_grass
