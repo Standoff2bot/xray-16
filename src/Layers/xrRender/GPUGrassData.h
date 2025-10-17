@@ -6,6 +6,9 @@
 
 namespace xray::render::RENDER_NAMESPACE::gpu_grass
 {
+constexpr float kHeightQuantOffset = 200.f; // Matches legacy DetailSlot base encoding
+constexpr float kHeightQuantStep = 0.02f;   // 2cm resolution keeps range within 16 bits
+
 // Clipmap configuration describing residency rings and tile resolution.
 struct ClipmapConfig
 {
@@ -74,7 +77,12 @@ struct OfflineAsset
     xr_vector<TilePayload> tiles;
     xr_vector<SlotReference> slot_table;
     xr_vector<PlacementSeed> placement_seeds;
-    xr_vector<Fvector2> slot_heights; // x = base height, y = height delta
+    struct SlotHeightInfo
+    {
+        float min_height = 0.f;
+        float max_height = 0.f;
+    };
+    xr_vector<SlotHeightInfo> slot_heights;
     xr_vector<u8> palette_bytes;
     xr_vector<u8> height_bytes;
 };

@@ -29,6 +29,8 @@
 #else
 #error Add your platform here
 #endif
+
+extern ENGINE_API IGame_Level* g_pGameLevel;
 #endif
 
 namespace xray::render::RENDER_NAMESPACE
@@ -282,6 +284,14 @@ void CDetailManager::Unload()
 
 void CDetailManager::BuildGPUGrassOfflineData()
 {
+    if (!g_pGameLevel)
+    {
+        Msg("! [DetailManager] GPU grass offline bake skipped (no active game level)");
+        m_gpu_grass_asset = {};
+        m_gpu_slot_tile_map.clear();
+        return;
+    }
+
     gpu_grass::OfflineBakeInput input = {};
     input.header = &dtH;
     input.slots = dtSlots;
@@ -296,7 +306,53 @@ void CDetailManager::BuildGPUGrassOfflineData()
     {
         m_gpu_grass_asset = std::move(result.asset);
         m_gpu_slot_tile_map = std::move(result.slot_to_tile);
-        Msg("* [DetailManager] GPU grass offline bake generated %u tiles (%zu slots)", m_gpu_grass_asset.header.tile_count, size_t(m_gpu_grass_asset.slot_table.size()));
+
+        float min_height = FLT_MAX;
+        float max_height = -FLT_MAX;
+        for (const auto& info : m_gpu_grass_asset.slot_heights)
+        {
+            min_height = std::min(min_height, info.min_height);
+            max_height = std::max(max_height, info.max_height);
+        }
+        if (m_gpu_grass_asset.slot_heights.empty())
+            min_height = max_height = 0.f;
+
+        const size_t palette_bytes = m_gpu_grass_asset.palette_bytes.size();
+        const size_t height_bytes = m_gpu_grass_asset.height_bytes.size();
+        Msg("* [DetailManager] GPU grass offline bake generated %u tiles (%zu slots)",
+            m_gpu_grass_asset.header.tile_count,
+            size_t(m_gpu_grass_asset.slot_table.size()));
+        Msg("* [DetailManager] GPU grass memory: palette %.2f MB, height %.2f MB",
+            palette_bytes / (1024.f * 1024.f),
+            height_bytes / (1024.f * 1024.f));
+        Msg("* [DetailManager] GPU grass slot height range: [%.2f .. %.2f]", min_height, max_height);
+
+        const u32 tile_resolution = std::max<u32>(1, m_gpu_grass_asset.header.config.tile_resolution);
+        const size_t expected_tile_height_bytes = size_t(tile_resolution) * size_t(tile_resolution) * sizeof(u16);
+        bool mismatched_tile = false;
+        for (const auto& tile : m_gpu_grass_asset.tiles)
+        {
+            if (tile.height_bytes != expected_tile_height_bytes)
+            {
+                Msg("! [DetailManager] Tile (%d,%d) has unexpected height byte size: %u (expected %zu)",
+                    tile.coord.region_x,
+                    tile.coord.region_z,
+                    tile.height_bytes,
+                    expected_tile_height_bytes);
+                mismatched_tile = true;
+                break;
+            }
+        }
+        if (!mismatched_tile && expected_tile_height_bytes != 0)
+        {
+            const size_t expected_total = expected_tile_height_bytes * m_gpu_grass_asset.tiles.size();
+            if (expected_total != height_bytes)
+            {
+                Msg("! [DetailManager] Height byte total mismatch: %zu (expected %zu)",
+                    height_bytes,
+                    expected_total);
+            }
+        }
     }
     else
     {

@@ -177,7 +177,7 @@ public:
         c_b = w_qclr(0.f, 15);
     }
 
-    u8 r_id(u32 idx)
+    u8 r_id(u32 idx) const
     {
         switch (idx)
         {

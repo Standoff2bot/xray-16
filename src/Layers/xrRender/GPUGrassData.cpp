@@ -4,12 +4,18 @@
 #include "GPUGrassData.h"
 
 #include "xrCommon/xr_map.h"
+#include "xrCDB/Intersect.hpp"
+#include "xrCDB/xrXRC.h"
+#include "xrEngine/IGame_Level.h"
+#include "xrMaterialSystem/GameMtlLib.h"
 #include "xrCore/Threading/ParallelFor.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cfloat>
 #include <cstring>
 #include <limits>
+
+extern ENGINE_API IGame_Level* g_pGameLevel;
 
 namespace xray::render::RENDER_NAMESPACE::gpu_grass
 {
@@ -98,6 +104,13 @@ inline u32 MixSeed(u32 slot_x, u32 slot_z)
     return seed;
 }
 
+inline u16 QuantizeHeight(float height)
+{
+    const float normalized = (height + kHeightQuantOffset) / kHeightQuantStep;
+    const float clamped = std::clamp(normalized, 0.f, 65535.f);
+    return static_cast<u16>(clamped + 0.5f);
+}
+
 } // namespace
 
 bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& result)
@@ -179,10 +192,11 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
     const u32 tile_texels = tile_span * tile_span;
     const u32 layer_stride = tile_texels * 4; // RGBA per texel
     const u32 tile_palette_bytes = layer_stride * palette_layers;
+    const u32 tile_resolution = std::max<u32>(1, config.tile_resolution);
+    const u32 tile_sample_count = tile_resolution * tile_resolution;
 
     xr_vector<xr_vector<u8>> tile_palette(tile_count);
-    for (size_t i = 0; i < tile_count; ++i)
-        tile_palette[i].assign(tile_palette_bytes, 0);
+    xr_vector<xr_vector<u8>> tile_heights(tile_count);
 
     xr_vector<const TileAccumulator*> tile_entries;
     tile_entries.reserve(tile_count);
@@ -205,9 +219,75 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
     xr_vector<u32> slot_tile_indices(total_slots, u32(-1));
     xr_vector<float> tile_times(tile_count, 0.f);
     xr_vector<u32> tile_seeds(tile_count, 0);
+    xr_vector<u32> tile_valid_samples(tile_count, 0);
+    xr_vector<float> tile_min_height(tile_count, FLT_MAX);
+    xr_vector<float> tile_max_height(tile_count, -FLT_MAX);
 
-    xr_parallel_for(TaskRange<size_t>(0, tile_count), [&](const TaskRange<size_t>& range)
+    struct TileBakeContext
     {
+        ClipmapConfig config;
+        s32 tile_span;
+        u32 palette_layers;
+        u32 layer_stride;
+        u32 tile_palette_bytes;
+        u32 tile_resolution;
+        u32 tile_sample_count;
+        const DetailHeader* header;
+        const DetailSlot* slots;
+        xr_vector<std::pair<s32, s32>>* tile_keys;
+        xr_vector<const TileAccumulator*>* tile_entries;
+        xr_vector<u32>* tile_offsets;
+        xr_vector<xr_vector<u8>>* tile_palette;
+        xr_vector<xr_vector<u8>>* tile_heights;
+        xr_vector<u32>* slot_tile_indices;
+        xr_vector<float>* tile_times;
+        xr_vector<u32>* tile_seeds;
+        xr_vector<u32>* tile_valid_samples;
+        xr_vector<float>* tile_min_height;
+        xr_vector<float>* tile_max_height;
+        OfflineBakeResult* result;
+    };
+
+    TileBakeContext context = {
+        config,
+        tile_span,
+        palette_layers,
+        layer_stride,
+        tile_palette_bytes,
+        tile_resolution,
+        tile_sample_count,
+        input.header,
+        input.slots,
+        &tile_keys,
+        &tile_entries,
+        &tile_offsets,
+        &tile_palette,
+        &tile_heights,
+        &slot_tile_indices,
+        &tile_times,
+        &tile_seeds,
+        &tile_valid_samples,
+        &tile_min_height,
+        &tile_max_height,
+        &result
+    };
+
+    auto ProcessTileRange = [](TileBakeContext& ctx, const TaskRange<size_t>& range)
+    {
+        auto& config = ctx.config;
+        auto& tile_keys = *ctx.tile_keys;
+        auto& tile_entries = *ctx.tile_entries;
+        auto& tile_offsets = *ctx.tile_offsets;
+        auto& tile_palette = *ctx.tile_palette;
+        auto& tile_heights = *ctx.tile_heights;
+        auto& slot_tile_indices = *ctx.slot_tile_indices;
+        auto& tile_times = *ctx.tile_times;
+        auto& tile_seeds = *ctx.tile_seeds;
+        auto& tile_valid_samples = *ctx.tile_valid_samples;
+        auto& tile_min_height = *ctx.tile_min_height;
+        auto& tile_max_height = *ctx.tile_max_height;
+        auto& result = *ctx.result;
+
         for (size_t idx = range.begin(); idx != range.end(); ++idx)
         {
             CTimer tile_timer;
@@ -222,25 +302,39 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
             payload.coord.ring = 0;
             payload.coord.local_x = 0;
             payload.coord.local_z = 0;
-
             payload.slot_offset = tile_offsets[idx];
             payload.slot_count = static_cast<u32>(accumulator.slots.size());
             result.asset.tiles[idx] = payload;
-            result.asset.tiles[idx].palette_bytes = tile_palette_bytes;
+            result.asset.tiles[idx].palette_bytes = ctx.tile_palette_bytes;
 
             const u32 offset = tile_offsets[idx];
             const size_t count = accumulator.slots.size();
+
+            tile_palette[idx].assign(ctx.tile_palette_bytes, 0);
+
+            xr_vector<int> slot_lookup(ctx.tile_span * ctx.tile_span, -1);
+            xr_vector<float> slot_min(ctx.tile_span * ctx.tile_span, FLT_MAX);
+            xr_vector<float> slot_max(ctx.tile_span * ctx.tile_span, -FLT_MAX);
+
+            float tile_min_y = FLT_MAX;
+            float tile_max_y = -FLT_MAX;
+
             u8* palette_base = tile_palette[idx].data();
+
             for (size_t local = 0; local < count; ++local)
             {
                 const SlotReference& slot_ref = accumulator.slots[local];
-                result.asset.slot_table[offset + local] = slot_ref;
+                const u32 slot_table_index = offset + static_cast<u32>(local);
+                result.asset.slot_table[slot_table_index] = slot_ref;
                 slot_tile_indices[slot_ref.slot_index] = static_cast<u32>(idx);
 
-                int sx, sz;
-                input.header->slot_x_z(slot_ref.slot_index, sx, sz);
+                const u32 lut_index = slot_ref.slot_local_z * ctx.tile_span + slot_ref.slot_local_x;
+                slot_lookup[lut_index] = static_cast<int>(slot_table_index);
 
-                const DetailSlot& slot = input.slots[slot_ref.slot_index];
+                int sx, sz;
+                ctx.header->slot_x_z(slot_ref.slot_index, sx, sz);
+
+                const DetailSlot& slot = ctx.slots[slot_ref.slot_index];
                 PlacementSeed seed = {};
                 seed.slot_x = static_cast<u32>(sx);
                 seed.slot_z = static_cast<u32>(sz);
@@ -248,14 +342,18 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
                 seed.object_mask = BuildObjectMask(slot);
                 seed.density_scale = ComputeDensityScale(slot);
 
-                result.asset.placement_seeds[offset + local] = seed;
-                result.asset.slot_heights[offset + local].set(slot.r_ybase(), slot.r_yheight());
+                result.asset.placement_seeds[slot_table_index] = seed;
 
-                const u32 texel_index = slot_ref.slot_local_z * tile_span + slot_ref.slot_local_x;
-                for (u32 obj = 0; obj < palette_layers; ++obj)
+                const float slot_base = slot.r_ybase();
+                const float slot_top = slot_base + slot.r_yheight();
+                tile_min_y = std::min(tile_min_y, slot_base);
+                tile_max_y = std::max(tile_max_y, slot_top);
+
+                const u32 texel_index = slot_ref.slot_local_z * ctx.tile_span + slot_ref.slot_local_x;
+                for (u32 obj = 0; obj < ctx.palette_layers; ++obj)
                 {
                     const u8 detail_id = slot.r_id(obj);
-                    u8* dest = palette_base + (obj * layer_stride + texel_index * 4);
+                    u8* dest = palette_base + (obj * ctx.layer_stride + texel_index * 4);
                     if (detail_id == DetailSlot::ID_Empty)
                     {
                         dest[0] = dest[1] = dest[2] = dest[3] = 0;
@@ -270,9 +368,158 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
                 }
             }
 
+            if (tile_min_y == FLT_MAX)
+            {
+                tile_min_y = -10.f;
+                tile_max_y = 10.f;
+            }
+            else
+            {
+                tile_min_y -= 1.f;
+                tile_max_y += 5.f;
+            }
+
+            xr_vector<u16> height_quant(ctx.tile_sample_count, QuantizeHeight(tile_min_y));
+            float local_min_height = FLT_MAX;
+            float local_max_height = -FLT_MAX;
+            u32 valid_samples = 0;
+            if (g_pGameLevel)
+            {
+                const CDB::MODEL* model = g_pGameLevel->ObjectSpace.GetStaticModel();
+                const CDB::TRI* tris = g_pGameLevel->ObjectSpace.GetStaticTris();
+                const Fvector* verts = g_pGameLevel->ObjectSpace.GetStaticVerts();
+
+                if (model && tris && verts)
+                {
+                    Fbox tile_bounds;
+                    const float tile_origin_x = static_cast<float>(key.first * ctx.tile_span) * DETAIL_SLOT_SIZE;
+                    const float tile_origin_z = static_cast<float>(key.second * ctx.tile_span) * DETAIL_SLOT_SIZE;
+                    tile_bounds.vMin.set(tile_origin_x, tile_min_y, tile_origin_z);
+                    tile_bounds.vMax.set(tile_origin_x + config.tile_world_size, tile_max_y, tile_origin_z + config.tile_world_size);
+
+                    Fvector center, dims;
+                    tile_bounds.get_CD(center, dims);
+
+                    xrXRC tile_query;
+                    tile_query.box_query(CDB::OPT_FULL_TEST, model, center, dims);
+
+                    const u32 tri_count = tile_query.r_count();
+                    if (tri_count > 0)
+                    {
+                        const auto* results = tile_query.r_begin();
+                        const float step = config.tile_world_size / static_cast<float>(ctx.tile_resolution);
+                        const float ray_start = tile_max_y + 0.1f;
+                        const Fvector dir = {0.f, -1.f, 0.f};
+
+                        for (u32 z = 0; z < ctx.tile_resolution; ++z)
+                        {
+                            for (u32 x = 0; x < ctx.tile_resolution; ++x)
+                            {
+                                const u32 sample_index = z * ctx.tile_resolution + x;
+
+                                Fvector origin;
+                                origin.x = tile_origin_x + (static_cast<float>(x) + 0.5f) * step;
+                                origin.z = tile_origin_z + (static_cast<float>(z) + 0.5f) * step;
+                                origin.y = ray_start;
+
+                                float best_y = -FLT_MAX;
+                                for (u32 tri_idx = 0; tri_idx < tri_count; ++tri_idx)
+                                {
+                                    const CDB::TRI& tri = tris[results[tri_idx].id];
+                                    SGameMtl* mtl = GMLib.GetMaterialByIdx(tri.material);
+                                    if (mtl && mtl->Flags.test(SGameMtl::flPassable))
+                                        continue;
+
+                                    Fvector tv[3] = {verts[tri.verts[0]], verts[tri.verts[1]], verts[tri.verts[2]]};
+                                    float r_u, r_v, r_range;
+                                    if (CDB::TestRayTri(origin, dir, tv, r_u, r_v, r_range, TRUE) && r_range >= 0.f)
+                                    {
+                                        const float hit_y = origin.y - r_range;
+                                        if (hit_y > best_y)
+                                            best_y = hit_y;
+                                    }
+                                }
+
+                                float final_height;
+                                if (best_y <= -FLT_MAX * 0.5f)
+                                {
+                                    final_height = tile_min_y;
+                                }
+                                else
+                                {
+                                    final_height = best_y;
+                                    ++valid_samples;
+                                }
+
+                                local_min_height = std::min(local_min_height, final_height);
+                                local_max_height = std::max(local_max_height, final_height);
+                                height_quant[sample_index] = QuantizeHeight(final_height);
+
+                                const float norm_x = (static_cast<float>(x) + 0.5f) / static_cast<float>(ctx.tile_resolution);
+                                const float norm_z = (static_cast<float>(z) + 0.5f) / static_cast<float>(ctx.tile_resolution);
+                                const u32 slot_x = std::min<u32>(ctx.tile_span - 1, static_cast<u32>(norm_x * ctx.tile_span));
+                                const u32 slot_z = std::min<u32>(ctx.tile_span - 1, static_cast<u32>(norm_z * ctx.tile_span));
+                                const u32 lut_index = slot_z * ctx.tile_span + slot_x;
+                                const int slot_table_index = slot_lookup[lut_index];
+                                if (slot_table_index >= 0)
+                                {
+                                    slot_min[lut_index] = std::min(slot_min[lut_index], final_height);
+                                    slot_max[lut_index] = std::max(slot_max[lut_index], final_height);
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        local_min_height = tile_min_y;
+                        local_max_height = tile_max_y;
+                    }
+                }
+            }
+
+            if (local_min_height == FLT_MAX)
+                local_min_height = tile_min_y;
+            if (local_max_height == -FLT_MAX)
+                local_max_height = tile_max_y;
+
+            tile_valid_samples[idx] = valid_samples;
+            tile_min_height[idx] = local_min_height;
+            tile_max_height[idx] = local_max_height;
+
+            tile_heights[idx].resize(height_quant.size() * sizeof(u16));
+            std::memcpy(tile_heights[idx].data(), height_quant.data(), tile_heights[idx].size());
+            result.asset.tiles[idx].height_bytes = static_cast<u32>(tile_heights[idx].size());
+
+            for (size_t local = 0; local < count; ++local)
+            {
+                const SlotReference& slot_ref = accumulator.slots[local];
+                const u32 lut_index = slot_ref.slot_local_z * ctx.tile_span + slot_ref.slot_local_x;
+                const int slot_table_index = slot_lookup[lut_index];
+                const DetailSlot& slot = ctx.slots[slot_ref.slot_index];
+                const float fallback_base = slot.r_ybase();
+                const float fallback_top = fallback_base + slot.r_yheight();
+
+                auto& height_info = result.asset.slot_heights[offset + local];
+                if (slot_table_index >= 0 && slot_min[lut_index] != FLT_MAX && slot_max[lut_index] != -FLT_MAX)
+                {
+                    height_info.min_height = slot_min[lut_index];
+                    height_info.max_height = slot_max[lut_index];
+                }
+                else
+                {
+                    height_info.min_height = fallback_base;
+                    height_info.max_height = fallback_top;
+                }
+            }
+
             tile_times[idx] = tile_timer.GetElapsed_sec() * 1000.f;
             tile_seeds[idx] = static_cast<u32>(count);
         }
+    };
+
+    xr_parallel_for(TaskRange<size_t>(0, tile_count), [&context, &ProcessTileRange](const TaskRange<size_t>& range)
+    {
+        ProcessTileRange(context, range);
     });
 
     result.slot_to_tile.clear();
@@ -287,17 +534,35 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
     }
 
     size_t palette_total = 0;
+    size_t height_total = 0;
     for (size_t idx = 0; idx < tile_count; ++idx)
+    {
         palette_total += tile_palette[idx].size();
+        height_total += tile_heights[idx].size();
+    }
 
     result.asset.palette_bytes.resize(palette_total);
+    result.asset.height_bytes.resize(height_total);
+
     size_t palette_offset = 0;
+    size_t height_offset = 0;
     for (size_t idx = 0; idx < tile_count; ++idx)
     {
         TilePayload& payload = result.asset.tiles[idx];
         payload.palette_offset = static_cast<u32>(palette_offset);
-        std::memcpy(result.asset.palette_bytes.data() + palette_offset, tile_palette[idx].data(), tile_palette[idx].size());
-        palette_offset += tile_palette[idx].size();
+        payload.height_offset = static_cast<u32>(height_offset);
+
+        if (!tile_palette[idx].empty())
+        {
+            std::memcpy(result.asset.palette_bytes.data() + palette_offset, tile_palette[idx].data(), tile_palette[idx].size());
+            palette_offset += tile_palette[idx].size();
+        }
+
+        if (!tile_heights[idx].empty())
+        {
+            std::memcpy(result.asset.height_bytes.data() + height_offset, tile_heights[idx].data(), tile_heights[idx].size());
+            height_offset += tile_heights[idx].size();
+        }
     }
 
     float max_tile_time = -FLT_MAX;
@@ -324,30 +589,33 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
         }
     }
 
+    u64 total_valid = 0;
+    float min_tile_height = FLT_MAX;
+    float max_tile_height = -FLT_MAX;
+    for (size_t idx = 0; idx < tile_count; ++idx)
+    {
+        total_valid += tile_valid_samples[idx];
+        min_tile_height = std::min(min_tile_height, tile_min_height[idx]);
+        max_tile_height = std::max(max_tile_height, tile_max_height[idx]);
+    }
+
     if (tile_count == 0)
     {
         max_tile_time = 0.f;
         max_tile_seeds = 0;
         max_tile_x = max_tile_z = 0;
+        min_tile_height = max_tile_height = 0.f;
     }
 
-    float min_base = FLT_MAX;
-    float max_base = -FLT_MAX;
-    float min_top = FLT_MAX;
-    float max_top = -FLT_MAX;
-    for (const Fvector2& h : result.asset.slot_heights)
+    float slot_min_height = FLT_MAX;
+    float slot_max_height = -FLT_MAX;
+    for (const auto& h : result.asset.slot_heights)
     {
-        const float base = h.x;
-        const float top = h.x + h.y;
-        min_base = std::min(min_base, base);
-        max_base = std::max(max_base, base);
-        min_top = std::min(min_top, top);
-        max_top = std::max(max_top, top);
+        slot_min_height = std::min(slot_min_height, h.min_height);
+        slot_max_height = std::max(slot_max_height, h.max_height);
     }
     if (result.asset.slot_heights.empty())
-    {
-        min_base = max_base = min_top = max_top = 0.f;
-    }
+        slot_min_height = slot_max_height = 0.f;
 
     result.asset.header.tile_count = static_cast<u32>(result.asset.tiles.size());
     Msg("* [GPUGrass] OfflineBaker::Build complete - tiles: %u, seeds: %zu, slot-table entries: %zu",
@@ -362,10 +630,15 @@ bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& resul
         max_tile_time,
         heavy_tiles);
     Msg("* [GPUGrass] Palette memory: %zu bytes (%.2f MB)", palette_total, palette_total / (1024.f * 1024.f));
-    Msg("* [GPUGrass] Height stats - base[%.2f..%.2f], top[%.2f..%.2f]", min_base, max_base, min_top, max_top);
+    Msg("* [GPUGrass] Height memory: %zu bytes (%.2f MB)", height_total, height_total / (1024.f * 1024.f));
+    Msg("* [GPUGrass] Tile height range: [%.2f .. %.2f], valid samples: %llu",
+        min_tile_height,
+        max_tile_height,
+        total_valid);
+    Msg("* [GPUGrass] Slot height range: [%.2f .. %.2f]", slot_min_height, slot_max_height);
     Msg("* [GPUGrass] OfflineBaker::Build time: %.3f ms", timer.GetElapsed_sec() * 1000.f);
 
-     return true;
+    return true;
 }
 
 } // namespace xray::render::RENDER_NAMESPACE::gpu_grass
