@@ -77,6 +77,28 @@ void DetailComputeManager::UploadInstances(CBackend& cmd_list)
     // Stub
 }
 
+void DetailComputeManager::ResetInstanceAllocator(CBackend& cmd_list)
+{
+    //XR_UNUSED(cmd_list);
+}
+
+void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_vector<gpu_grass::TileResourceSlice>& tiles)
+{
+    //XR_UNUSED(cmd_list);
+    //XR_UNUSED(tiles);
+}
+
+void DetailComputeManager::FinalizePlacement(CBackend& cmd_list)
+{
+    //XR_UNUSED(cmd_list);
+    m_instance_count = 0;
+}
+
+void DetailComputeManager::UploadDetailObjects(const xr_vector<DetailObjectGPU>& details)
+{
+    //XR_UNUSED(details);
+}
+
 void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& view_proj)
 {
     // Stub - GL path uses CPU culling
@@ -95,6 +117,23 @@ void DetailComputeManager::ResetStats()
 void DetailComputeManager::ReadDebugData()
 {
     // Stub - GL doesn't support compute culling
+}
+
+void DetailComputeManager::UploadDetailObjectsInternal(const xr_vector<DetailObjectGPU>& details)
+{
+    //XR_UNUSED(details);
+}
+
+void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass::TileResourceSlice& tile)
+{
+    //XR_UNUSED(cmd_list);
+    //XR_UNUSED(tile);
+}
+
+u32 DetailComputeManager::ReadInstanceCounter(CBackend& cmd_list)
+{
+    //XR_UNUSED(cmd_list);
+    return 0;
 }
 
 // ===========================

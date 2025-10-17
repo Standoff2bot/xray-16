@@ -26,6 +26,8 @@ struct TileResourceSlice
     u32 height_bytes = 0;
 };
 
+TileResourceSlice BuildTileSlice(const OfflineAsset& asset, u32 tile_index);
+
 class PlacementStreamingContext
 {
 public:

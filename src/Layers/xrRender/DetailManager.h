@@ -9,6 +9,7 @@
 #include "DetailModel.h"
 #include "DetailManager_Compute.h"
 #include "GPUGrassData.h"
+#include "GPUGrassPlacement.h"
 #include "GPUGrassResidency.h"
 #include "GPUGrassPlacement.h"
 
@@ -175,7 +176,7 @@ public:
 
     void UpdateVisibleM();
     void UpdateVisibleS();
-    void BuildGPUInstanceList(); // Build instance list for GPU culling
+    void BuildGPUInstanceList(CBackend& cmd_list); // Build instance list for GPU culling
     void BuildGPUGrassOfflineData(); // Precompute GPU grass assets (Phase 1 prototype)
     void UpdateGPUGrassResidency(const Fvector& camera_position);
 
@@ -207,6 +208,8 @@ public:
     gpu_grass::SlotToTileMap m_gpu_slot_tile_map;
     gpu_grass::ResidencyManager m_gpu_residency;
     gpu_grass::PlacementStreamingContext m_gpu_placement;
+
+    void BuildGPUInstanceListCPU();
 
     ref_constant hwc_consts;
     ref_constant hwc_wave;

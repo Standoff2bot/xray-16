@@ -5,6 +5,36 @@
 
 namespace xray::render::RENDER_NAMESPACE::gpu_grass
 {
+TileResourceSlice BuildTileSlice(const OfflineAsset& asset, u32 tile_index)
+{
+    TileResourceSlice slice;
+    if (tile_index >= asset.tiles.size())
+        return slice;
+
+    const TilePayload& payload = asset.tiles[tile_index];
+    slice.tile_index = tile_index;
+    slice.payload = payload;
+    slice.slot_refs = asset.slot_table.data() + payload.slot_offset;
+    slice.slot_count = payload.slot_count;
+    slice.seeds = asset.placement_seeds.data() + payload.slot_offset;
+    slice.seed_count = payload.slot_count;
+    slice.slot_heights = asset.slot_heights.data() + payload.slot_offset;
+
+    if (payload.palette_bytes > 0)
+    {
+        slice.palette_data = asset.palette_bytes.data() + payload.palette_offset;
+        slice.palette_bytes = payload.palette_bytes;
+    }
+
+    if (payload.height_bytes > 0)
+    {
+        slice.height_data = asset.height_bytes.data() + payload.height_offset;
+        slice.height_bytes = payload.height_bytes;
+    }
+
+    return slice;
+}
+
 void PlacementStreamingContext::Initialize(const OfflineAsset* asset)
 {
     m_asset = asset;
@@ -29,33 +59,7 @@ void PlacementStreamingContext::EnqueueEvents(const xr_vector<TileEvent>& events
             if (evt.tile_index >= m_asset->tiles.size())
                 continue;
 
-            const TilePayload& payload = m_asset->tiles[evt.tile_index];
-
-            TileResourceSlice slice;
-            slice.tile_index = evt.tile_index;
-            slice.payload = payload;
-
-            slice.slot_refs = m_asset->slot_table.data() + payload.slot_offset;
-            slice.slot_count = payload.slot_count;
-
-            slice.seeds = m_asset->placement_seeds.data() + payload.slot_offset;
-            slice.seed_count = payload.slot_count;
-
-            slice.slot_heights = m_asset->slot_heights.data() + payload.slot_offset;
-
-            if (payload.palette_bytes > 0)
-            {
-                slice.palette_data = m_asset->palette_bytes.data() + payload.palette_offset;
-                slice.palette_bytes = payload.palette_bytes;
-            }
-
-            if (payload.height_bytes > 0)
-            {
-                slice.height_data = m_asset->height_bytes.data() + payload.height_offset;
-                slice.height_bytes = payload.height_bytes;
-            }
-
-            m_pending_loads.emplace_back(slice);
+            m_pending_loads.emplace_back(BuildTileSlice(*m_asset, evt.tile_index));
         }
         else if (evt.type == TileEvent::Type::Unload)
         {

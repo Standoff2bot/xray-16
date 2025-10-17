@@ -6,6 +6,7 @@
 #pragma hdrstop
 
 #include "DetailManager.h"
+#include "GPUGrassPlacement.h"
 #include "xrCDB/Intersect.hpp"
 
 #ifdef _EDITOR
@@ -231,6 +232,22 @@ void CDetailManager::Load()
     {
         m_compute_manager->SetGeometryInfo(objects[0]->number_indices);
         Msg("* [DetailManager] GPU geometry: %u indices", objects[0]->number_indices);
+
+        xr_vector<DetailObjectGPU> detail_objects;
+        detail_objects.reserve(objects.size());
+        for (const CDetail* detail : objects)
+        {
+            DetailObjectGPU info = {};
+            info.bbox_min = detail->bv_bb.vMin;
+            info.min_scale = detail->m_fMinScale;
+            info.bbox_max = detail->bv_bb.vMax;
+            info.max_scale = detail->m_fMaxScale;
+            info.radius = detail->bv_sphere.R;
+            info.flags = detail->m_Flags.get();
+            info.base_vis_id = detail->m_Flags.is(DO_NO_WAVING) ? 0u : 1u;
+            detail_objects.emplace_back(info);
+        }
+        m_compute_manager->UploadDetailObjects(detail_objects);
     }
 
     Msg("* [DetailManager] GPU compute manager initialized (toggle with r__gpu_culling)");
@@ -308,6 +325,7 @@ void CDetailManager::BuildGPUGrassOfflineData()
         m_gpu_slot_tile_map = std::move(result.slot_to_tile);
         m_gpu_residency.Initialize(&m_gpu_grass_asset);
         m_gpu_placement.Initialize(&m_gpu_grass_asset);
+        m_gpu_instance_list_dirty = true;
 
         float min_height = FLT_MAX;
         float max_height = -FLT_MAX;
@@ -382,6 +400,7 @@ void CDetailManager::UpdateGPUGrassResidency(const Fvector& camera_position)
                 ++unloads;
         }
         Msg("* [DetailManager] GPU grass residency update: +%zu / -%zu tiles", loads, unloads);
+        m_gpu_instance_list_dirty = true;
     }
     m_gpu_placement.EnqueueEvents(events);
     const auto& pendingLoads = m_gpu_placement.PendingLoads();
@@ -395,20 +414,43 @@ void CDetailManager::UpdateGPUGrassResidency(const Fvector& camera_position)
     m_gpu_placement.Clear();
 }
 
-void CDetailManager::BuildGPUInstanceList()
+void CDetailManager::BuildGPUInstanceList(CBackend& cmd_list)
 {
     ZoneScoped;
 
+    if (!ps_r__gpu_culling || !m_compute_manager || m_gpu_grass_asset.tiles.empty())
+    {
+        BuildGPUInstanceListCPU();
+        return;
+    }
+
+    xr_vector<u32> resident_indices = m_gpu_residency.GetResidentTileIndices();
+    if (resident_indices.empty())
+    {
+        m_compute_manager->ResetInstanceAllocator(cmd_list);
+        m_compute_manager->FinalizePlacement(cmd_list);
+        return;
+    }
+
+    xr_vector<gpu_grass::TileResourceSlice> slices;
+    slices.reserve(resident_indices.size());
+    for (u32 tile_index : resident_indices)
+    {
+        slices.emplace_back(gpu_grass::BuildTileSlice(m_gpu_grass_asset, tile_index));
+    }
+
+    m_compute_manager->ResetInstanceAllocator(cmd_list);
+    m_compute_manager->ProcessPlacementTiles(cmd_list, slices);
+    m_compute_manager->FinalizePlacement(cmd_list);
+}
+
+void CDetailManager::BuildGPUInstanceListCPU()
+{
     if (!m_compute_manager)
         return;
 
-    // Begin building instance list
     m_compute_manager->BeginInstanceUpdate();
 
-    u32 slot_count = 0;
-    u32 non_empty_slots = 0;
-
-    // Iterate through all cached slots and build GPU instance list
     for (u32 _mz = 0; _mz < dm_cache1_line; _mz++)
     {
         for (u32 _mx = 0; _mx < dm_cache1_line; _mx++)
@@ -423,32 +465,24 @@ void CDetailManager::BuildGPUInstanceList()
                 Slot* PS = *MS.slots[_i];
                 Slot& S = *PS;
 
-                slot_count++;
                 if (S.empty)
                     continue;
 
-                non_empty_slots++;
-
-                // Process all objects in this slot
                 for (int sp_id = 0; sp_id < dm_obj_in_slot; sp_id++)
                 {
                     SlotPart& sp = S.G[sp_id];
                     if (sp.id == DetailSlot::ID_Empty)
                         continue;
 
-                    // Get the detail object
                     CDetail& detail = *objects[sp.id];
-
-                    // Convert all instances in this slot part
                     for (SlotItem* item : sp.items)
                     {
                         DetailInstanceGPU gpu_inst = ConvertToGPUInstance(
-                            item,       // void* to SlotItem
-                            sp.id,      // object_id
-                            &detail,    // void* to CDetail
-                            S.sx,       // slot_x
-                            S.sz        // slot_z
-                        );
+                            item,
+                            sp.id,
+                            &detail,
+                            S.sx,
+                            S.sz);
 
                         m_compute_manager->AddInstance(gpu_inst);
                     }
@@ -457,7 +491,6 @@ void CDetailManager::BuildGPUInstanceList()
         }
     }
 
-    // Finish building instance list
     m_compute_manager->EndInstanceUpdate();
 }
 
@@ -635,12 +668,14 @@ void CDetailManager::Render(CBackend& cmd_list)
     // GPU compute culling path
     if (ps_r__gpu_culling && m_compute_manager)
     {
+        UpdateGPUGrassResidency(EYE);
+
         // Build instance list ONLY when cache changes (not every frame!)
         // This was the major bottleneck - rebuilding millions of instances every frame
         if (m_gpu_instance_list_dirty)
         {
             PIX_EVENT(INSTANCED_GRASS_BUILD_INSTANCES);
-            BuildGPUInstanceList();
+            BuildGPUInstanceList(cmd_list);
             m_gpu_instance_list_dirty = false;
         }
 

@@ -16,6 +16,11 @@ typedef ID3D11UnorderedAccessView ID3DUnorderedAccessView;
 
 namespace xray::render::RENDER_NAMESPACE
 {
+namespace gpu_grass
+{
+struct TileResourceSlice;
+}
+
 // Forward declarations
 class CDetailManager;
 class CDetail;
@@ -70,6 +75,28 @@ static_assert(offsetof(DetailInstanceGPU, bounds_radius) == 76, "DetailInstanceG
 static_assert(offsetof(DetailInstanceGPU, slot_x) == 96, "DetailInstanceGPU::slot_x offset mismatch");
 static_assert(offsetof(DetailInstanceGPU, fade_distance_sqr) == 108, "DetailInstanceGPU::fade_distance_sqr offset mismatch");
 
+struct DetailObjectGPU
+{
+    Fvector bbox_min;
+    float min_scale;
+    Fvector bbox_max;
+    float max_scale;
+    float radius;
+    u32 flags;
+    u32 base_vis_id;
+    u32 padding;
+};
+
+struct PlacementParamsGPU
+{
+    u32 instance_offset;
+    u32 slot_offset;
+    u32 slot_count;
+    u32 max_instances;
+    float slot_size;
+    float padding0[3];
+};
+
 // GPU-friendly frustum planes (64 bytes)
 struct FrustumGPU
 {
@@ -122,6 +149,12 @@ public:
     void SetGeometryInfo(u32 index_count) { m_index_count = index_count; }
     u32 GetIndexCount() const { return m_index_count; }
 
+    // Placement pipeline
+    void ResetInstanceAllocator(CBackend& cmd_list);
+    void ProcessPlacementTiles(CBackend& cmd_list, const xr_vector<gpu_grass::TileResourceSlice>& tiles);
+    void FinalizePlacement(CBackend& cmd_list);
+    void UploadDetailObjects(const xr_vector<DetailObjectGPU>& details);
+
     // Instance management
     void BeginInstanceUpdate();
     void AddInstance(const DetailInstanceGPU& instance);
@@ -153,6 +186,7 @@ private:
         // Instance data buffers
         ID3DBuffer* instance_buffer;                   // All instances (input)
         ID3DShaderResourceView* instance_buffer_srv;   // SRV for reading in compute shader
+        ID3DUnorderedAccessView* instance_buffer_uav;  // UAV for placement writes
 
         ID3DBuffer* visible_indices[3];                // Visible instance indices per vis_id (output)
         ID3DUnorderedAccessView* visible_indices_uav[3]; // UAV for writing
@@ -161,15 +195,25 @@ private:
         ID3DBuffer* counter_buffer;                    // Atomic counters for visible instances
         ID3DUnorderedAccessView* counter_buffer_uav;   // UAV for atomic operations
 
+        ID3DBuffer* instance_counter_buffer;           // Global instance counter for placement
+        ID3DUnorderedAccessView* instance_counter_uav; // UAV for counter operations
+        ID3DBuffer* instance_counter_readback;         // Staging readback
+
         // Indirect draw arguments
         ID3DBuffer* indirect_args[3];                  // One per vis_id (D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS)
         ID3DUnorderedAccessView* indirect_args_uav[3]; // UAV for compute shader writes
 
         // Constants
         ConstantBufferHandle cull_params_cb;           // Culling parameters
+        ConstantBufferHandle placement_params_cb;      // Placement parameters
 
         // Compute shader
         ref_cs cull_shader;                            // Frustum culling compute shader
+        ref_cs placement_shader;                       // Placement compute shader
+
+        // Detail metadata
+        ID3DBuffer* detail_object_buffer;
+        ID3DShaderResourceView* detail_object_srv;
 
         // Staging for readback (debug/stats only)
         void* counter_readback;        // ID3DBuffer* for counter readback staging
@@ -201,6 +245,9 @@ private:
     void DestroyBuffers();
     void UploadInstances(CBackend& cmd_list);
     void CompileShaders();
+    void UploadDetailObjectsInternal(const xr_vector<DetailObjectGPU>& details);
+    void DispatchPlacement(CBackend& cmd_list, const gpu_grass::TileResourceSlice& tile);
+    u32 ReadInstanceCounter(CBackend& cmd_list);
 };
 
 // ===========================

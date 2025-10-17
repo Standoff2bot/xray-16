@@ -4,10 +4,44 @@
 #include "stdafx.h"
 #include "Layers/xrRender/DetailManager_Compute.h"
 #include "Layers/xrRender/DetailManager.h"
+#include "Layers/xrRender/GPUGrassPlacement.h"
+#include "Layers/xrRender/GPUGrassData.h"
 #include "dx11HW.h"
+
+using xray::render::RENDER_NAMESPACE::gpu_grass::PlacementSeed;
 
 namespace xray::render::RENDER_NAMESPACE
 {
+
+namespace
+{
+struct PlacementSeedGPUData
+{
+    u32 slot_x;
+    u32 slot_z;
+    u32 base_seed;
+    u32 object_mask_low;
+    u32 object_mask_high;
+    float density_scale;
+    float pad0;
+    float pad1;
+};
+
+struct SlotReferenceGPUData
+{
+    u32 slot_index;
+    u32 slot_local_x;
+    u32 slot_local_z;
+    u32 pad;
+};
+
+struct SlotHeightGPUData
+{
+    float min_height;
+    float max_height;
+};
+} // namespace
+
 
 // ===========================
 // Constructor / Destructor
@@ -88,13 +122,13 @@ void DetailComputeManager::CreateBuffers(u32 max_instances)
     const u32 index_buffer_size = max_instances * sizeof(u32);
 
     // ===========================
-    // Instance Buffer (SRV)
+    // Instance Buffer (SRV + UAV)
     // ===========================
     {
         D3D_BUFFER_DESC desc = {};
         desc.ByteWidth = instance_buffer_size;
         desc.Usage = D3D_USAGE_DEFAULT;
-        desc.BindFlags = D3D_BIND_SHADER_RESOURCE;
+        desc.BindFlags = D3D_BIND_SHADER_RESOURCE | D3D_BIND_UNORDERED_ACCESS;
         desc.CPUAccessFlags = 0;
         desc.MiscFlags = D3D_RESOURCE_MISC_BUFFER_STRUCTURED;
         desc.StructureByteStride = sizeof(DetailInstanceGPU);
@@ -109,6 +143,16 @@ void DetailComputeManager::CreateBuffers(u32 max_instances)
         srv_desc.Buffer.NumElements = max_instances;
 
         CHK_DX(device->CreateShaderResourceView(m_gpu.instance_buffer, &srv_desc, &m_gpu.instance_buffer_srv));
+
+        // Create UAV
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+        uav_desc.Format = DXGI_FORMAT_UNKNOWN;
+        uav_desc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+        uav_desc.Buffer.FirstElement = 0;
+        uav_desc.Buffer.NumElements = max_instances;
+        uav_desc.Buffer.Flags = 0;
+
+        CHK_DX(device->CreateUnorderedAccessView(m_gpu.instance_buffer, &uav_desc, &m_gpu.instance_buffer_uav));
 
         Msg("    Instance buffer: %u bytes (%u instances)", instance_buffer_size, max_instances);
     }
@@ -178,6 +222,42 @@ void DetailComputeManager::CreateBuffers(u32 max_instances)
     }
 
     // ===========================
+    // Instance Counter Buffer (UAV)
+    // ===========================
+    {
+        D3D_BUFFER_DESC desc = {};
+        desc.ByteWidth = sizeof(u32);
+        desc.Usage = D3D_USAGE_DEFAULT;
+        desc.BindFlags = D3D_BIND_UNORDERED_ACCESS | D3D_BIND_SHADER_RESOURCE;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = D3D_RESOURCE_MISC_BUFFER_STRUCTURED;
+        desc.StructureByteStride = sizeof(u32);
+
+        CHK_DX(device->CreateBuffer(&desc, nullptr, &m_gpu.instance_counter_buffer));
+
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+        uav_desc.Format = DXGI_FORMAT_UNKNOWN;
+        uav_desc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+        uav_desc.Buffer.FirstElement = 0;
+        uav_desc.Buffer.NumElements = 1;
+        uav_desc.Buffer.Flags = 0;
+
+        CHK_DX(device->CreateUnorderedAccessView(m_gpu.instance_counter_buffer, &uav_desc, &m_gpu.instance_counter_uav));
+
+        D3D_BUFFER_DESC readback_desc = desc;
+        readback_desc.BindFlags = 0;
+        readback_desc.CPUAccessFlags = D3D_CPU_ACCESS_READ;
+        readback_desc.Usage = D3D_USAGE_STAGING;
+        readback_desc.MiscFlags = 0;
+
+        ID3DBuffer* readback = nullptr;
+        CHK_DX(device->CreateBuffer(&readback_desc, nullptr, &readback));
+        m_gpu.instance_counter_readback = readback;
+
+        Msg("    Instance counter buffer: %u bytes", sizeof(u32));
+    }
+
+    // ===========================
     // Indirect Draw Arguments (UAV) - 3 sets for each vis_id
     // NOTE: Cannot be BOTH structured and indirect args - use RAW buffer UAV instead
     // Compute shader will write to it as RWByteAddressBuffer
@@ -219,6 +299,18 @@ void DetailComputeManager::CreateBuffers(u32 max_instances)
 
         CHK_DX(device->CreateBuffer(&desc, nullptr, &m_gpu.cull_params_cb));
         Msg("    Culling params CB: %u bytes", sizeof(DetailCullParams));
+    }
+
+    {
+        D3D_BUFFER_DESC desc = {};
+        desc.ByteWidth = sizeof(PlacementParamsGPU);
+        desc.Usage = D3D_USAGE_DYNAMIC;
+        desc.BindFlags = D3D_BIND_CONSTANT_BUFFER;
+        desc.CPUAccessFlags = D3D_CPU_ACCESS_WRITE;
+        desc.MiscFlags = 0;
+
+        CHK_DX(device->CreateBuffer(&desc, nullptr, &m_gpu.placement_params_cb));
+        Msg("    Placement params CB: %u bytes", sizeof(PlacementParamsGPU));
     }
 
     // ===========================
@@ -303,6 +395,7 @@ void DetailComputeManager::DestroyBuffers()
 #if defined(USE_DX11)
     _RELEASE(m_gpu.instance_buffer);
     _RELEASE(m_gpu.instance_buffer_srv);
+    _RELEASE(m_gpu.instance_buffer_uav);
 
     for (int i = 0; i < 3; ++i)
     {
@@ -315,8 +408,9 @@ void DetailComputeManager::DestroyBuffers()
 
     _RELEASE(m_gpu.counter_buffer);
     _RELEASE(m_gpu.counter_buffer_uav);
+    _RELEASE(m_gpu.instance_counter_buffer);
+    _RELEASE(m_gpu.instance_counter_uav);
 
-    // Release host buffer handle (HostBufferHandle is just void*)
     if (m_gpu.counter_readback)
     {
         auto* buf = static_cast<ID3DBuffer*>(m_gpu.counter_readback);
@@ -329,8 +423,8 @@ void DetailComputeManager::DestroyBuffers()
         _RELEASE(buf);
         m_gpu.indirect_args_readback = nullptr;
     }
+    _RELEASE(m_gpu.instance_counter_readback);
 
-    // Release debug buffers
     _RELEASE(m_gpu.debug_buffer);
     _RELEASE(m_gpu.debug_buffer_uav);
     if (m_gpu.debug_readback)
@@ -340,7 +434,13 @@ void DetailComputeManager::DestroyBuffers()
         m_gpu.debug_readback = nullptr;
     }
 
+    _RELEASE(m_gpu.detail_object_buffer);
+    _RELEASE(m_gpu.detail_object_srv);
+
     _RELEASE(m_gpu.cull_params_cb);
+    _RELEASE(m_gpu.placement_params_cb);
+    m_gpu.placement_shader.destroy();
+    m_gpu.cull_shader.destroy();
 #endif // USE_DX11
 }
 
@@ -354,6 +454,7 @@ void DetailComputeManager::CompileShaders()
 
 #if defined(USE_DX11)
     m_gpu.cull_shader.create("detail_cull");
+    m_gpu.placement_shader.create("detail_place");
 
     if (!m_gpu.cull_shader)
     {
@@ -361,7 +462,13 @@ void DetailComputeManager::CompileShaders()
         return;
     }
 
-    Msg("* [DetailComputeManager] Compute shader compiled successfully");
+    if (!m_gpu.placement_shader)
+    {
+        Msg("! [DetailComputeManager] FAILED to compile detail_place.cs shader!");
+        return;
+    }
+
+    Msg("* [DetailComputeManager] Compute shaders compiled successfully");
 #endif
 }
 
@@ -438,6 +545,267 @@ void DetailComputeManager::UploadInstances(CBackend& cmd_list)
 
     m_needs_upload = false;
 #endif // USE_DX11
+}
+
+void DetailComputeManager::ResetInstanceAllocator(CBackend& cmd_list)
+{
+#if defined(USE_DX11)
+    auto* context = HW.get_context(cmd_list.context_id);
+    const UINT zeros[4] = {0, 0, 0, 0};
+
+    if (m_gpu.instance_counter_uav)
+        context->ClearUnorderedAccessViewUint(m_gpu.instance_counter_uav, zeros);
+
+    if (m_gpu.counter_buffer_uav)
+        context->ClearUnorderedAccessViewUint(m_gpu.counter_buffer_uav, zeros);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        if (m_gpu.visible_indices_uav[i])
+            context->ClearUnorderedAccessViewUint(m_gpu.visible_indices_uav[i], zeros);
+        if (m_gpu.indirect_args_uav[i])
+            context->ClearUnorderedAccessViewUint(m_gpu.indirect_args_uav[i], zeros);
+    }
+
+    m_instance_count = 0;
+    m_stats.total_instances = 0;
+    m_stats.compute_dispatches = 0;
+    m_needs_upload = false;
+#endif
+}
+
+void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_vector<gpu_grass::TileResourceSlice>& tiles)
+{
+#if defined(USE_DX11)
+    if (!m_gpu.placement_shader || !m_gpu.detail_object_srv)
+        return;
+
+    for (const auto& tile : tiles)
+    {
+        if (tile.seed_count == 0)
+            continue;
+        DispatchPlacement(cmd_list, tile);
+        ++m_stats.compute_dispatches;
+    }
+
+    m_needs_upload = false;
+#else
+    XR_UNUSED(cmd_list);
+    XR_UNUSED(tiles);
+#endif
+}
+
+void DetailComputeManager::FinalizePlacement(CBackend& cmd_list)
+{
+#if defined(USE_DX11)
+    m_instance_count = ReadInstanceCounter(cmd_list);
+    m_stats.total_instances = m_instance_count;
+    m_needs_upload = false;
+#else
+    XR_UNUSED(cmd_list);
+#endif
+}
+
+void DetailComputeManager::UploadDetailObjects(const xr_vector<DetailObjectGPU>& details)
+{
+#if defined(USE_DX11)
+    UploadDetailObjectsInternal(details);
+#else
+    XR_UNUSED(details);
+#endif
+}
+
+void DetailComputeManager::UploadDetailObjectsInternal(const xr_vector<DetailObjectGPU>& details)
+{
+#if defined(USE_DX11)
+    auto* device = HW.pDevice;
+
+    _RELEASE(m_gpu.detail_object_srv);
+    _RELEASE(m_gpu.detail_object_buffer);
+
+    if (details.empty())
+        return;
+
+    D3D_BUFFER_DESC desc = {};
+    desc.ByteWidth = static_cast<u32>(details.size() * sizeof(DetailObjectGPU));
+    desc.Usage = D3D_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+    desc.MiscFlags = D3D_RESOURCE_MISC_BUFFER_STRUCTURED;
+    desc.StructureByteStride = sizeof(DetailObjectGPU);
+
+    D3D11_SUBRESOURCE_DATA init_data = {};
+    init_data.pSysMem = details.data();
+
+    CHK_DX(device->CreateBuffer(&desc, &init_data, &m_gpu.detail_object_buffer));
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+    srv_desc.Format = DXGI_FORMAT_UNKNOWN;
+    srv_desc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+    srv_desc.Buffer.FirstElement = 0;
+    srv_desc.Buffer.NumElements = static_cast<u32>(details.size());
+
+    CHK_DX(device->CreateShaderResourceView(m_gpu.detail_object_buffer, &srv_desc, &m_gpu.detail_object_srv));
+
+    Msg("* [DetailComputeManager] Uploaded %zu detail object descriptors", details.size());
+#else
+    XR_UNUSED(details);
+#endif
+}
+
+u32 DetailComputeManager::ReadInstanceCounter(CBackend& cmd_list)
+{
+#if defined(USE_DX11)
+    if (!m_gpu.instance_counter_buffer || !m_gpu.instance_counter_readback)
+        return 0;
+
+    auto* context = HW.get_context(cmd_list.context_id);
+    context->CopyResource(m_gpu.instance_counter_readback, m_gpu.instance_counter_buffer);
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    CHK_DX(context->Map(m_gpu.instance_counter_readback, 0, D3D11_MAP_READ, 0, &mapped));
+    u32 count = *reinterpret_cast<const u32*>(mapped.pData);
+    context->Unmap(m_gpu.instance_counter_readback, 0);
+
+    return count;
+#else
+    XR_UNUSED(cmd_list);
+    return 0;
+#endif
+}
+
+void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass::TileResourceSlice& tile)
+{
+#if defined(USE_DX11)
+    auto* device = HW.pDevice;
+    auto* context = HW.get_context(cmd_list.context_id);
+
+    xr_vector<PlacementSeedGPUData> seeds_gpu;
+    seeds_gpu.reserve(tile.seed_count);
+    for (u32 i = 0; i < tile.seed_count; ++i)
+    {
+        const PlacementSeed& seed = tile.seeds[i];
+        PlacementSeedGPUData gpu_seed = {};
+        gpu_seed.slot_x = seed.slot_x;
+        gpu_seed.slot_z = seed.slot_z;
+        gpu_seed.base_seed = seed.base_seed;
+        gpu_seed.object_mask_low = static_cast<u32>(seed.object_mask & 0xFFFFFFFFull);
+        gpu_seed.object_mask_high = static_cast<u32>((seed.object_mask >> 32) & 0xFFFFFFFFull);
+        gpu_seed.density_scale = seed.density_scale;
+        seeds_gpu.emplace_back(gpu_seed);
+    }
+
+    xr_vector<SlotReferenceGPUData> slots_gpu;
+    slots_gpu.reserve(tile.slot_count);
+    for (u32 i = 0; i < tile.slot_count; ++i)
+    {
+        SlotReferenceGPUData ref = {};
+        ref.slot_index = tile.slot_refs[i].slot_index;
+        ref.slot_local_x = tile.slot_refs[i].slot_local_x;
+        ref.slot_local_z = tile.slot_refs[i].slot_local_z;
+        slots_gpu.emplace_back(ref);
+    }
+
+    xr_vector<SlotHeightGPUData> heights_gpu;
+    heights_gpu.reserve(tile.slot_count);
+    for (u32 i = 0; i < tile.slot_count; ++i)
+    {
+        SlotHeightGPUData h = {};
+        h.min_height = tile.slot_heights[i].min_height;
+        h.max_height = tile.slot_heights[i].max_height;
+        heights_gpu.emplace_back(h);
+    }
+
+    auto createStructuredBuffer = [&](const void* data, u32 stride, u32 count, ID3DBuffer** outBuffer, ID3DShaderResourceView** outSrv)
+    {
+        if (count == 0)
+        {
+            *outBuffer = nullptr;
+            *outSrv = nullptr;
+            return;
+        }
+
+        D3D_BUFFER_DESC desc = {};
+        desc.ByteWidth = stride * count;
+        desc.Usage = D3D_USAGE_IMMUTABLE;
+        desc.BindFlags = D3D_BIND_SHADER_RESOURCE;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = D3D_RESOURCE_MISC_BUFFER_STRUCTURED;
+        desc.StructureByteStride = stride;
+
+        D3D11_SUBRESOURCE_DATA init = {};
+        init.pSysMem = data;
+
+        CHK_DX(device->CreateBuffer(&desc, &init, outBuffer));
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+        srv_desc.Format = DXGI_FORMAT_UNKNOWN;
+        srv_desc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        srv_desc.Buffer.FirstElement = 0;
+        srv_desc.Buffer.NumElements = count;
+
+        CHK_DX(device->CreateShaderResourceView(*outBuffer, &srv_desc, outSrv));
+    };
+
+    ID3DBuffer* seed_buffer = nullptr;
+    ID3DShaderResourceView* seed_srv = nullptr;
+    createStructuredBuffer(seeds_gpu.data(), sizeof(PlacementSeedGPUData), static_cast<u32>(seeds_gpu.size()), &seed_buffer, &seed_srv);
+
+    ID3DBuffer* slot_buffer = nullptr;
+    ID3DShaderResourceView* slot_srv = nullptr;
+    createStructuredBuffer(slots_gpu.data(), sizeof(SlotReferenceGPUData), static_cast<u32>(slots_gpu.size()), &slot_buffer, &slot_srv);
+
+    ID3DBuffer* height_buffer = nullptr;
+    ID3DShaderResourceView* height_srv = nullptr;
+    createStructuredBuffer(heights_gpu.data(), sizeof(SlotHeightGPUData), static_cast<u32>(heights_gpu.size()), &height_buffer, &height_srv);
+
+    PlacementParamsGPU params = {};
+    params.instance_offset = 0;
+    params.slot_offset = 0;
+    params.slot_count = tile.seed_count;
+    params.max_instances = m_max_instances;
+    params.slot_size = DETAIL_SLOT_SIZE;
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    CHK_DX(context->Map(m_gpu.placement_params_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+    memcpy(mapped.pData, &params, sizeof(PlacementParamsGPU));
+    context->Unmap(m_gpu.placement_params_cb, 0);
+
+    ID3DBuffer* cbs[] = { m_gpu.placement_params_cb };
+    context->CSSetConstantBuffers(0, 1, cbs);
+
+    ID3D11ShaderResourceView* srvs[] = { seed_srv, slot_srv, height_srv, m_gpu.detail_object_srv };
+    context->CSSetShaderResources(0, 4, srvs);
+
+    ID3D11UnorderedAccessView* uavs[] = { m_gpu.instance_buffer_uav, m_gpu.instance_counter_uav };
+    UINT initial_counts[2] = { D3D11_APPEND_ALIGNED_ELEMENT, D3D11_APPEND_ALIGNED_ELEMENT };
+    context->CSSetUnorderedAccessViews(0, 2, uavs, initial_counts);
+
+    context->CSSetShader(m_gpu.placement_shader->sh, nullptr, 0);
+
+    const u32 threads_per_group = 64;
+    const u32 dispatch_x = (tile.seed_count + threads_per_group - 1) / threads_per_group;
+    context->Dispatch(dispatch_x, 1, 1);
+
+    ID3D11ShaderResourceView* null_srvs[4] = { nullptr, nullptr, nullptr, nullptr };
+    context->CSSetShaderResources(0, 4, null_srvs);
+    ID3D11UnorderedAccessView* null_uavs[2] = { nullptr, nullptr };
+    UINT dummy_counts[2] = { 0, 0 };
+    context->CSSetUnorderedAccessViews(0, 2, null_uavs, dummy_counts);
+    ID3DBuffer* null_cbs[1] = { nullptr };
+    context->CSSetConstantBuffers(0, 1, null_cbs);
+    context->CSSetShader(nullptr, nullptr, 0);
+
+    _RELEASE(seed_srv);
+    _RELEASE(seed_buffer);
+    _RELEASE(slot_srv);
+    _RELEASE(slot_buffer);
+    _RELEASE(height_srv);
+    _RELEASE(height_buffer);
+#else
+    XR_UNUSED(cmd_list);
+    XR_UNUSED(tile);
+#endif
 }
 
 // ===========================
