@@ -4,6 +4,7 @@
 #include "GPUGrassData.h"
 
 #include "xrCommon/xr_map.h"
+#include "xrCore/FS.h"
 #include "xrCore/Threading/ParallelFor.hpp"
 #include "xrCDB/Intersect.hpp"
 #include "xrCDB/xrXRC.h"
@@ -24,6 +25,35 @@ namespace xray::render::RENDER_NAMESPACE::gpu_grass
 {
     namespace
     {
+        constexpr pcstr kSlotsFileName = "grass_slots.bin";
+        constexpr pcstr kSlotIndexFileName = "grass_slot_index.bin";
+        constexpr pcstr kHeightFileName = "grass_height_clipmap.dds";
+        constexpr pcstr kObjectFileName = "grass_object_info.bin";
+        constexpr pcstr kPaletteFileName = "grass_masks.dds";
+
+        struct SlotsFileHeader
+        {
+            u32 slot_count = 0;
+            u32 sample_dim = 0;
+            u32 samples_per_slot = 0;
+            u32 object_id_count = 0;
+        };
+
+        struct HeightFileHeader
+        {
+            u32 byte_count = 0;
+        };
+
+        struct PaletteFileHeader
+        {
+            u32 byte_count = 0;
+        };
+
+        struct ObjectFileHeader
+        {
+            u32 object_count = 0;
+        };
+
         constexpr float kEpsilon = 1e-6f;
 
         inline u32 SnapSlotsPerTile(float tile_world_size)
@@ -141,6 +171,394 @@ namespace xray::render::RENDER_NAMESPACE::gpu_grass
 
     bool OfflineBaker::Build(const OfflineBakeInput& input, OfflineBakeResult& result)
     {
+        if (input.use_disk_cache)
+        {
+            if (LoadFromDisk(input, result))
+            {
+                Msg("* [GPUGrass] OfflineBaker::Build loaded cached data from disk");
+                return true;
+            }
+            else
+            {
+                Msg("~ [GPUGrass] Cache unavailable or invalid, baking new data...");
+            }
+        }
+
+        if (!BuildInMemory(input, result))
+            return false;
+
+        if (input.save_to_disk)
+            SaveToDisk(input, result);
+
+        return true;
+    }
+
+    bool OfflineBaker::LoadFromDisk(const OfflineBakeInput& input, OfflineBakeResult& result)
+    {
+        if (!input.cache_alias)
+        {
+            Msg("~ [GPUGrass] Cache alias not provided - skip disk load");
+            return false;
+        }
+
+        auto ensure_exists = [&](pcstr filename) -> bool
+        {
+            if (!FS.exist(input.cache_alias, filename))
+            {
+                Msg("~ [GPUGrass] Cache file missing: %s (%s)", filename, input.cache_alias);
+                return false;
+            }
+            return true;
+        };
+
+        if (!ensure_exists(kSlotIndexFileName))
+            return false;
+        if (!ensure_exists(kSlotsFileName))
+            return false;
+        if (!ensure_exists(kHeightFileName))
+            return false;
+        if (!ensure_exists(kPaletteFileName))
+            return false;
+
+        IReader* index_reader = FS.r_open(input.cache_alias, kSlotIndexFileName);
+        if (!index_reader)
+        {
+            Msg("! [GPUGrass] Failed to open %s for reading", kSlotIndexFileName);
+            return false;
+        }
+
+        if (index_reader->length() < sizeof(OfflineAssetHeader))
+        {
+            Msg("! [GPUGrass] Cache header truncated: %s", kSlotIndexFileName);
+            FS.r_close(index_reader);
+            return false;
+        }
+
+        OfflineAssetHeader header;
+        index_reader->r(&header, sizeof(header));
+        const bool header_valid = header.magic == OfflineAssetHeader::kMagic && header.version == OfflineAssetHeader::kVersion;
+        const u32 tile_count = header.tile_count;
+
+        if (!header_valid)
+        {
+            Msg("! [GPUGrass] Cache header invalid (magic=%08X version=%u)", header.magic, header.version);
+            FS.r_close(index_reader);
+            return false;
+        }
+
+        const u64 tile_bytes = u64(tile_count) * sizeof(TilePayload);
+        const u32 length = index_reader->length();
+        const u32 remaining = index_reader->elapsed(); // bytes left to read
+        Msg("* [GPUGrass] Cache header: tiles=%u sizeof(TilePayload)=%zu remaining=%u file=%u",
+            tile_count, sizeof(TilePayload), remaining, length);
+        if (remaining < tile_bytes)
+        {
+            Msg("! [GPUGrass] Cache tile table truncated (tiles=%u, expectedBytes=%llu, remainingBytes=%u)",
+                tile_count,
+                static_cast<unsigned long long>(tile_bytes),
+                remaining);
+            FS.r_close(index_reader);
+            return false;
+        }
+
+        result.asset = {};
+        result.slot_to_tile.clear();
+        result.asset.header = header;
+        result.asset.tiles.resize(tile_count);
+        for (u32 i = 0; i < tile_count; ++i)
+        {
+            TilePayload payload = {};
+            payload.coord.region_x = index_reader->r_s32();
+            payload.coord.region_z = index_reader->r_s32();
+            payload.coord.ring = index_reader->r_u32();
+            payload.coord.local_x = index_reader->r_u32();
+            payload.coord.local_z = index_reader->r_u32();
+            payload.slot_offset = index_reader->r_u32();
+            payload.slot_count = index_reader->r_u32();
+            payload.palette_offset = index_reader->r_u32();
+            payload.palette_bytes = index_reader->r_u32();
+            payload.height_offset = index_reader->r_u32();
+            payload.height_bytes = index_reader->r_u32();
+            payload.world_origin_x = index_reader->r_float();
+            payload.world_origin_z = index_reader->r_float();
+            result.asset.tiles[i] = payload;
+        }
+        FS.r_close(index_reader);
+
+        IReader* slots_reader = FS.r_open(input.cache_alias, kSlotsFileName);
+        if (!slots_reader)
+        {
+            Msg("! [GPUGrass] Failed to open %s for reading", kSlotsFileName);
+            return false;
+        }
+
+        if (slots_reader->length() < sizeof(SlotsFileHeader))
+        {
+            Msg("! [GPUGrass] Cache slots header truncated");
+            FS.r_close(slots_reader);
+            return false;
+        }
+
+        SlotsFileHeader slots_header = {};
+        slots_reader->r(&slots_header, sizeof(slots_header));
+        const u32 slot_count = slots_header.slot_count;
+        const u32 object_id_count = slots_header.object_id_count;
+
+        const u64 expected_size =
+            sizeof(SlotsFileHeader) +
+            u64(slot_count) * sizeof(SlotReference) +
+            u64(slot_count) * sizeof(PlacementSeed) +
+            u64(slot_count) * sizeof(OfflineAsset::SlotHeightInfo) +
+            u64(object_id_count) * sizeof(u8);
+
+        if (slots_reader->length() < expected_size)
+        {
+            Msg("! [GPUGrass] Cache slots payload truncated (expected %llu, have %u)",
+                expected_size, slots_reader->length());
+            FS.r_close(slots_reader);
+            return false;
+        }
+
+        result.asset.slot_table.resize(slot_count);
+        result.asset.placement_seeds.resize(slot_count);
+        result.asset.slot_heights.resize(slot_count);
+        result.asset.slot_object_ids.resize(object_id_count);
+        slots_reader->r(result.asset.slot_table.data(), slot_count * sizeof(SlotReference));
+        slots_reader->r(result.asset.placement_seeds.data(), slot_count * sizeof(PlacementSeed));
+        slots_reader->r(result.asset.slot_heights.data(), slot_count * sizeof(OfflineAsset::SlotHeightInfo));
+        slots_reader->r(result.asset.slot_object_ids.data(), object_id_count * sizeof(u8));
+        FS.r_close(slots_reader);
+
+        result.asset.sample_dim = slots_header.sample_dim;
+        result.asset.samples_per_slot = slots_header.samples_per_slot;
+
+        IReader* height_reader = FS.r_open(input.cache_alias, kHeightFileName);
+        if (!height_reader)
+        {
+            Msg("! [GPUGrass] Failed to open %s for reading", kHeightFileName);
+            return false;
+        }
+        if (height_reader->length() < sizeof(HeightFileHeader))
+        {
+            Msg("! [GPUGrass] Cache height header truncated");
+            FS.r_close(height_reader);
+            return false;
+        }
+        HeightFileHeader height_header = {};
+        height_reader->r(&height_header, sizeof(height_header));
+        result.asset.height_bytes.resize(height_header.byte_count);
+        if (height_header.byte_count)
+        {
+            if (height_reader->length() < sizeof(HeightFileHeader) + height_header.byte_count)
+            {
+                Msg("! [GPUGrass] Cache height payload truncated (expected %u)", height_header.byte_count);
+                FS.r_close(height_reader);
+                return false;
+            }
+            height_reader->r(result.asset.height_bytes.data(), height_header.byte_count);
+        }
+        FS.r_close(height_reader);
+
+        IReader* palette_reader = FS.r_open(input.cache_alias, kPaletteFileName);
+        if (!palette_reader)
+        {
+            Msg("! [GPUGrass] Failed to open %s for reading", kPaletteFileName);
+            return false;
+        }
+        if (palette_reader->length() < sizeof(PaletteFileHeader))
+        {
+            Msg("! [GPUGrass] Cache palette header truncated");
+            FS.r_close(palette_reader);
+            return false;
+        }
+        PaletteFileHeader palette_header = {};
+        palette_reader->r(&palette_header, sizeof(palette_header));
+        result.asset.palette_bytes.resize(palette_header.byte_count);
+        if (palette_header.byte_count)
+        {
+            if (palette_reader->length() < sizeof(PaletteFileHeader) + palette_header.byte_count)
+            {
+                Msg("! [GPUGrass] Cache palette payload truncated (expected %u)", palette_header.byte_count);
+                FS.r_close(palette_reader);
+                return false;
+            }
+            palette_reader->r(result.asset.palette_bytes.data(), palette_header.byte_count);
+        }
+        FS.r_close(palette_reader);
+
+        if (FS.exist(input.cache_alias, kObjectFileName))
+        {
+            IReader* object_reader = FS.r_open(input.cache_alias, kObjectFileName);
+            if (object_reader)
+            {
+                if (object_reader->length() >= sizeof(ObjectFileHeader))
+                {
+                    ObjectFileHeader object_header = {};
+                    object_reader->r(&object_header, sizeof(object_header));
+                    const u32 object_count = object_header.object_count;
+                    if (object_reader->length() >= sizeof(ObjectFileHeader) + object_count * sizeof(OfflineAsset::DetailObjectRecord))
+                    {
+                        result.asset.detail_objects.resize(object_count);
+                        object_reader->r(result.asset.detail_objects.data(), object_count * sizeof(OfflineAsset::DetailObjectRecord));
+                    }
+                    else
+                    {
+                        Msg("! [GPUGrass] Cache object payload truncated (objects=%u)", object_count);
+                    }
+                }
+                FS.r_close(object_reader);
+            }
+            else
+            {
+                Msg("! [GPUGrass] Failed to open %s for reading", kObjectFileName);
+            }
+        }
+
+        xr_vector<std::pair<u32, u32>> slot_tile_pairs;
+        slot_tile_pairs.reserve(slot_count);
+        for (u32 tile_idx = 0; tile_idx < tile_count; ++tile_idx)
+        {
+            const TilePayload& payload = result.asset.tiles[tile_idx];
+            for (u32 i = 0; i < payload.slot_count; ++i)
+            {
+                const u32 global_index = payload.slot_offset + i;
+                if (global_index >= result.asset.slot_table.size())
+                    continue;
+                const SlotReference& ref = result.asset.slot_table[global_index];
+                slot_tile_pairs.emplace_back(ref.slot_index, tile_idx);
+            }
+        }
+        result.slot_to_tile.clear();
+        result.slot_to_tile.insert(slot_tile_pairs.begin(), slot_tile_pairs.end());
+
+        if (result.asset.detail_objects.empty() && input.detail_objects)
+        {
+            result.asset.detail_objects = *input.detail_objects;
+        }
+
+        Msg("* [GPUGrass] OfflineBaker loaded cache: tiles=%u slots=%u", tile_count, slot_count);
+        return true;
+    }
+
+    bool OfflineBaker::SaveToDisk(const OfflineBakeInput& input, const OfflineBakeResult& result)
+    {
+        if (!input.cache_alias)
+            return false;
+
+        const OfflineAsset& asset = result.asset;
+        bool success = true;
+
+        // slot index
+        if (IWriter* writer = FS.w_open(input.cache_alias, kSlotIndexFileName))
+        {
+            writer->w(&asset.header, sizeof(asset.header));
+            for (const TilePayload& payload : asset.tiles)
+            {
+                writer->w_s32(payload.coord.region_x);
+                writer->w_s32(payload.coord.region_z);
+                writer->w_u32(payload.coord.ring);
+                writer->w_u32(payload.coord.local_x);
+                writer->w_u32(payload.coord.local_z);
+                writer->w_u32(payload.slot_offset);
+                writer->w_u32(payload.slot_count);
+                writer->w_u32(payload.palette_offset);
+                writer->w_u32(payload.palette_bytes);
+                writer->w_u32(payload.height_offset);
+                writer->w_u32(payload.height_bytes);
+                writer->w_float(payload.world_origin_x);
+                writer->w_float(payload.world_origin_z);
+            }
+            FS.w_close(writer);
+        }
+        else
+        {
+            Msg("! [GPUGrass] Failed to open %s for writing", kSlotIndexFileName);
+            success = false;
+        }
+
+        if (IWriter* writer = FS.w_open(input.cache_alias, kSlotsFileName))
+        {
+            SlotsFileHeader header = {};
+            header.slot_count = static_cast<u32>(asset.slot_table.size());
+            header.sample_dim = asset.sample_dim;
+            header.samples_per_slot = asset.samples_per_slot;
+            header.object_id_count = static_cast<u32>(asset.slot_object_ids.size());
+            writer->w(&header, sizeof(header));
+            if (!asset.slot_table.empty())
+                writer->w(asset.slot_table.data(), static_cast<u32>(asset.slot_table.size() * sizeof(SlotReference)));
+            if (!asset.placement_seeds.empty())
+                writer->w(asset.placement_seeds.data(), static_cast<u32>(asset.placement_seeds.size() * sizeof(PlacementSeed)));
+            if (!asset.slot_heights.empty())
+                writer->w(asset.slot_heights.data(), static_cast<u32>(asset.slot_heights.size() * sizeof(OfflineAsset::SlotHeightInfo)));
+            if (!asset.slot_object_ids.empty())
+                writer->w(asset.slot_object_ids.data(), static_cast<u32>(asset.slot_object_ids.size() * sizeof(u8)));
+            FS.w_close(writer);
+        }
+        else
+        {
+            Msg("! [GPUGrass] Failed to open %s for writing", kSlotsFileName);
+            success = false;
+        }
+
+        if (IWriter* writer = FS.w_open(input.cache_alias, kHeightFileName))
+        {
+            HeightFileHeader header = {};
+            header.byte_count = static_cast<u32>(asset.height_bytes.size());
+            writer->w(&header, sizeof(header));
+            if (!asset.height_bytes.empty())
+                writer->w(asset.height_bytes.data(), static_cast<u32>(asset.height_bytes.size()));
+            FS.w_close(writer);
+        }
+        else
+        {
+            Msg("! [GPUGrass] Failed to open %s for writing", kHeightFileName);
+            success = false;
+        }
+
+        if (IWriter* writer = FS.w_open(input.cache_alias, kPaletteFileName))
+        {
+            PaletteFileHeader header = {};
+            header.byte_count = static_cast<u32>(asset.palette_bytes.size());
+            writer->w(&header, sizeof(header));
+            if (!asset.palette_bytes.empty())
+                writer->w(asset.palette_bytes.data(), static_cast<u32>(asset.palette_bytes.size()));
+            FS.w_close(writer);
+        }
+        else
+        {
+            Msg("! [GPUGrass] Failed to open %s for writing", kPaletteFileName);
+            success = false;
+        }
+
+        if (!asset.detail_objects.empty())
+        {
+            if (IWriter* writer = FS.w_open(input.cache_alias, kObjectFileName))
+            {
+                ObjectFileHeader header = {};
+                header.object_count = static_cast<u32>(asset.detail_objects.size());
+                writer->w(&header, sizeof(header));
+                writer->w(asset.detail_objects.data(), static_cast<u32>(asset.detail_objects.size() * sizeof(OfflineAsset::DetailObjectRecord)));
+                FS.w_close(writer);
+            }
+            else
+            {
+                Msg("! [GPUGrass] Failed to open %s for writing", kObjectFileName);
+                success = false;
+            }
+        }
+
+        if (success)
+        {
+            Msg("* [GPUGrass] OfflineBaker saved cache to disk: tiles=%u slots=%u",
+                asset.header.tile_count,
+                static_cast<u32>(asset.slot_table.size()));
+            FS.rescan_pathes();
+        }
+        return success;
+    }
+
+    bool OfflineBaker::BuildInMemory(const OfflineBakeInput& input, OfflineBakeResult& result)
+    {
         CTimer timer;
         timer.Start();
 
@@ -152,6 +570,7 @@ namespace xray::render::RENDER_NAMESPACE::gpu_grass
 
         const u32 total_slots = input.header->slot_count();
         Msg("* [GPUGrass] OfflineBaker::Build start - total slots: %u", total_slots);
+        Msg("* [GPUGrass] sizeof(TilePayload)=%zu", sizeof(TilePayload));
 
         result.asset = {};
         result.slot_to_tile.clear();
@@ -178,7 +597,8 @@ namespace xray::render::RENDER_NAMESPACE::gpu_grass
 
         xr_map<std::pair<s32, s32>, std::unique_ptr<TileAccumulator>> tile_accumulators;
 
-        result.slot_to_tile.reserve(total_slots);
+        xr_vector<std::pair<u32, u32>> slot_tile_pairs_build;
+        slot_tile_pairs_build.reserve(total_slots);
         result.asset.placement_seeds.clear();
         result.asset.placement_seeds.reserve(total_slots);
 
@@ -618,16 +1038,18 @@ namespace xray::render::RENDER_NAMESPACE::gpu_grass
                 ProcessTileRange(context, range);
             });
 
-        result.slot_to_tile.clear();
-        result.slot_to_tile.reserve(total_slots);
+        slot_tile_pairs_build.clear();
+        slot_tile_pairs_build.reserve(total_slots);
         for (u32 slot_index = 0; slot_index < total_slots; ++slot_index)
         {
             const u32 tile_idx = slot_tile_indices[slot_index];
             if (tile_idx != u32(-1))
             {
-                result.slot_to_tile.emplace(slot_index, tile_idx);
+                slot_tile_pairs_build.emplace_back(slot_index, tile_idx);
             }
         }
+        result.slot_to_tile.clear();
+        result.slot_to_tile.insert(slot_tile_pairs_build.begin(), slot_tile_pairs_build.end());
 
         size_t palette_total = 0;
         size_t height_total = 0;
@@ -712,6 +1134,11 @@ namespace xray::render::RENDER_NAMESPACE::gpu_grass
         }
         if (result.asset.slot_heights.empty())
             slot_min_height = slot_max_height = 0.f;
+
+        if (input.detail_objects)
+        {
+            result.asset.detail_objects = *input.detail_objects;
+        }
 
         result.asset.header.tile_count = static_cast<u32>(result.asset.tiles.size());
         Msg("* [GPUGrass] OfflineBaker::Build complete - tiles: %u, seeds: %zu, slot-table entries: %zu",

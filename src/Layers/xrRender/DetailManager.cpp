@@ -317,6 +317,22 @@ void CDetailManager::BuildGPUGrassOfflineData()
     input.config.ring_count = 3;
     input.config.max_tiles_per_ring = 24;
 
+    xr_vector<gpu_grass::OfflineAsset::DetailObjectRecord> object_records;
+    object_records.reserve(objects.size());
+    for (const CDetail* detail : objects)
+    {
+        gpu_grass::OfflineAsset::DetailObjectRecord record = {};
+        record.bbox_min = detail->bv_bb.vMin;
+        record.min_scale = detail->m_fMinScale;
+        record.bbox_max = detail->bv_bb.vMax;
+        record.max_scale = detail->m_fMaxScale;
+        record.radius = detail->bv_sphere.R;
+        record.flags = detail->m_Flags.get();
+        record.base_vis_id = detail->m_Flags.is(DO_NO_WAVING) ? 0u : 1u;
+        object_records.emplace_back(record);
+    }
+    input.detail_objects = &object_records;
+
     gpu_grass::OfflineBakeResult result;
     gpu_grass::OfflineBaker baker;
     if (baker.Build(input, result))

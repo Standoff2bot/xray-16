@@ -3,6 +3,7 @@
 #include "DetailFormat.h"
 #include "xrCommon/xr_vector.h"
 #include "xrCore/Containers/AssociativeVector.hpp"
+#include "xrCore/xrstring.h"
 
 namespace xray::render::RENDER_NAMESPACE::gpu_grass
 {
@@ -20,6 +21,7 @@ struct ClipmapConfig
     u32 max_tiles_per_ring = 64;   // Safety cap for residency tracking
 };
 
+#pragma pack(push, 4)
 // Integer coordinate identifying a tile within the clipmap hierarchy.
 struct TileCoordinate
 {
@@ -97,9 +99,22 @@ struct OfflineAsset
     xr_vector<u8> slot_object_ids; // 4 entries per slot (id0..id3)
     xr_vector<u8> palette_bytes;
     xr_vector<u8> height_bytes;
+    struct DetailObjectRecord
+    {
+        Fvector bbox_min;
+        float min_scale = 1.f;
+        Fvector bbox_max;
+        float max_scale = 1.f;
+        float radius = 0.f;
+        u32 flags = 0;
+        u32 base_vis_id = 0;
+    };
+    xr_vector<DetailObjectRecord> detail_objects;
     u32 sample_dim = 0;
     u32 samples_per_slot = 0;
 };
+#pragma pack(pop)
+static_assert(sizeof(TilePayload) == 52, "TilePayload must remain 52 bytes for on-disk compatibility");
 
 // Mapping type for quick lookup of baked tile payloads by slot index.
 using SlotToTileMap = AssociativeVector<u32, u32>;
@@ -109,6 +124,10 @@ struct OfflineBakeInput
     const DetailHeader* header = nullptr;
     const DetailSlot* slots = nullptr;
     ClipmapConfig config = {};
+    pcstr cache_alias = "$level$"; // Filesystem alias where cache files live
+    bool use_disk_cache = true;    // Attempt to load existing cache before baking
+    bool save_to_disk = true;      // Persist freshly baked data
+    const xr_vector<OfflineAsset::DetailObjectRecord>* detail_objects = nullptr;
 };
 
 struct OfflineBakeResult
@@ -122,6 +141,11 @@ class OfflineBaker
 public:
     OfflineBaker() = default;
     bool Build(const OfflineBakeInput& input, OfflineBakeResult& result);
+
+private:
+    bool LoadFromDisk(const OfflineBakeInput& input, OfflineBakeResult& result);
+    bool SaveToDisk(const OfflineBakeInput& input, const OfflineBakeResult& result);
+    bool BuildInMemory(const OfflineBakeInput& input, OfflineBakeResult& result);
 };
 
 } // namespace xray::render::RENDER_NAMESPACE::gpu_grass
