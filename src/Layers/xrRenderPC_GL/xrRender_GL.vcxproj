@@ -319,6 +319,7 @@
     <ClInclude Include="..\xrRender\blenders\Blender_Screen_SET.h" />
     <ClInclude Include="..\xrRender\blenders\Blender_tree.h" />
     <ClInclude Include="..\xrRender\DetailManager.h" />
+    <ClInclude Include="..\xrRender\GPUGrassData.h" />
     <ClInclude Include="..\xrRender\DetailModel.h" />
     <ClInclude Include="..\xrRender\dxParticleCustom.h" />
     <ClInclude Include="..\xrRender\ETextureParams.h" />

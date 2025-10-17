@@ -122,6 +122,7 @@
     <ClInclude Include="..\xrRender\D3DXRenderBase.h" />
     <ClInclude Include="..\xrRender\Debug\dxPixEventWrapper.h" />
     <ClInclude Include="..\xrRender\DetailFormat.h" />
+    <ClInclude Include="..\xrRender\GPUGrassData.h" />
     <ClInclude Include="..\xrRender\DetailManager.h" />
     <ClInclude Include="..\xrRender\DetailManager_Compute.h" />
     <ClInclude Include="..\xrRender\DetailModel.h" />

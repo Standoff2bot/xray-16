@@ -8,6 +8,7 @@
 #include "DetailFormat.h"
 #include "DetailModel.h"
 #include "DetailManager_Compute.h"
+#include "GPUGrassData.h"
 
 namespace xray::render::RENDER_NAMESPACE
 {

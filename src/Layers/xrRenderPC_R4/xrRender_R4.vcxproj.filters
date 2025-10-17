@@ -666,6 +666,9 @@
     <ClInclude Include="..\xrRender\DetailFormat.h">
       <Filter>Details</Filter>
     </ClInclude>
+    <ClInclude Include="..\xrRender\GPUGrassData.h">
+      <Filter>Details</Filter>
+    </ClInclude>
     <ClInclude Include="..\xrRender\light.h">
       <Filter>Lights</Filter>
     </ClInclude>

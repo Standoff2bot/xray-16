@@ -4,6 +4,7 @@
 #pragma once
 
 #include "DetailFormat.h"
+#include <cstddef>
 
 // Forward declarations for DirectX types
 struct ID3D11Buffer;
@@ -57,6 +58,17 @@ struct DetailInstanceGPU
 #pragma pack(pop)
 
 static_assert(sizeof(DetailInstanceGPU) == 112, "DetailInstanceGPU must be 112 bytes to match shader");
+static_assert(offsetof(DetailInstanceGPU, position) == 0, "DetailInstanceGPU::position offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, scale) == 12, "DetailInstanceGPU::scale offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, rotation_y) == 16, "DetailInstanceGPU::rotation_y offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, c_hemi) == 32, "DetailInstanceGPU::c_hemi offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, c_sun) == 36, "DetailInstanceGPU::c_sun offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, object_id) == 40, "DetailInstanceGPU::object_id offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, vis_id) == 44, "DetailInstanceGPU::vis_id offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, bounds_min) == 64, "DetailInstanceGPU::bounds_min offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, bounds_radius) == 76, "DetailInstanceGPU::bounds_radius offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, slot_x) == 96, "DetailInstanceGPU::slot_x offset mismatch");
+static_assert(offsetof(DetailInstanceGPU, fade_distance_sqr) == 108, "DetailInstanceGPU::fade_distance_sqr offset mismatch");
 
 // GPU-friendly frustum planes (64 bytes)
 struct FrustumGPU

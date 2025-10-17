@@ -884,6 +884,9 @@
     <ClInclude Include="..\xrRender\DetailModel.h">
       <Filter>Details</Filter>
     </ClInclude>
+    <ClInclude Include="..\xrRender\GPUGrassData.h">
+      <Filter>Details</Filter>
+    </ClInclude>
     <ClInclude Include="..\xrRender\HOM.h">
       <Filter>Visibility\HOM Occlusion</Filter>
     </ClInclude>
