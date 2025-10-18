@@ -6,6 +6,7 @@
 #include "Layers/xrRender/DetailManager.h"
 #include "Layers/xrRender/GPUGrassPlacement.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <iterator>
@@ -24,7 +25,7 @@ namespace xray::render::RENDER_NAMESPACE
 
 namespace
 {
-constexpr bool kForceAllGrassVisible = true;
+constexpr bool kForceAllGrassVisible = false;
 
 struct PlacementSeedGPUData
 {
@@ -68,6 +69,7 @@ DetailComputeManager::DetailComputeManager()
     , m_index_count(768)  // Default fallback
     , m_initialized(false)
     , m_needs_upload(false)
+    , m_next_free_offset(0)
 {
     ZeroMemory(&m_gpu, sizeof(m_gpu));
     ZeroMemory(&m_stats, sizeof(m_stats));
@@ -116,6 +118,8 @@ void DetailComputeManager::Shutdown()
     DestroyBuffers();
 
     m_instance_staging.clear();
+    m_tile_states.clear();
+    m_next_free_offset = 0;
     m_instance_count = 0;
     m_max_instances = 0;
     m_initialized = false;
@@ -586,10 +590,24 @@ void DetailComputeManager::ResetInstanceAllocator(CBackend& cmd_list)
     m_stats.total_instances = 0;
     m_stats.compute_dispatches = 0;
     m_needs_upload = false;
+    m_next_free_offset = 0;
+    for (auto& state : m_tile_states)
+    {
+        state.instance_count = 0;
+        state.allocated = false;
+        state.active = false;
+        state.base_offset = 0;
+        state.capacity = 0;
+        state.version++;
+    }
+    m_free_ranges.clear();
 #endif
 }
 
-void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_vector<gpu_grass::TileResourceSlice>& tiles)
+void DetailComputeManager::ProcessPlacementTiles(
+    CBackend& cmd_list,
+    const xr_vector<gpu_grass::TileResourceSlice>& tiles_to_load,
+    const xr_vector<u32>& tiles_to_unload)
 {
 #if defined(USE_DX11)
     if (!m_gpu.placement_shader || !m_gpu.detail_object_srv)
@@ -598,9 +616,14 @@ void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_ve
         return;
     }
 
+    if (tiles_to_load.empty() && tiles_to_unload.empty())
+        return;
+
+    auto* context = HW.get_context(cmd_list.context_id);
+
     const u32 threads_per_group = 64;
 
-    u32 total_tiles = static_cast<u32>(tiles.size());
+    u32 total_tiles = static_cast<u32>(tiles_to_load.size());
     u32 dispatched_tiles = 0;
     u32 tiles_missing_height = 0;
     u32 tiles_missing_samples = 0;
@@ -608,7 +631,12 @@ void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_ve
     u32 total_slots = 0;
     u64 total_samples = 0;
 
-    for (const auto& tile : tiles)
+    for (u32 unload_tile_idx : tiles_to_unload)
+    {
+        ReleaseTileRange(unload_tile_idx);
+    }
+
+    for (const auto& tile : tiles_to_load)
     {
         total_seeds += tile.seed_count;
         total_slots += tile.slot_count;
@@ -619,16 +647,43 @@ void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_ve
 
         const u32 samples_per_slot = tile.samples_per_slot ? tile.samples_per_slot : 1u;
 
-        if (tile.seed_count == 0)
+        const u32 required_capacity = std::max(tile.seed_count, 1u);
+        if (!AllocateTileRange(tile.tile_index, required_capacity))
+        {
+            Msg("! [DetailComputeManager] Skipping placement for tile %u", tile.tile_index);
             continue;
+        }
 
-        DispatchPlacement(cmd_list, tile);
+        auto& state = m_tile_states[tile.tile_index];
+        state.capacity = required_capacity;
+        state.version++;
+        state.active = true;
+
+        if (tile.seed_count == 0)
+        {
+            state.instance_count = 0;
+            continue;
+        }
+
+        const UINT zeroCount[4] = {0, 0, 0, 0};
+        context->ClearUnorderedAccessViewUint(m_gpu.instance_counter_uav, zeroCount);
+
+        DispatchPlacement(cmd_list, tile, state.base_offset, state.base_offset + state.capacity);
         ++dispatched_tiles;
 
         const u32 tile_samples = tile.seed_count * samples_per_slot;
         total_samples += tile_samples;
         const u32 dispatch_x = (tile_samples + threads_per_group - 1u) / threads_per_group;
         m_stats.compute_dispatches += dispatch_x;
+
+        u32 produced = ReadInstanceCounter(cmd_list);
+        state.instance_count = std::min(produced, state.capacity);
+
+        if (produced > state.capacity)
+        {
+            Msg("! [DetailComputeManager] Tile %u produced %u instances (capacity %u)",
+                tile.tile_index, produced, state.capacity);
+        }
     }
 
     Msg("* [DetailComputeManager] PlacementTiles: tiles=%u dispatched=%u seeds=%u slots=%u samples=%llu missingHeight=%u missingSamples=%u",
@@ -643,14 +698,33 @@ void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_ve
     m_needs_upload = false;
 #else
     XR_UNUSED(cmd_list);
-    XR_UNUSED(tiles);
+    XR_UNUSED(tiles_to_load);
+    XR_UNUSED(tiles_to_unload);
 #endif
 }
 
 void DetailComputeManager::FinalizePlacement(CBackend& cmd_list)
 {
 #if defined(USE_DX11)
-    m_instance_count = ReadInstanceCounter(cmd_list);
+    //XR_UNUSED(cmd_list);
+
+    u32 total_instances = 0;
+    FrustumGPU frustum = BuildFrustumGPU(Device.mView);
+
+    for (const auto& state : m_tile_states)
+    {
+        if (!state.allocated || !state.active)
+            continue;
+        total_instances += state.instance_count;
+    }
+
+    if (total_instances > m_max_instances)
+    {
+        Msg("! [DetailComputeManager] Instance count overflow (%u > %u)", total_instances, m_max_instances);
+        total_instances = m_max_instances;
+    }
+
+    m_instance_count = total_instances;
     m_stats.total_instances = m_instance_count;
     m_needs_upload = false;
 
@@ -672,6 +746,109 @@ void DetailComputeManager::UploadDetailObjects(const xr_vector<DetailObjectGPU>&
 #else
     XR_UNUSED(details);
 #endif
+}
+
+void DetailComputeManager::EnsureTileStateCapacity(u32 tile_count)
+{
+    if (tile_count <= m_tile_states.size())
+        return;
+
+    m_tile_states.resize(tile_count);
+}
+
+bool DetailComputeManager::AllocateTileRange(u32 tile_index, u32 required_capacity)
+{
+    if (required_capacity == 0)
+        required_capacity = 1;
+
+    EnsureTileStateCapacity(tile_index + 1);
+    auto& state = m_tile_states[tile_index];
+
+    if (state.allocated)
+    {
+        if (state.capacity >= required_capacity)
+            return true;
+
+        ReleaseTileRange(tile_index);
+    }
+
+    for (size_t i = 0; i < m_free_ranges.size(); ++i)
+    {
+        auto& range = m_free_ranges[i];
+        if (range.size < required_capacity)
+            continue;
+
+        state.base_offset = range.offset;
+        state.capacity = required_capacity;
+        state.allocated = true;
+
+        range.offset += required_capacity;
+        range.size -= required_capacity;
+        if (range.size == 0)
+            m_free_ranges.erase(m_free_ranges.begin() + i);
+
+        return true;
+    }
+
+    if (m_next_free_offset + required_capacity > m_max_instances)
+    {
+        Msg("! [DetailComputeManager] Not enough space for tile %u (need %u, available %u)",
+            tile_index, required_capacity, m_max_instances - m_next_free_offset);
+        return false;
+    }
+
+    state.base_offset = m_next_free_offset;
+    state.capacity = required_capacity;
+    state.allocated = true;
+    m_next_free_offset += required_capacity;
+    return true;
+}
+
+void DetailComputeManager::ReleaseTileRange(u32 tile_index)
+{
+    if (tile_index >= m_tile_states.size())
+        return;
+
+    auto& state = m_tile_states[tile_index];
+    if (!state.allocated)
+        return;
+
+    m_free_ranges.push_back({state.base_offset, state.capacity});
+    state.allocated = false;
+    state.active = false;
+    state.instance_count = 0;
+    state.version++;
+    MergeFreeRanges();
+}
+
+void DetailComputeManager::MergeFreeRanges()
+{
+    if (m_free_ranges.empty())
+        return;
+
+    std::sort(m_free_ranges.begin(), m_free_ranges.end(), [](const FreeRange& a, const FreeRange& b)
+    {
+        return a.offset < b.offset;
+    });
+
+    xr_vector<FreeRange> merged;
+    merged.reserve(m_free_ranges.size());
+    FreeRange current = m_free_ranges.front();
+    for (size_t i = 1; i < m_free_ranges.size(); ++i)
+    {
+        const FreeRange& next = m_free_ranges[i];
+        if (current.offset + current.size == next.offset)
+        {
+            current.size += next.size;
+        }
+        else
+        {
+            merged.push_back(current);
+            current = next;
+        }
+    }
+    merged.push_back(current);
+    m_free_ranges.swap(merged);
 }
 
 void DetailComputeManager::UploadDetailObjectsInternal(const xr_vector<DetailObjectGPU>& details)
@@ -733,7 +910,11 @@ u32 DetailComputeManager::ReadInstanceCounter(CBackend& cmd_list)
 #endif
 }
 
-void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass::TileResourceSlice& tile)
+void DetailComputeManager::DispatchPlacement(
+    CBackend& cmd_list,
+    const gpu_grass::TileResourceSlice& tile,
+    u32 instance_offset,
+    u32 max_instances_for_tile)
 {
 #if defined(USE_DX11)
     auto* device = HW.pDevice;
@@ -888,13 +1069,13 @@ void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass
     const u32 sample_dim = tile.sample_dim;
 
     PlacementParamsGPU params = {};
-    params.instance_offset = 0;
+    params.instance_offset = instance_offset;
     params.slot_offset = 0;
     params.slot_count = tile.seed_count;
     params.tile_span = tile.tile_span;
     params.samples_per_slot = samples_per_slot;
     params.sample_dim = sample_dim;
-    params.max_instances = m_max_instances;
+    params.max_instances = max_instances_for_tile;
     params.slot_size = DETAIL_SLOT_SIZE;
     params.density = density;
     params.jitter_amplitude = jitter;
@@ -1080,26 +1261,82 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
         m_gpu.counter_buffer_uav,       // u3 - counters
         m_gpu.indirect_args_uav[0],     // u4 - args still
         m_gpu.indirect_args_uav[1],     // u5 - args wave1
-        m_gpu.indirect_args_uav[2],     // u6 - args wave2
-        m_gpu.debug_buffer_uav          // u7 - debug output
+        m_gpu.indirect_args_uav[2]      // u6 - args wave2
     };
-    context->CSSetUnorderedAccessViews(0, 8, uavs, nullptr);
+    context->CSSetUnorderedAccessViews(0, 7, uavs, nullptr);
 
-    // Dispatch compute shader
     constexpr u32 threads_per_group = 256;
-    const u32 num_groups = (m_instance_count + threads_per_group - 1) / threads_per_group;
+    bool dispatched_any = false;
 
-    context->Dispatch(num_groups, 1, 1);
+    for (const auto& state : m_tile_states)
+    {
+        if (!state.active || state.instance_count == 0)
+            continue;
+
+        DetailCullParams params = {};
+        params.camera_pos = Device.vCameraPosition;
+        params.camera_dir = Device.vCameraDirection;
+        params.fade_limit_sqr = psDeviceFlags.test(rsDrawDetails) ? (float(ps_r__detail_radius) * float(ps_r__detail_radius)) : 0.f;
+        params.fade_start_sqr = params.fade_limit_sqr * 0.8f * 0.8f;
+        params.r_ssa_discard = r_ssaDISCARD;
+        params.r_ssa_cheap = ps_r__ssaHZBvsTEX;
+        params.instance_count = m_instance_count;
+        params.frame_number = Device.dwFrame;
+        params.instance_base = state.base_offset;
+        params.tile_instance_count = state.instance_count;
+
+        for (int i = 0; i < 6; ++i)
+            params.frustum_planes[i] = frustum.planes[i];
+
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        CHK_DX(context->Map(m_gpu.cull_params_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+        memcpy(mapped.pData, &params, sizeof(DetailCullParams));
+        context->Unmap(m_gpu.cull_params_cb, 0);
+
+        const u32 num_groups = (state.instance_count + threads_per_group - 1) / threads_per_group;
+        if (num_groups == 0)
+            continue;
+
+        context->Dispatch(num_groups, 1, 1);
+        dispatched_any = true;
+    }
+
+    if (!dispatched_any && m_instance_count > 0)
+    {
+        DetailCullParams params = {};
+        params.camera_pos = Device.vCameraPosition;
+        params.camera_dir = Device.vCameraDirection;
+        params.fade_limit_sqr = psDeviceFlags.test(rsDrawDetails) ? (float(ps_r__detail_radius) * float(ps_r__detail_radius)) : 0.f;
+        params.fade_start_sqr = params.fade_limit_sqr * 0.8f * 0.8f;
+        params.r_ssa_discard = r_ssaDISCARD;
+        params.r_ssa_cheap = ps_r__ssaHZBvsTEX;
+        params.instance_count = m_instance_count;
+        params.frame_number = Device.dwFrame;
+        params.instance_base = 0;
+        params.tile_instance_count = m_instance_count;
+        for (int i = 0; i < 6; ++i)
+            params.frustum_planes[i] = frustum.planes[i];
+
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        CHK_DX(context->Map(m_gpu.cull_params_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+        memcpy(mapped.pData, &params, sizeof(DetailCullParams));
+        context->Unmap(m_gpu.cull_params_cb, 0);
+
+        const u32 num_groups = (m_instance_count + threads_per_group - 1) / threads_per_group;
+        context->Dispatch(num_groups, 1, 1);
+        dispatched_any = true;
+    }
 
     // Unbind resources
     ID3DShaderResourceView* null_srv[] = { nullptr };
-    ID3DUnorderedAccessView* null_uav[] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+    ID3DUnorderedAccessView* null_uav[] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
     context->CSSetShaderResources(0, 1, null_srv);
-    context->CSSetUnorderedAccessViews(0, 8, null_uav, nullptr);
+    context->CSSetUnorderedAccessViews(0, 7, null_uav, nullptr);
 
-    // Update stats
+    if (dispatched_any)
+        m_stats.compute_dispatches++;
+
     m_stats.total_instances = m_instance_count;
-    m_stats.compute_dispatches++;
 
     // PERFORMANCE FIX: Removed GPU→CPU readback from hot path
     // The CopyResource was happening every frame and could cause GPU→CPU stalls
@@ -1157,9 +1394,9 @@ void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 vis_id)
     cmd_list.SRVSManager.Apply(cmd_list.context_id);
     context->DrawIndexedInstancedIndirect(m_gpu.indirect_args[vis_id], 0);
 
-    // Unbind SRVs
-    ID3DShaderResourceView* null_srvs[] = { nullptr, nullptr };
-    context->VSSetShaderResources(0, 2, null_srvs);
+    // Unbind through the cached state manager to keep global state consistent
+    cmd_list.SRVSManager.SetVSResource(0, nullptr);
+    cmd_list.SRVSManager.SetVSResource(1, nullptr);
 
 #endif // USE_DX11
 }

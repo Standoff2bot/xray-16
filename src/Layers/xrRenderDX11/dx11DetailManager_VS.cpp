@@ -78,16 +78,28 @@ void CDetailManager::hw_Load_Shaders()
         // GPU vertex format: pos(3) + normal(3) + tc(2) = 32 bytes
         struct vertGPU
         {
-            float x, y, z;
-            float nx, ny, nz;
-            float u, v;
+            float pos[3];       // POSITION0
+            float pos1[3];      // POSITION1 (unused, duplicate of pos)
+            float normal[3];    // NORMAL0
+            float normal1[3];   // NORMAL1 (unused)
+            u32 color;          // COLOR0
+            float tex0[2];      // TEXCOORD0
+            float tex1[2];      // TEXCOORD1 (unused)
+            u32 tex2;           // TEXCOORD2 (unused)
+            u32 tex3;           // TEXCOORD3 (unused)
         };
 
         static VertexElement gpu_decl[] =
         {
             {0, 0,  D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
-            {0, 12, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL, 0},
-            {0, 24, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+            {0, 12, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 1},
+            {0, 24, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL, 0},
+            {0, 36, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL, 1},
+            {0, 48, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
+            {0, 52, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+            {0, 60, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
+            {0, 68, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 2},
+            {0, 72, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 3},
             D3DDECL_END()
         };
 
@@ -104,18 +116,34 @@ void CDetailManager::hw_Load_Shaders()
             for (u32 v = 0; v < vCount; v++)
             {
                 const Fvector& vP = D.vertices[v].P;
-                pV->x = vP.x;
-                pV->y = vP.y;
-                pV->z = vP.z;
+                pV->pos[0] = vP.x;
+                pV->pos[1] = vP.y;
+                pV->pos[2] = vP.z;
 
-                // Use default upward normal for grass (we don't have normals in source data)
-                // For grass, this is fine since lighting is computed per-instance anyway
-                pV->nx = 0.0f;
-                pV->ny = 1.0f;
-                pV->nz = 0.0f;
+                // Duplicate position for POSITION1
+                pV->pos1[0] = vP.x;
+                pV->pos1[1] = vP.y;
+                pV->pos1[2] = vP.z;
 
-                pV->u = D.vertices[v].u;
-                pV->v = D.vertices[v].v;
+                // Simple upward normal (lighting handled elsewhere)
+                pV->normal[0] = 0.0f;
+                pV->normal[1] = 1.0f;
+                pV->normal[2] = 0.0f;
+
+                pV->normal1[0] = 0.0f;
+                pV->normal1[1] = 1.0f;
+                pV->normal1[2] = 0.0f;
+
+                pV->color = 0xFFFFFFFF;
+
+                pV->tex0[0] = D.vertices[v].u;
+                pV->tex0[1] = D.vertices[v].v;
+
+                pV->tex1[0] = 0.0f;
+                pV->tex1[1] = 0.0f;
+
+                pV->tex2 = 0;
+                pV->tex3 = 0;
                 pV++;
             }
             gpu_VB.Unmap(true);

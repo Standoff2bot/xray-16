@@ -62,6 +62,28 @@ struct DetailInstanceGPU
 };
 #pragma pack(pop)
 
+
+// Culling parameters passed to compute shader (160 bytes)
+struct DetailCullParams
+{
+    Fvector camera_pos;         // Camera world position (12 bytes)
+    float fade_limit_sqr;       // Maximum draw distance squared (4 bytes)
+
+    Fvector camera_dir;         // Camera forward direction (12 bytes)
+    float fade_start_sqr;       // Fade start distance squared (4 bytes)
+
+    float r_ssa_discard;        // SSA threshold for culling (4 bytes)
+    float r_ssa_cheap;          // SSA threshold for LOD selection (4 bytes)
+    u32 instance_count;         // Total number of instances to process (4 bytes)
+    u32 frame_number;           // Current frame for temporal throttling (4 bytes)
+    u32 instance_base;          // Base index into instance buffer for this dispatch (4 bytes)
+    u32 tile_instance_count;    // Number of instances in this tile dispatch (4 bytes)
+    u32 padding0;
+    u32 padding1;
+
+    Fvector4 frustum_planes[6]; // Frustum planes for culling (96 bytes)
+};
+
 static_assert(sizeof(DetailInstanceGPU) == 112, "DetailInstanceGPU must be 112 bytes to match shader");
 static_assert(offsetof(DetailInstanceGPU, position) == 0, "DetailInstanceGPU::position offset mismatch");
 static_assert(offsetof(DetailInstanceGPU, scale) == 12, "DetailInstanceGPU::scale offset mismatch");
@@ -74,6 +96,7 @@ static_assert(offsetof(DetailInstanceGPU, bounds_min) == 64, "DetailInstanceGPU:
 static_assert(offsetof(DetailInstanceGPU, bounds_radius) == 76, "DetailInstanceGPU::bounds_radius offset mismatch");
 static_assert(offsetof(DetailInstanceGPU, slot_x) == 96, "DetailInstanceGPU::slot_x offset mismatch");
 static_assert(offsetof(DetailInstanceGPU, fade_distance_sqr) == 108, "DetailInstanceGPU::fade_distance_sqr offset mismatch");
+static_assert(sizeof(DetailCullParams) == 160, "DetailCullParams size mismatch");
 
 struct DetailObjectGPU
 {
@@ -113,23 +136,6 @@ struct FrustumGPU
     Fvector4 planes[6];  // Left, Right, Top, Bottom, Near, Far
 };
 
-// Culling parameters passed to compute shader (160 bytes)
-struct DetailCullParams
-{
-    Fvector camera_pos;         // Camera world position (12 bytes)
-    float fade_limit_sqr;       // Maximum draw distance squared (4 bytes)
-
-    Fvector camera_dir;         // Camera forward direction (12 bytes)
-    float fade_start_sqr;       // Fade start distance squared (4 bytes)
-
-    float r_ssa_discard;        // SSA threshold for culling (4 bytes)
-    float r_ssa_cheap;          // SSA threshold for LOD selection (4 bytes)
-    u32 instance_count;         // Total number of instances to process (4 bytes)
-    u32 frame_number;           // Current frame for temporal throttling (4 bytes)
-
-    Fvector4 frustum_planes[6]; // Frustum planes for culling (96 bytes)
-};
-
 // Indirect draw arguments structure (must match D3D11_DRAW_INDEXED_ARGUMENTS)
 struct IndirectDrawArgs
 {
@@ -161,9 +167,13 @@ public:
 
     // Placement pipeline
     void ResetInstanceAllocator(CBackend& cmd_list);
-    void ProcessPlacementTiles(CBackend& cmd_list, const xr_vector<gpu_grass::TileResourceSlice>& tiles);
+    void ProcessPlacementTiles(
+        CBackend& cmd_list,
+        const xr_vector<gpu_grass::TileResourceSlice>& tiles_to_load,
+        const xr_vector<u32>& tiles_to_unload);
     void FinalizePlacement(CBackend& cmd_list);
     void UploadDetailObjects(const xr_vector<DetailObjectGPU>& details);
+    void EnsureTileStateCapacity(u32 tile_count);
 
     // Instance management
     void BeginInstanceUpdate();
@@ -256,8 +266,31 @@ private:
     void UploadInstances(CBackend& cmd_list);
     void CompileShaders();
     void UploadDetailObjectsInternal(const xr_vector<DetailObjectGPU>& details);
-    void DispatchPlacement(CBackend& cmd_list, const gpu_grass::TileResourceSlice& tile);
+    void DispatchPlacement(CBackend& cmd_list, const gpu_grass::TileResourceSlice& tile, u32 instance_offset, u32 max_instances_for_tile);
     u32 ReadInstanceCounter(CBackend& cmd_list);
+
+    struct TileInstanceState
+    {
+        u32 base_offset = 0;
+        u32 capacity = 0;
+        u32 instance_count = 0;
+        u32 version = 0;
+        bool allocated = false;
+        bool active = false;
+    };
+
+    xr_vector<TileInstanceState> m_tile_states;
+    u32 m_next_free_offset = 0;
+    struct FreeRange
+    {
+        u32 offset = 0;
+        u32 size = 0;
+    };
+    xr_vector<FreeRange> m_free_ranges;
+
+    bool AllocateTileRange(u32 tile_index, u32 required_capacity);
+    void ReleaseTileRange(u32 tile_index);
+    void MergeFreeRanges();
 };
 
 // ===========================

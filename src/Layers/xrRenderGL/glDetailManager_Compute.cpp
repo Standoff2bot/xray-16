@@ -82,10 +82,14 @@ void DetailComputeManager::ResetInstanceAllocator(CBackend& cmd_list)
     //XR_UNUSED(cmd_list);
 }
 
-void DetailComputeManager::ProcessPlacementTiles(CBackend& cmd_list, const xr_vector<gpu_grass::TileResourceSlice>& tiles)
+void DetailComputeManager::ProcessPlacementTiles(
+    CBackend& cmd_list,
+    const xr_vector<gpu_grass::TileResourceSlice>& tiles_to_load,
+    const xr_vector<u32>& tiles_to_unload)
 {
     //XR_UNUSED(cmd_list);
-    //XR_UNUSED(tiles);
+    //XR_UNUSED(tiles_to_load);
+    //XR_UNUSED(tiles_to_unload);
 }
 
 void DetailComputeManager::FinalizePlacement(CBackend& cmd_list)
@@ -97,6 +101,23 @@ void DetailComputeManager::FinalizePlacement(CBackend& cmd_list)
 void DetailComputeManager::UploadDetailObjects(const xr_vector<DetailObjectGPU>& details)
 {
     //XR_UNUSED(details);
+}
+
+void DetailComputeManager::EnsureTileStateCapacity(u32 /*tile_count*/)
+{
+}
+
+bool DetailComputeManager::AllocateTileRange(u32 /*tile_index*/, u32 /*required_capacity*/)
+{
+    return true;
+}
+
+void DetailComputeManager::ReleaseTileRange(u32 /*tile_index*/)
+{
+}
+
+void DetailComputeManager::MergeFreeRanges()
+{
 }
 
 void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& view_proj)
@@ -124,7 +145,11 @@ void DetailComputeManager::UploadDetailObjectsInternal(const xr_vector<DetailObj
     //XR_UNUSED(details);
 }
 
-void DetailComputeManager::DispatchPlacement(CBackend& cmd_list, const gpu_grass::TileResourceSlice& tile)
+void DetailComputeManager::DispatchPlacement(
+    CBackend& cmd_list,
+    const gpu_grass::TileResourceSlice& tile,
+    u32 /*instance_offset*/,
+    u32 /*max_instances_for_tile*/)
 {
     //XR_UNUSED(cmd_list);
     //XR_UNUSED(tile);

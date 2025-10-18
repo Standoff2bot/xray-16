@@ -341,6 +341,8 @@ void CDetailManager::BuildGPUGrassOfflineData()
         m_gpu_slot_tile_map = std::move(result.slot_to_tile);
         m_gpu_residency.Initialize(&m_gpu_grass_asset);
         m_gpu_placement.Initialize(&m_gpu_grass_asset);
+        if (m_compute_manager)
+            m_compute_manager->EnsureTileStateCapacity(m_gpu_grass_asset.header.tile_count);
         m_gpu_instance_list_dirty = true;
 
         float min_height = FLT_MAX;
@@ -428,7 +430,6 @@ void CDetailManager::UpdateGPUGrassResidency(const Fvector& camera_position)
             pendingLoads.size(), pendingUnloads.size());
     }
     m_gpu_residency.ClearPendingEvents();
-    m_gpu_placement.Clear();
 }
 
 void CDetailManager::BuildGPUInstanceList(CBackend& cmd_list)
@@ -479,16 +480,15 @@ void CDetailManager::BuildGPUInstanceList(CBackend& cmd_list)
         return;
     }
 
-    xr_vector<gpu_grass::TileResourceSlice> slices;
-    slices.reserve(resident_indices.size());
-    for (u32 tile_index : resident_indices)
-    {
-        slices.emplace_back(gpu_grass::BuildTileSlice(m_gpu_grass_asset, tile_index));
-    }
+    const auto& pendingLoads = m_gpu_placement.PendingLoads();
+    const auto& pendingUnloads = m_gpu_placement.PendingUnloads();
 
-    m_compute_manager->ResetInstanceAllocator(cmd_list);
-    m_compute_manager->ProcessPlacementTiles(cmd_list, slices);
-    m_compute_manager->FinalizePlacement(cmd_list);
+    if (!pendingLoads.empty() || !pendingUnloads.empty())
+    {
+        m_compute_manager->ProcessPlacementTiles(cmd_list, pendingLoads, pendingUnloads);
+        m_compute_manager->FinalizePlacement(cmd_list);
+        m_gpu_placement.Clear();
+    }
 }
 
 void CDetailManager::BuildGPUInstanceListCPU()
@@ -545,7 +545,7 @@ void CDetailManager::UpdateVisibleM()
 {
     ZoneScoped;
 
-    UpdateGPUGrassResidency(EYE);
+    UpdateGPUGrassResidency(Device.vCameraPosition);
 
     for (int i = 0; i != 3; ++i)
         for (auto& vis : m_visibles[i])
@@ -701,7 +701,8 @@ void CDetailManager::Render(CBackend& cmd_list)
 
     ZoneScoped;
 
-    TaskScheduler->Wait(*m_calc_task);
+    if (!ps_r__gpu_culling)
+        TaskScheduler->Wait(*m_calc_task);
 
     RImplementation.BasicStats.DetailRender.Begin();
     g_pGamePersistent->m_pGShaderConstants->m_blender_mode.w = 1.0f; //--#SM+#-- Флаг начала рендера травы [begin of grass render]
@@ -715,7 +716,7 @@ void CDetailManager::Render(CBackend& cmd_list)
     // GPU compute culling path
     if (ps_r__gpu_culling && m_compute_manager)
     {
-        UpdateGPUGrassResidency(EYE);
+        UpdateGPUGrassResidency(Device.vCameraPosition);
 
         // Build instance list ONLY when cache changes (not every frame!)
         // This was the major bottleneck - rebuilding millions of instances every frame
@@ -727,7 +728,7 @@ void CDetailManager::Render(CBackend& cmd_list)
         }
 
         // Dispatch GPU culling compute shader
-        //m_compute_manager->DispatchCulling(cmd_list, Device.mFullTransform);
+        m_compute_manager->DispatchCulling(cmd_list, Device.mFullTransform);
 
         // Render using indirect draws
         // GPU path renders all objects together in 3 draws (one per vis_id)
@@ -765,6 +766,9 @@ void CDetailManager::Render(CBackend& cmd_list)
 
 void CDetailManager::DispatchMTCalc()
 {
+    if (ps_r__gpu_culling)
+        return;
+
     m_calc_task = &TaskScheduler->AddTask([this]
     {
 #ifndef _EDITOR
@@ -788,10 +792,7 @@ void CDetailManager::DispatchMTCalc()
         RImplementation.BasicStats.DetailCache.End();
 
         // CPU culling path (skip if GPU culling enabled)
-        if (!ps_r__gpu_culling)
-        {
-            UpdateVisibleM();
-        }
+        UpdateVisibleM();
     });
 }
 

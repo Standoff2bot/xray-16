@@ -1,467 +1,236 @@
-# X-Ray Engine - Grass/Detail Rendering Architecture Analysis
+# GPU-Driven Grass Rendering Architecture
 
-## Current Implementation Overview
+## 1. Objectives
+- Eliminate CPU-side decompression and per-frame instance rebuilds.
+- Stream grass data entirely on the GPU using clipmap-aligned resources.
+- Maintain determinism with the legacy cache output while unlocking modern effects (wind, interaction, LOD).
+- Provide a migration path that lets us validate parity before retiring `DetailManager_Decompress`.
 
-### Core Components
+## 2. Legacy Summary (for Context)
+- CPU decompresses `DetailSlot` blocks, performs palette dithering, stochastic selection, per-instance jitter, and triangle-ray height refinement (`DetailManager_Decompress.cpp`).
+- `BuildGPUInstanceList()` walks every cached slot and rewrites the instance staging buffer whenever the cache dirties.
+- `DetailComputeManager::UploadInstances()` calls `UpdateSubresource` for the entire buffer, even if one slot changes.
+- GPU path currently only performs frustum/SSA culling and indirect draws.
 
-The grass (detail) rendering system is managed by the `CDetailManager` class, split across multiple files:
+## 3. Design Pillars
+1. **Offline-first data** – Bake clipmap-ready slot payloads, material masks, and height/normal clipmaps so the runtime never raycasts.
+2. **Sparse residency** – Track regions→tiles→cells with per-tile versioning; only touched tiles trigger GPU work.
+3. **All-GPU expansion** – Compute shaders fully reproduce CPU placement logic and append into persistent buffers.
+4. **GPU orchestration** – Culling, sorting, and indirect draw emission stay on the device; CPU just issues high-level commands.
+5. **Deterministic parity** – Hash seeds and palette evaluation exactly match CPU behavior to allow side-by-side validation.
 
-- **DetailManager.h/cpp** - Main manager class and initialization
-- **DetailManager_VS.cpp** - Hardware vertex shader rendering path
-- **DetailManager_soft.cpp** - Software/CPU rendering fallback
-- **DetailManager_CACHE.cpp** - Grid cache management system
-- **DetailManager_Decompress.cpp** - Slot decompression and placement logic
-- **DetailFormat.h** - Data format definitions
-- **DetailModel.h/cpp** - Detail object mesh data
+## 4. Offline Bake Pipeline
+The bake step exports GPU-ready assets per level.
 
-### Data Structure
+```
+Assets/
+ ├─ grass_slots.bin          // Compressed slot records (flat array, sorted by clipmap tile)
+ ├─ grass_slot_index.bin     // Region/tile → offset/count
+ ├─ grass_height_clipmap.dds // MIP stack of height (R16F) + normal (RG16F)
+ ├─ grass_object_info.bin    // Static blade metadata (scale range, bounds, wind params, texture ids)
+ └─ grass_masks.dds          // Material mask atlases driving procedural rejection
+```
 
-#### Spatial Organization
-- **Grid System**: World divided into 2m × 2m slots (`DETAIL_SLOT_SIZE = 2.0f`)
-- **Two-Level Cache**:
-  - `cache_level1`: Large grid sections (CacheSlot1)
-  - `cache`: Fine-grained individual slots
-- **Slot Contents**: Each slot can contain up to 4 different detail object types (`dm_obj_in_slot = 4`)
-
-#### Detail Slot Format (DetailFormat.h:129-206)
-Highly packed bitfield structure (16 bytes):
 ```cpp
-struct DetailSlot {
-    u32 y_base : 12;      // Height base (20cm units, -200m to +619.2m)
-    u32 y_height : 8;     // Height range (10cm units, up to 25.6m)
-    u32 id0 : 6;          // Object type IDs (0x3F = empty)
-    u32 id1 : 6;
-    u32 id2 : 6;
-    u32 id3 : 6;
-    u32 c_dir : 4;        // Directional lighting (quantized)
-    u32 c_hemi : 4;       // Hemispherical lighting
-    u32 c_r : 4;          // RGB color (4.4.4 format)
-    u32 c_g : 4;
-    u32 c_b : 4;
-    DetailPalette palette[4];  // Alpha masks for placement
+struct OfflineSlotRecord
+{
+    uint16_t height_min_cm;     // floor cm from world zero
+    uint16_t height_range_cm;   // height span
+    uint8_t  palette[4][4];     // packed 4x4 weights (0..15)
+    uint8_t  object_id[4];      // detail ids or 0x3F for empty
+    uint32_t rand_seed;         // seed (derived from world slot coords)
+};
+
+struct OfflineTileHeader
+{
+    uint32_t slot_offset;   // start index in grass_slots.bin
+    uint16_t slot_count;
+    uint16_t version;       // increments each bake – copied into runtime residency table
 };
 ```
 
-#### Per-Instance Data (DetailManager.h:60-73)
+**Bake Steps**
+1. Rasterize terrain/collision geometry into a high-resolution height+normal atlas.
+2. For each detail slot, evaluate palette masks, apply noise dithering, and store packed data into `OfflineSlotRecord`.
+3. Build region→tile→cell indirection tables (clipmap-friendly 32×32 tiles, 8×8 cells per tile).
+4. Emit object metadata with bounds, materials, wind parameters, and swaying presets.
+5. Serialize precomputed blue-noise, interaction masks, and optional SDFs for bending.
+
+## 5. Runtime High-Level Flow
+1. **Camera update** issues desired clipmap region to `GrassResidencyManager`.
+2. Residency manager resolves visible tiles, checks version numbers, schedules GPU jobs for dirty tiles.
+3. For each dirty tile:
+   - Upload compressed slot payload (if not resident) into a ring-buffered `StructuredBuffer<OfflineSlotRecord>`.
+   - Dispatch `cs_grass_decompress` to expand slots into the persistent instance buffer using append UAVs.
+   - Update tile metadata (start index/count) in a GPU-visible table.
+4. Issue global culling (`detail_cull.cs`) re-using existing pipeline, extended with cell metadata.
+5. Submit indirect draws for still/wave1/wave2 (and optional height-LOD impostors).
+
+## 6. Residency & Metadata
+
 ```cpp
-struct SlotItem {
-    float scale;
-    float scale_calculated;
-    Fmatrix mRotY;        // 4×4 rotation/translation matrix
-    u32 vis_ID;           // 0=still, 1=wave1, 2=wave2
-    float c_hemi;         // Hemispherical lighting
-    float c_sun;          // Sun lighting
-    float distance;       // Distance from camera
-    Fvector position;     // World position
-#if RENDER == R_R1
-    Fvector c_rgb;        // RGB color (R1 only)
-#endif
+struct GrassRegion
+{
+    int2 origin_slot;       // world-space slot origin (clipmap-aligned)
+    uint32_t lod;           // clipmap level (0 = highest detail)
+};
+
+struct GrassTile
+{
+    uint32_t slot_offset;   // into compressed slot buffer
+    uint16_t slot_count;
+    uint16_t version;       // matches bake version
+
+    uint32_t instance_offset; // base index in persistent instance buffer
+    uint32_t instance_count;
+    uint32_t last_touched_frame;
+};
+
+struct GrassResidencyTable
+{
+    StaticArray<GrassTile, MAX_TILES_PER_LOD> tiles;
+    Bitset residency_mask;
+    RingQueue<uint32_t> upload_queue;   // tile ids needing GPU expansion
 };
 ```
 
-### Rendering Pipeline
+CPU only mutates `upload_queue`, `residency_mask`, and the sparse upload staging buffer. Everything else is written by compute shaders using UAV counters.
 
-#### 1. Cache Update (DetailManager_CACHE.cpp:101-253)
-**Called every frame in MT task** (`DispatchMTCalc`, DetailManager.cpp:438-464)
+## 7. GPU Buffers
 
 ```cpp
-cache_Update(s_x, s_z, EYE)
+// Compressed data (read-only)
+StructuredBuffer<OfflineSlotRecord> g_slots;
+ByteAddressBuffer                 g_slot_offsets; // tile id → {offset,count}
+
+// Height & normal clipmap
+Texture2DArray<float4> g_height_clipmap; // R=height, G,B=encoded normal, A=unused or mask
+
+// Persistent outputs
+RWStructuredBuffer<DetailInstanceGPU> g_instances;
+AppendStructuredBuffer<uint>         g_free_list;      // optional compaction
+RWStructuredBuffer<GrassTileState>   g_tile_state;     // mirrors GrassTile instance offsets/counts
 ```
 
-- Shifts grid cache as camera moves
-- Selects up to `dm_max_decompress` (7 or 14) nearest pending slots
-- Decompresses selected slots on-demand
-- Updates hierarchical bounding volumes
+## 8. `cs_grass_decompress` Overview
 
-**Issues:**
-- Limited decompression rate creates pop-in
-- Cache shifting causes full-grid validation
-- CPU-bound decompression
+```hlsl
+[numthreads(8, 8, 1)]
+void cs_grass_decompress(uint3 dispatch_id : SV_DispatchThreadID,
+                         uint  tile_id     : SV_GroupID.x)
+{
+    // Load tile header
+    TileHeader header = g_tile_headers[tile_id];
 
-#### 2. Visibility Culling (DetailManager.cpp:256-396)
-**`UpdateVisibleM()`** - Multi-level frustum culling:
+    // Each group handles one slot; each thread handles one candidate instance inside slot
+    uint slot_index  = header.slot_offset + dispatch_id.y;
+    OfflineSlotRecord slot = g_slots[slot_index];
 
-1. **Level 1**: Test `cache_level1` bounding spheres against frustum
-2. **Level 2**: Test individual slot bounding spheres
-3. **Occlusion**: Hardware Occlusion Queries (HOM) test
-4. **Distance**: Fade based on distance squared
-5. **LOD Selection**: SSA (Screen Space Area) calculation per instance
+    uint local_idx = dispatch_id.x;
+    uint2 lattice  = IndexToLattice(local_idx); // 4×4 placement samples or blue-noise set
 
-**Per-slot processing:**
-- Calculates per-instance fade alpha
-- Computes SSA: `ssa = scale² × R² / distance²`
-- Sorts instances into 3 vis lists: still(0), wave1(1), wave2(2)
+    // Recreate deterministic seed
+    uint seed = Hash(slot.rand_seed, lattice);
 
-**Issues:**
-- Per-instance SSA calculation on CPU
-- No spatial batching optimization
-- Frame throttling (updates slot every 15-30 frames)
+    // Palette rejection
+    if (!PaletteAccept(slot.palette, lattice, seed))
+        return;
 
-#### 3. Geometry Preparation (DetailManager_VS.cpp:42-111)
-**Hardware path** (`hw_Load_Geom`):
+    // Sample heightmap (clipmap selection derived from tile lod)
+    float2 worldXZ = SlotToWorldXZ(header.region_origin, slot_index, lattice);
+    float height   = SampleHeight(worldXZ);
+    float3 normal  = DecodeNormal(worldXZ);
 
-- Pre-bakes all detail meshes × batch size into static VB/IB
-- Batch size limited by vertex shader constants: `hw_BatchSize = (registers - 10) / 4` (max 64)
-- Vertex format: `{float3 pos, short4 uv_t_mid}` where `mid` = matrix index
+    // Reject if below water / invalid material mask
+    if (!MaterialAllowsGrass(worldXZ, normal))
+        return;
 
-**Total memory:**
+    // Compose instance
+    DetailInstanceGPU inst;
+    inst.position = float3(worldXZ.x, height, worldXZ.y);
+    inst.scale    = RandomScale(slot.object_id, seed);
+    inst.rotation_y = RandomRotation(seed);
+    inst.object_id  = SelectObject(slot.object_id, seed);
+    inst.c_hemi = PrecomputedHemi(inst.position);
+    inst.c_sun  = PrecomputedSun(inst.position, normal);
+    inst.flags  = EncodeFlags(tile_id, lod);
+
+    // Append
+    uint write_index;
+    InterlockedAdd(g_instance_counter[0], 1, write_index);
+    g_instances[write_index] = inst;
+
+    // Update tile stats (one thread per slot commits)
+    if (local_idx == 0)
+        g_tile_state[tile_id].instance_count += CountGenerated(local_idx);
+}
+```
+
+**Notes**
+- Shader must replicate CPU jitter/selection logic (same hash seeds, dithering patterns).
+- Height sampling uses clipmap coordinates; failing that we can fall back to CPU-provided min/max until clipmap is ready.
+- Tile instance ranges (`instance_offset`/`instance_count`) live in `g_tile_state`, written atomically per tile.
+
+## 9. Culling & Rendering
+Enhance existing `detail_cull.cs` pipeline:
+- Fetch tile metadata to quickly reject empty or inactive tiles (`g_tile_state[tile_id].instance_count == 0`).
+- Optionally integrate Hierarchical-Z (Hi-Z) culling by sampling the scene depth pyramid.
+- Add per-instance wind phase and interaction texture lookups.
+
 ```cpp
-VB_size = Σ(vertices_per_mesh × batch_size × 16 bytes)
-IB_size = Σ(indices_per_mesh × batch_size × 2 bytes)
+struct DetailInstanceGPU
+{
+    float3 position;
+    float  scale;
+    float  rotation_y;
+    float  hemi;
+    float  sun;
+    uint   object_id;
+    uint   vis_id;
+    float3 color_rgb;
+    float  wind_seed;
+    float3 bounds_min;
+    float  bounds_radius;
+    float3 bounds_max;
+    uint   flags;              // bits: tile id, interaction mask id, lod
+    float  fade_distance_sqr;
+};
 ```
 
-**Issues:**
-- Massive static buffer allocation
-- Limited batching (typically ~16-32 instances)
-- Pre-multiplication wastes memory
+Indirect draw remains three buckets (still / wave1 / wave2). Additional draws (billboards, impostors) can be appended by writing extra indirect argument buffers during culling.
 
-#### 4. Rendering (dx11DetailManager_VS.cpp:93-267)
-**`hw_Render_dump()`** - Called 3× per frame (wave0, wave1, still):
+## 10. CPU Scheduling
+- Residency updates run on a job thread, driven by camera velocity and look-ahead distance.
+- Upload staging respects bandwidth budgets (e.g., max 4 tiles per frame).
+- Interaction system writes impulses into an R16 texture that GPU shaders sample; updates happen via async compute.
+- All GPU jobs (decompress, cull, interaction) are scheduled on async queues when available; fences sync before render.
 
-**Per-object type loop:**
-1. Set shader element
-2. Update per-frame constants:
-   - `consts` (scale, lighting params)
-   - `wave` (animation phase timings)
-   - `dir2D` (wind direction)
-   - `xform` (MVP matrix)
-3. **NPC Grass Interaction** (lines 106-173):
-   - Updates `benders_pos[16]` array with NPC positions
-   - Updates `benders_setup` parameters
-   - **HACK**: Shader-side distance checks and fake animation
-4. **Instance batching loop**:
-   - Fills `array[batch_size × 4]` with per-instance 3×4 matrices + lighting
-   - Issues draw call every `hw_BatchSize` instances
-5. Advance VB/IB offsets
+## 11. Interaction & Wind Extensions
+1. **Interaction**
+   - Maintain an `RWTexture2D<float>` per clipmap LOD receiving player/projectile impulses.
+   - Fade via compute pass (`cs_interaction_decay`) every frame.
+   - Instance shader samples the appropriate texel using tile/slot metadata.
+2. **Wind**
+   - Precompute FBM wind fields into 3D textures; animate by scrolling offsets.
+   - Each instance stores a seed for gust phase; vertex shader samples wind field to modulate bending.
 
-**Animation System:**
-- CPU calculates two rotating wind directions: `dir1`, `dir2`
-- Vertex shader applies sinusoidal displacement based on:
-  - Vertex height (`t` coordinate)
-  - Wave parameters (frequency, phase, amplitude)
-  - Wind direction
+## 12. Migration Plan
+1. **Parity Stage**
+   - Bake new data but run GPU decompression in parallel with legacy CPU path.
+   - Compare per-slot instance counts and positions within tolerance (debug overlay / checksum).
+2. **Hybrid Stage**
+   - Enable GPU decompression + residency; retain CPU fallback for unsupported hardware.
+   - Keep CPU path for validation toggles (`r_detail_gpu_pipeline 0/1`).
+3. **Full GPU Stage**
+   - Remove CPU cache updates, convert `DetailManager` to orchestrator of residency + compute dispatch.
+   - Deprecate `cache_Decompress`, `BuildGPUInstanceList`, and legacy batching.
 
-**NPC Grass Interaction Issues:**
-- Hardcoded 16 bender limit
-- CPU updates every frame
-- Shader does radius checks (inefficient)
-- No actual grass state persistence
-- Fake "bend" is just displacement
+## 13. Risk Mitigation
+- Store hash seeds & palette parameters verbatim to guarantee deterministic generation.
+- Keep instrumentation buffers (per-tile counts, perf timestamps) for diagnosing load spikes.
+- Build tooling to visualize clipmap residency and instance densities in-editor.
+- Provide graceful degradation (simplified impostors) for GPUs lacking append/consume support.
 
 ---
 
-## Performance Bottlenecks
-
-### 1. CPU-Heavy Workload
-- ✗ Cache decompression (geometry intersection tests)
-- ✗ Per-instance visibility + SSA calculation
-- ✗ Per-frame matrix building (scale, rotation, position)
-- ✗ Constant buffer updates (up to 64×4 float4s per batch)
-
-### 2. Draw Call Overhead
-- Typically renders 100s-1000s of instances
-- Small batch sizes (16-64) = many draw calls
-- Per-batch shader constant updates
-
-### 3. Memory Inefficiency
-- Static VB pre-multiplied by batch size
-- Pre-allocated worst-case memory
-- No memory sharing between LODs
-
-### 4. Limited Culling
-- No occlusion culling at instance level (only slot-level HOM)
-- No hi-Z or GPU-driven culling
-- Frame-throttled updates cause stale visibility
-
-### 5. Animation Limitations
-- Uniform wind animation (not localized)
-- NPC interaction limited to 16 entities
-- No persistent grass state (crushing, growth)
-
----
-
-## Optimization Strategy
-
-### Phase 1: GPU-Driven Rendering Pipeline
-
-#### 1.1 Compute Shader Instance Culling
-**New System:**
-```
-[Persistent GPU Buffer] Detail Instances (all loaded slots)
-         ↓
-[Compute: Frustum Cull] → Visible Instance Buffer
-         ↓
-[Compute: Occlusion Cull (Hi-Z)] → Culled Instance Buffer
-         ↓
-[Compute: LOD Selection] → Draw Commands Buffer (indirect args)
-         ↓
-[Vertex Shader: Instance Rendering]
-```
-
-**Benefits:**
-- Entire culling pipeline on GPU
-- No CPU readback
-- Hi-Z occlusion queries
-- Per-instance, not per-slot
-
-**Implementation:**
-- Create `StructuredBuffer<DetailInstance>` with all instances
-- Compute shader reads camera frustum from CB
-- Use `InterlockedAdd` to build compacted output
-- `DrawIndexedInstancedIndirect` for rendering
-
-#### 1.2 Indirect Drawing with Mesh Shaders (Optional DX12 Path)
-For modern GPUs:
-- Mesh shaders generate geometry procedurally
-- Avoid pre-baked VB/IB multiplication
-- Amplification shader for LOD selection
-
-### Phase 2: Persistent Grass State System
-
-#### 2.1 Grass State Texture
-**Replace benders array with GPU texture:**
-```
-RWTexture2D<float4> grassStateTexture
-    .r = bend amount [0..1]
-    .g = bend direction [0..2π]
-    .b = growth/health [0..1]
-    .a = last interaction time
-```
-
-**Resolution:** World size / 0.5m = manageable texture
-- Example: 512×512m world = 1024×1024 texture
-
-#### 2.2 Compute Shader State Updates
-**Per-frame compute passes:**
-
-1. **Decay Pass**: Grass slowly returns to upright
-   ```hlsl
-   bend = lerp(bend, 0, deltaTime * recoverySpeed);
-   ```
-
-2. **Interaction Pass**: Write NPC/player positions
-   ```hlsl
-   for each active entity:
-       splatDisturbance(position, radius, strength, direction)
-   ```
-
-3. **Growth Pass** (optional): Seasonal changes
-   ```hlsl
-   growth += deltaTime * growthRate * environmentFactor;
-   ```
-
-**Benefits:**
-- No 16-entity limit
-- Persistent deformation
-- Trails behind moving entities
-- Seasons/dynamic world
-
-### Phase 3: Enhanced Spatial Data Structures
-
-#### 3.1 Hierarchical Grid Optimization
-**Current 2-level → 3-level hierarchy:**
-```
-World
-├─ Regions (128m × 128m) - coarse frustum cull
-│  ├─ Chunks (16m × 16m) - medium frustum cull
-│  │  └─ Slots (2m × 2m) - fine-grained
-```
-
-**Augment with:**
-- Tight AABB per hierarchy level
-- Pre-computed worst-case density
-- Early-out for empty regions
-
-#### 3.2 GPU-Resident Slot Data
-Move decompression to load-time or streaming thread:
-- Build full instance list during level load
-- Stream into GPU buffers
-- No runtime decompression
-
-**Streaming Strategy:**
-- Ring buffer for far instances
-- Priority queue based on camera velocity
-- Async compute for decompression
-
-### Phase 4: Rendering Improvements
-
-#### 4.1 Instanced Rendering with Indirect
-Replace batched constant arrays:
-```hlsl
-StructuredBuffer<InstanceData> instances;
-DrawIndexedInstancedIndirect(cmdBuffer);
-```
-
-**Vertex Shader:**
-```hlsl
-InstanceData inst = instances[instanceID];
-float4x4 world = BuildMatrix(inst.position, inst.rotation, inst.scale);
-```
-
-#### 4.2 LOD System Enhancement
-**Current:** 3 visibility lists (still, wave1, wave2)
-**New:** Distance-based LOD + Billboard imposters
-
-1. **LOD0** (0-10m): Full geometry, per-instance animation
-2. **LOD1** (10-30m): Simplified mesh, uniform animation
-3. **LOD2** (30-60m): Billboard clusters
-4. **LOD3** (60m+): Merged billboards / grass texture
-
-#### 4.3 Shader Optimizations
-**Wind Animation:**
-- Precompute wind field texture
-- Sample wind per-instance, not per-vertex
-- GPU noise for variation
-
-**Grass State Integration:**
-```hlsl
-float4 state = grassStateTex.SampleLevel(sampler, worldPos.xz / worldSize, 0);
-float bend = state.r;
-float2 bendDir = float2(cos(state.g), sin(state.g));
-position.xz += bendDir * bend * heightFactor;
-```
-
-### Phase 5: Advanced Features
-
-#### 5.1 GPU Particle Grass (Dense Areas)
-For meadows with 1000s of grass blades:
-- Compute shader spawns particles
-- Geometry shader generates quads
-- Billboarded camera-facing grass
-
-#### 5.2 Procedural Placement (Optional)
-Replace pre-baked slots:
-- Compute shader reads terrain height + material masks
-- Generates instances on-the-fly
-- Deterministic random (position-based seed)
-
-#### 5.3 Physics Integration
-- Grass state texture as read-only physics query
-- Ragdolls/debris write to grass state
-- Explosion effects ripple through grass
-
----
-
-## Implementation Roadmap
-
-### Milestone 1: Foundation (Week 1-2)
-- [ ] Create new branch: `yohji/feat/optimize-detail-manager`
-- [ ] Refactor DetailManager to separate concerns:
-  - `DetailDataManager` - loading/storage
-  - `DetailCullingManager` - visibility (move to compute)
-  - `DetailRenderManager` - drawing
-- [ ] Implement StructuredBuffer instance storage
-- [ ] Basic compute shader frustum culling
-- [ ] Indirect draw calls
-
-**Success Criteria:** Same visual output, reduced CPU usage
-
-### Milestone 2: GPU Culling (Week 3-4)
-- [ ] Hi-Z occlusion buffer generation
-- [ ] Compute shader occlusion culling
-- [ ] Multi-draw indirect batching
-- [ ] Performance profiling vs. baseline
-
-**Success Criteria:** 2×+ instances rendered at same framerate
-
-### Milestone 3: Grass State System (Week 5-6)
-- [ ] Create grass state texture
-- [ ] Compute shader decay pass
-- [ ] Replace benders_pos array with texture writes
-- [ ] Integrate state into vertex shader
-- [ ] Add artistic controls (recovery speed, bend strength)
-
-**Success Criteria:** Grass trails behind player, no entity limit
-
-### Milestone 4: LOD & Optimization (Week 7-8)
-- [ ] Implement billboard LODs
-- [ ] Add LOD selection to compute culling
-- [ ] Optimize shader (wind texture, reduce ALU)
-- [ ] Memory optimization (streaming, compression)
-
-**Success Criteria:** 50m+ grass draw distance, stable 60fps
-
-### Milestone 5: Polish & Advanced (Week 9+)
-- [ ] GPU particle grass for dense patches
-- [ ] Seasonal growth system
-- [ ] Physics interaction API
-- [ ] Documentation & editor tools
-
----
-
-## Technical Considerations
-
-### Compatibility
-- **DX11**: All features supported (compute, indirect draw)
-- **DX12/Vulkan**: Optional mesh shader path
-- **OpenGL**: Requires GL 4.3+ for compute shaders
-
-### Memory Budget
-**Current System:** ~50-100MB (pre-baked VB/IB)
-**New System:**
-- Instance buffer: ~100 bytes × 100K instances = 10MB
-- Grass state texture: 4K×4K×4 bytes = 64MB
-- Indirect args: negligible
-- **Total:** ~75MB (25% reduction + scalability)
-
-### CPU Impact
-**Savings:**
-- Remove per-frame visibility (10-20ms)
-- Remove matrix building (5-10ms)
-- Remove decompression stalls (1-5ms)
-- **Total:** 15-35ms/frame → background thread only
-
-### GPU Impact
-**Additions:**
-- Frustum cull compute: ~0.5ms
-- Occlusion cull compute: ~0.5ms
-- Grass state update: ~0.2ms
-- **Total:** ~1.2ms/frame
-
-**Savings:**
-- Reduced draw calls: ~2-5ms
-- Better batching: ~1-2ms
-- **Net:** 1-5ms improvement
-
----
-
-## Risk Mitigation
-
-### Fallback Paths
-1. Keep software rendering path for old hardware
-2. Disable grass state on low memory systems
-3. Option to use old batched rendering
-
-### Testing Strategy
-1. A/B comparison screenshots
-2. Performance benchmarks (CPU/GPU time)
-3. Memory profiling
-4. Visual quality validation (art team review)
-
-### Incremental Rollout
-- Feature flags for each system
-- Configurable via console commands
-- Gradual migration (both paths coexist)
-
----
-
-## Next Steps
-
-1. **Create feature branch**: `yohji/feat/optimize-detail-manager`
-2. **Prototype compute culling** with minimal changes
-3. **Benchmark** to validate approach
-4. **Iterate** based on results
-
-### Prototype Code Checklist
-- [ ] `DetailManager_Compute.cpp` - compute shader manager
-- [ ] `detail_cull.compute.hlsl` - frustum culling shader
-- [ ] `detail_render_indirect.vs/ps.hlsl` - instanced rendering
-- [ ] `StructuredBuffer<DetailInstanceGPU>` definition
-- [ ] Indirect draw command buffer setup
-
----
-
-**Document Author:** Claude (Sonnet 4.5)
-**Date:** 2025-10-09
-**Engine Version:** X-Ray 16
-**Target Platforms:** DX11/DX12/Vulkan/OpenGL
+*This document defines the target architecture for the grass system. Next steps: implement the offline bake prototype, scaffold the residency manager API, and author the first iteration of `cs_grass_decompress` using the current compressed slot format.*
