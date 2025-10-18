@@ -36,6 +36,11 @@ void CDetailManager::hw_Load_Shaders()
     b_detail_gpu = xr_new<CBlender_Detail_GPU>();
     gpu_detail_shader.create(b_detail_gpu, nullptr, "build_details");
 
+    const R_constant_table& consts = *gpu_detail_shader->E[1]->passes[0]->constants;
+    Msg("* [DetailManager] constants in detail_gpu E[1]:");
+    for (const auto& rc : consts.table)
+        Msg("    %s", rc->name.c_str());
+
     if (!gpu_detail_shader)
     {
         Msg("! [DetailManager] Failed to create GPU instancing shader");

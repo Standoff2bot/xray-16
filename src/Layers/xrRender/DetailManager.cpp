@@ -721,7 +721,7 @@ void CDetailManager::Render(CBackend& cmd_list)
     float factor = g_pGamePersistent->Environment().wind_strength_factor;
     swing_current.lerp(swing_desc[0], swing_desc[1], factor);
 
-    cmd_list.set_CullMode(CULL_NONE);
+    cmd_list.set_CullMode(CULL_CCW);
     cmd_list.set_xform_world(Fidentity);
 
     // GPU compute culling path
@@ -749,12 +749,25 @@ void CDetailManager::Render(CBackend& cmd_list)
         u32 shader_element = 1;
 
 #ifdef USE_DX11
-        //cmd_list.set_Element(gpu_detail_shader->E[shader_element], 0); // CLEARS CONSTANT BUFFERS AND GLOBALS!? Disabled for now.
         auto* context = HW.get_context(cmd_list.context_id); // ugly but sets PS and VS properly without clearing constants/globals
         cmd_list.set_Geometry(gpu_Geom);
-        cmd_list.set_Textures(gpu_detail_shader->E[shader_element]->passes[0]._get()->T);
-        context->PSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->ps._get()->sh, nullptr, 0);
-        context->VSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->vs._get()->sh, nullptr, 0);
+
+        for (u32 iPass = 0; iPass < gpu_detail_shader->E[shader_element]->passes.size(); ++iPass)
+        {
+            cmd_list.set_xform_view(Device.mView);
+            cmd_list.set_xform_project(Device.mProject);
+            cmd_list.set_Textures(gpu_detail_shader->E[shader_element]->passes[iPass]._get()->T);
+
+            cmd_list.set_Element(gpu_detail_shader->E[shader_element], iPass); // CLEARS CONSTANT BUFFERS AND GLOBALS!? Disabled for now.
+
+            cmd_list.SRVSManager.Apply(cmd_list.context_id);
+            cmd_list.ApplyRTandZB();
+            cmd_list.ApplyVertexLayout();
+            cmd_list.StateManager.Apply();
+            cmd_list.GetConstants().flush();
+        }
+        //context->PSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->ps._get()->sh, nullptr, 0);
+        //context->VSSetShader(gpu_detail_shader->E[shader_element]->passes[0]._get()->vs._get()->sh, nullptr, 0);
 #endif
         // Render each visibility list (still=0, wave1=1, wave2=2)
         for (u32 vis_id = 0; vis_id < 3; vis_id++)
