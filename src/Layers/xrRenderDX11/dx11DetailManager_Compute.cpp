@@ -569,6 +569,7 @@ void DetailComputeManager::UploadInstances(CBackend& cmd_list)
 void DetailComputeManager::ResetInstanceAllocator(CBackend& cmd_list)
 {
 #if defined(USE_DX11)
+    Msg("~ [DetailComputeManager] ResetInstanceAllocator (frame %u)", Device.dwFrame);
     auto* context = HW.get_context(cmd_list.context_id);
     const UINT zeros[4] = {0, 0, 0, 0};
 
@@ -610,6 +611,8 @@ void DetailComputeManager::ProcessPlacementTiles(
     const xr_vector<u32>& tiles_to_unload)
 {
 #if defined(USE_DX11)
+    PIX_EVENT(GPU_DETAILS_PROCESS_PLACEMENT);
+
     if (!m_gpu.placement_shader || !m_gpu.detail_object_srv)
     {
         Msg("! [DetailComputeManager] Placement skipped - shader or detail object SRV missing");
@@ -618,6 +621,11 @@ void DetailComputeManager::ProcessPlacementTiles(
 
     if (tiles_to_load.empty() && tiles_to_unload.empty())
         return;
+
+    Msg("* [DetailComputeManager] ProcessPlacementTiles (frame %u): loads=%zu unloads=%zu",
+        Device.dwFrame,
+        static_cast<size_t>(tiles_to_load.size()),
+        static_cast<size_t>(tiles_to_unload.size()));
 
     auto* context = HW.get_context(cmd_list.context_id);
 
@@ -633,6 +641,7 @@ void DetailComputeManager::ProcessPlacementTiles(
 
     for (u32 unload_tile_idx : tiles_to_unload)
     {
+        Msg("~ [DetailComputeManager] Releasing tile %u", unload_tile_idx);
         ReleaseTileRange(unload_tile_idx);
     }
 
@@ -646,43 +655,122 @@ void DetailComputeManager::ProcessPlacementTiles(
             ++tiles_missing_samples;
 
         const u32 samples_per_slot = tile.samples_per_slot ? tile.samples_per_slot : 1u;
+        u32 seeds_for_capacity = tile.seed_count;
+        if (tile.slot_count > seeds_for_capacity)
+            seeds_for_capacity = tile.slot_count;
+        if (seeds_for_capacity == 0)
+            seeds_for_capacity = 1;
 
-        const u32 required_capacity = std::max(tile.seed_count, 1u);
-        if (!AllocateTileRange(tile.tile_index, required_capacity))
+        const u64 theoretical_capacity_u64 = std::max<u64>(seeds_for_capacity, static_cast<u64>(seeds_for_capacity) * samples_per_slot);
+        const u32 max_capacity_for_tile = static_cast<u32>(std::min<u64>(theoretical_capacity_u64, static_cast<u64>(m_max_instances)));
+
+        const u32 initial_capacity = std::max<u32>(seeds_for_capacity, 1u);
+        if (!AllocateTileRange(tile.tile_index, initial_capacity))
         {
             Msg("! [DetailComputeManager] Skipping placement for tile %u", tile.tile_index);
             continue;
         }
 
-        auto& state = m_tile_states[tile.tile_index];
-        state.capacity = required_capacity;
-        state.version++;
-        state.active = true;
+        auto& state_initial = m_tile_states[tile.tile_index];
+        state_initial.version++;
+        state_initial.active = true;
 
         if (tile.seed_count == 0)
         {
-            state.instance_count = 0;
+            state_initial.instance_count = 0;
+            Msg("~ [DetailComputeManager] Tile %u has zero seeds", tile.tile_index);
             continue;
         }
 
-        const UINT zeroCount[4] = {0, 0, 0, 0};
-        context->ClearUnorderedAccessViewUint(m_gpu.instance_counter_uav, zeroCount);
-
-        DispatchPlacement(cmd_list, tile, state.base_offset, state.base_offset + state.capacity);
-        ++dispatched_tiles;
-
-        const u32 tile_samples = tile.seed_count * samples_per_slot;
+        bool placement_completed = false;
+        u32 placement_attempt = 0;
+        const u64 tile_samples = static_cast<u64>(tile.seed_count) * samples_per_slot;
         total_samples += tile_samples;
-        const u32 dispatch_x = (tile_samples + threads_per_group - 1u) / threads_per_group;
-        m_stats.compute_dispatches += dispatch_x;
 
-        u32 produced = ReadInstanceCounter(cmd_list);
-        state.instance_count = std::min(produced, state.capacity);
-
-        if (produced > state.capacity)
+        while (!placement_completed && placement_attempt < 4)
         {
-            Msg("! [DetailComputeManager] Tile %u produced %u instances (capacity %u)",
+            auto& state = m_tile_states[tile.tile_index];
+
+            Msg("~ [DetailComputeManager] DispatchPlacement tile=%u attempt=%u seeds=%u slots=%u base=%u cap=%u",
+                tile.tile_index,
+                placement_attempt,
+                tile.seed_count,
+                tile.slot_count,
+                state.base_offset,
+                state.capacity);
+
+            const UINT zeroCount[4] = {0, 0, 0, 0};
+            context->ClearUnorderedAccessViewUint(m_gpu.instance_counter_uav, zeroCount);
+
+            DispatchPlacement(cmd_list, tile, state.base_offset, state.base_offset + state.capacity);
+            ++dispatched_tiles;
+
+            const u32 dispatch_x = static_cast<u32>((tile_samples + threads_per_group - 1u) / threads_per_group);
+            m_stats.compute_dispatches += dispatch_x;
+
+            const u32 produced = ReadInstanceCounter(cmd_list);
+            state.instance_count = std::min(produced, state.capacity);
+
+            Msg("~ [DetailComputeManager] Tile %u produced %u instances (capacity %u)",
                 tile.tile_index, produced, state.capacity);
+
+            if (produced <= state.capacity || state.capacity >= max_capacity_for_tile)
+            {
+                if (produced > state.capacity)
+                {
+                    Msg("! [DetailComputeManager] Tile %u reached max capacity (%u) but produced %u - clamped",
+                        tile.tile_index, state.capacity, produced);
+                }
+                placement_completed = true;
+                break;
+            }
+
+            u32 new_capacity = state.capacity * 2u;
+            if (new_capacity < produced)
+                new_capacity = produced;
+            if (new_capacity > max_capacity_for_tile)
+                new_capacity = max_capacity_for_tile;
+
+            if (new_capacity <= state.capacity)
+            {
+                Msg("! [DetailComputeManager] Tile %u cannot grow beyond capacity %u (produced %u)",
+                    tile.tile_index, state.capacity, produced);
+                placement_completed = true;
+                break;
+            }
+
+            Msg("! [DetailComputeManager] Tile %u capacity insufficient (%u < %u) - reallocating to %u",
+                tile.tile_index, state.capacity, produced, new_capacity);
+
+            const u32 previous_capacity = state.capacity;
+            ReleaseTileRange(tile.tile_index);
+            if (!AllocateTileRange(tile.tile_index, new_capacity))
+            {
+                Msg("! [DetailComputeManager] Failed to reallocate tile %u to capacity %u",
+                    tile.tile_index, new_capacity);
+                if (!AllocateTileRange(tile.tile_index, previous_capacity))
+                {
+                    Msg("! [DetailComputeManager] Failed to restore previous capacity %u for tile %u",
+                        previous_capacity, tile.tile_index);
+                    auto& failed_state = m_tile_states[tile.tile_index];
+                    failed_state.active = false;
+                    failed_state.instance_count = 0;
+                }
+                else
+                {
+                    auto& restored_state = m_tile_states[tile.tile_index];
+                    restored_state.version++;
+                    restored_state.active = true;
+                }
+                placement_completed = true;
+                break;
+            }
+
+            auto& resized_state = m_tile_states[tile.tile_index];
+            resized_state.version++;
+            resized_state.active = true;
+
+            ++placement_attempt;
         }
     }
 
@@ -706,6 +794,7 @@ void DetailComputeManager::ProcessPlacementTiles(
 void DetailComputeManager::FinalizePlacement(CBackend& cmd_list)
 {
 #if defined(USE_DX11)
+    PIX_EVENT(GPU_DETAILS_FINALIZE_PLACEMENT);
     //XR_UNUSED(cmd_list);
 
     u32 total_instances = 0;
@@ -733,6 +822,11 @@ void DetailComputeManager::FinalizePlacement(CBackend& cmd_list)
     {
         Msg("* [DetailComputeManager] Placement finalized - GPU instances: %u", m_instance_count);
         s_last_reported_instances = m_instance_count;
+    }
+    else
+    {
+        Msg("~ [DetailComputeManager] Placement finalized (frame %u) - unchanged (%u instances)",
+            Device.dwFrame, m_instance_count);
     }
 #else
     XR_UNUSED(cmd_list);
@@ -917,8 +1011,17 @@ void DetailComputeManager::DispatchPlacement(
     u32 max_instances_for_tile)
 {
 #if defined(USE_DX11)
+    PIX_EVENT(GPU_DETAILS_DISPATCH_PLACEMENT);
     auto* device = HW.pDevice;
     auto* context = HW.get_context(cmd_list.context_id);
+
+    Msg("~ [DetailComputeManager] DispatchPlacement tile=%u offset=%u max=%u seeds=%u slots=%u samples=%u",
+        tile.tile_index,
+        instance_offset,
+        max_instances_for_tile,
+        tile.seed_count,
+        tile.slot_count,
+        tile.samples_per_slot);
 
     xr_vector<PlacementSeedGPUData> seeds_gpu;
     seeds_gpu.reserve(tile.seed_count);
@@ -1107,6 +1210,7 @@ void DetailComputeManager::DispatchPlacement(
     const u32 effective_samples_per_slot = samples_per_slot > 0 ? samples_per_slot : 1u;
     const u32 total_samples = tile.seed_count * effective_samples_per_slot;
     const u32 dispatch_x = (total_samples + threads_per_group - 1u) / threads_per_group;
+    Msg("~ [DetailComputeManager] Placement dispatch groups=%u (samples=%u)", dispatch_x, total_samples);
     context->Dispatch(dispatch_x, 1, 1);
 
     ID3D11ShaderResourceView* null_srvs[7] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
@@ -1152,6 +1256,7 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
         return;
 
 #if defined(USE_DX11)
+    PIX_EVENT(GPU_DETAILS_DISPATCH_CULLING);
     auto* context = HW.get_context(cmd_list.context_id);
 
     // Upload instances if needed
@@ -1267,6 +1372,10 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
 
     constexpr u32 threads_per_group = 256;
     bool dispatched_any = false;
+    Msg("* [DetailComputeManager] DispatchCulling (frame %u) instances=%u activeTiles=%zu",
+        Device.dwFrame,
+        m_instance_count,
+        m_tile_states.size());
 
     for (const auto& state : m_tile_states)
     {
@@ -1299,6 +1408,10 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
 
         context->Dispatch(num_groups, 1, 1);
         dispatched_any = true;
+        Msg("~ [DetailComputeManager] Culling tile base=%u count=%u groups=%u",
+            state.base_offset,
+            state.instance_count,
+            num_groups);
     }
 
     if (!dispatched_any && m_instance_count > 0)
@@ -1325,6 +1438,9 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
         const u32 num_groups = (m_instance_count + threads_per_group - 1) / threads_per_group;
         context->Dispatch(num_groups, 1, 1);
         dispatched_any = true;
+        Msg("! [DetailComputeManager] DispatchCulling fallback groups=%u (count=%u)",
+            num_groups,
+            m_instance_count);
     }
 
     // Unbind resources
@@ -1337,6 +1453,42 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
         m_stats.compute_dispatches++;
 
     m_stats.total_instances = m_instance_count;
+
+    if (Device.dwFrame < 1500)
+    {
+        auto* counter_readback = static_cast<ID3DBuffer*>(m_gpu.counter_readback);
+        context->CopyResource(counter_readback, m_gpu.counter_buffer);
+        D3D11_MAPPED_SUBRESOURCE mapped_counters = {};
+        if (SUCCEEDED(context->Map(counter_readback, 0, D3D11_MAP_READ, 0, &mapped_counters)))
+        {
+            const u32* counters = static_cast<const u32*>(mapped_counters.pData);
+            Msg("~ [DetailComputeManager] Culling counters (frame %u): still=%u wave1=%u wave2=%u",
+                Device.dwFrame,
+                counters[0],
+                counters[1],
+                counters[2]);
+            context->Unmap(counter_readback, 0);
+        }
+
+        for (u32 vis = 0; vis < 3; ++vis)
+        {
+            auto* args_readback = static_cast<ID3DBuffer*>(m_gpu.indirect_args_readback);
+            context->CopyResource(args_readback, m_gpu.indirect_args[vis]);
+            D3D11_MAPPED_SUBRESOURCE mapped_args = {};
+            if (SUCCEEDED(context->Map(args_readback, 0, D3D11_MAP_READ, 0, &mapped_args)))
+            {
+                const IndirectDrawArgs* args = static_cast<const IndirectDrawArgs*>(mapped_args.pData);
+                Msg("~ [DetailComputeManager] Indirect args vis=%u: index_count=%u instance_count=%u start_index=%u base_vertex=%d start_instance=%u",
+                    vis,
+                    args->index_count,
+                    args->instance_count,
+                    args->start_index,
+                    args->base_vertex,
+                    args->start_instance);
+                context->Unmap(args_readback, 0);
+            }
+        }
+    }
 
     // PERFORMANCE FIX: Removed GPU→CPU readback from hot path
     // The CopyResource was happening every frame and could cause GPU→CPU stalls
@@ -1361,16 +1513,15 @@ void DetailComputeManager::RenderIndirect(CBackend& cmd_list, u32 vis_id)
 
 #if defined(USE_DX11)
 
+    PIX_EVENT(GPU_DETAILS_RENDER_INDIRECT);
     auto* context = HW.get_context(cmd_list.context_id);
 
-    // Bind shader resources for GPU instanced rendering
+    // Bind shader resources for GPU instanced rendering via cached state manager
     // t0 = visible_indices[vis_id] - maps SV_InstanceID to actual instance index
     // t1 = instance_buffer - all instance data (DetailInstanceGPU structures)
-    ID3DShaderResourceView* srvs[] = {
-        m_gpu.visible_indices_srv[vis_id],
-        m_gpu.instance_buffer_srv
-    };
-    context->VSSetShaderResources(0, 2, srvs);
+    cmd_list.SRVSManager.SetVSResource(0, m_gpu.visible_indices_srv[vis_id]);
+    cmd_list.SRVSManager.SetVSResource(1, m_gpu.instance_buffer_srv);
+    Msg("~ [DetailComputeManager] RenderIndirect vis_id=%u (frame %u)", vis_id, Device.dwFrame);
 
     // Debug: Log first indirect draw call per frame
     static u32 last_frame = 0;
