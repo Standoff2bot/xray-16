@@ -69,6 +69,7 @@ DetailComputeManager::DetailComputeManager()
     , m_index_count(768)  // Default fallback
     , m_initialized(false)
     , m_needs_upload(false)
+    , m_fade_radius_override_sq(0.f)
     , m_next_free_offset(0)
 {
     ZeroMemory(&m_gpu, sizeof(m_gpu));
@@ -78,6 +79,19 @@ DetailComputeManager::DetailComputeManager()
 DetailComputeManager::~DetailComputeManager()
 {
     Shutdown();
+}
+
+void DetailComputeManager::SetFadeRadius(float radius_meters)
+{
+    if (radius_meters > 0.f)
+        m_fade_radius_override_sq = radius_meters * radius_meters;
+    else
+        m_fade_radius_override_sq = 0.f;
+}
+
+float DetailComputeManager::GetFadeRadius() const
+{
+    return (m_fade_radius_override_sq > 0.f) ? std::sqrt(m_fade_radius_override_sq) : 0.f;
 }
 
 // ===========================
@@ -123,6 +137,7 @@ void DetailComputeManager::Shutdown()
     m_instance_count = 0;
     m_max_instances = 0;
     m_initialized = false;
+    m_fade_radius_override_sq = 0.f;
 
     Msg("* [DetailComputeManager] Shutdown complete");
 }
@@ -586,6 +601,9 @@ void DetailComputeManager::ResetInstanceAllocator(CBackend& cmd_list)
         if (m_gpu.indirect_args_uav[i])
             context->ClearUnorderedAccessViewUint(m_gpu.indirect_args_uav[i], zeros);
     }
+
+    if (m_gpu.debug_buffer_uav)
+        context->ClearUnorderedAccessViewUint(m_gpu.debug_buffer_uav, zeros);
 
     m_instance_count = 0;
     m_stats.total_instances = 0;
@@ -1366,9 +1384,10 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
         m_gpu.counter_buffer_uav,       // u3 - counters
         m_gpu.indirect_args_uav[0],     // u4 - args still
         m_gpu.indirect_args_uav[1],     // u5 - args wave1
-        m_gpu.indirect_args_uav[2]      // u6 - args wave2
+        m_gpu.indirect_args_uav[2],     // u6 - args wave2
+        m_gpu.debug_buffer_uav          // u7 - debug output
     };
-    context->CSSetUnorderedAccessViews(0, 7, uavs, nullptr);
+    context->CSSetUnorderedAccessViews(0, 8, uavs, nullptr);
 
     constexpr u32 threads_per_group = 256;
     bool dispatched_any = false;
@@ -1376,6 +1395,21 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
         Device.dwFrame,
         m_instance_count,
         m_tile_states.size());
+
+    const float fade_limit_sqr_global = (m_fade_radius_override_sq > 0.f)
+        ? m_fade_radius_override_sq
+        : (psDeviceFlags.test(rsDrawDetails) ? float(ps_r__detail_radius) * float(ps_r__detail_radius) : 0.f);
+    const float fade_start_sqr_global = fade_limit_sqr_global * 0.8f * 0.8f;
+    if (Device.dwFrame < 700)
+    {
+        const bool drawDetails = psDeviceFlags.test(rsDrawDetails);
+        const float fade_radius = (fade_limit_sqr_global > 0.f) ? std::sqrt(fade_limit_sqr_global) : 0.f;
+        Msg("~ [DetailComputeManager] Culling params: drawDetails=%d fade_radius=%f fade_limit_sqr=%f override=%f",
+            drawDetails ? 1 : 0,
+            fade_radius,
+            fade_limit_sqr_global,
+            m_fade_radius_override_sq);
+    }
 
     for (const auto& state : m_tile_states)
     {
@@ -1385,8 +1419,8 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
         DetailCullParams params = {};
         params.camera_pos = Device.vCameraPosition;
         params.camera_dir = Device.vCameraDirection;
-        params.fade_limit_sqr = psDeviceFlags.test(rsDrawDetails) ? (float(ps_r__detail_radius) * float(ps_r__detail_radius)) : 0.f;
-        params.fade_start_sqr = params.fade_limit_sqr * 0.8f * 0.8f;
+        params.fade_limit_sqr = fade_limit_sqr_global;
+        params.fade_start_sqr = fade_start_sqr_global;
         params.r_ssa_discard = r_ssaDISCARD;
         params.r_ssa_cheap = ps_r__ssaHZBvsTEX;
         params.instance_count = m_instance_count;
@@ -1419,8 +1453,8 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
         DetailCullParams params = {};
         params.camera_pos = Device.vCameraPosition;
         params.camera_dir = Device.vCameraDirection;
-        params.fade_limit_sqr = psDeviceFlags.test(rsDrawDetails) ? (float(ps_r__detail_radius) * float(ps_r__detail_radius)) : 0.f;
-        params.fade_start_sqr = params.fade_limit_sqr * 0.8f * 0.8f;
+        params.fade_limit_sqr = fade_limit_sqr_global;
+        params.fade_start_sqr = fade_start_sqr_global;
         params.r_ssa_discard = r_ssaDISCARD;
         params.r_ssa_cheap = ps_r__ssaHZBvsTEX;
         params.instance_count = m_instance_count;
@@ -1445,16 +1479,17 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
 
     // Unbind resources
     ID3DShaderResourceView* null_srv[] = { nullptr };
-    ID3DUnorderedAccessView* null_uav[] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+    ID3DUnorderedAccessView* null_uav[] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
     context->CSSetShaderResources(0, 1, null_srv);
-    context->CSSetUnorderedAccessViews(0, 7, null_uav, nullptr);
+    context->CSSetUnorderedAccessViews(0, 8, null_uav, nullptr);
 
     if (dispatched_any)
         m_stats.compute_dispatches++;
 
     m_stats.total_instances = m_instance_count;
 
-    if (Device.dwFrame < 1500)
+    const bool dump_debug = true;
+    if (dump_debug)
     {
         auto* counter_readback = static_cast<ID3DBuffer*>(m_gpu.counter_readback);
         context->CopyResource(counter_readback, m_gpu.counter_buffer);
@@ -1489,6 +1524,9 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
             }
         }
     }
+
+    if (dump_debug)
+        ReadDebugData();
 
     // PERFORMANCE FIX: Removed GPU→CPU readback from hot path
     // The CopyResource was happening every frame and could cause GPU→CPU stalls
@@ -1601,6 +1639,9 @@ void DetailComputeManager::ReadDebugData()
     u32 frustum_culled = 0;
     u32 ssa_culled = 0;
     u32 vis_counts[3] = {0, 0, 0};  // Per vis_id
+    u32 quota_tile = 0;
+    u32 quota_global = 0;
+    u32 untouched = 0;
 
     // Sample every Nth instance to avoid too much processing
     const u32 sample_stride = (m_instance_count > 1000) ? (m_instance_count / 1000) : 1;
@@ -1625,6 +1666,9 @@ void DetailComputeManager::ReadDebugData()
         case 1: distance_culled++; break;
         case 2: frustum_culled++; break;
         case 3: ssa_culled++; break;
+        case 4: quota_tile++; break;
+        case 5: quota_global++; break;
+        case 6: untouched++; break;
         }
     }
 
@@ -1640,6 +1684,9 @@ void DetailComputeManager::ReadDebugData()
         vis_counts[0] *= sample_stride;
         vis_counts[1] *= sample_stride;
         vis_counts[2] *= sample_stride;
+        quota_tile *= sample_stride;
+        quota_global *= sample_stride;
+        untouched *= sample_stride;
     }
 
     // Print statistics
@@ -1649,6 +1696,9 @@ void DetailComputeManager::ReadDebugData()
     Msg("  Culled by distance: %6u (%5.1f%%)", distance_culled, 100.0f * distance_culled / m_instance_count);
     Msg("  Culled by frustum:  %6u (%5.1f%%)", frustum_culled, 100.0f * frustum_culled / m_instance_count);
     Msg("  Culled by SSA:      %6u (%5.1f%%)", ssa_culled, 100.0f * ssa_culled / m_instance_count);
+    Msg("  Skipped (tile quota): %6u", quota_tile);
+    Msg("  Skipped (global quota): %6u", quota_global);
+    Msg("  Unwritten (tag=6):   %6u", untouched);
     Msg("  Visible breakdown:");
     Msg("    Still (vis_id=0):  %6u", vis_counts[0]);
     Msg("    Wave1 (vis_id=1):  %6u", vis_counts[1]);

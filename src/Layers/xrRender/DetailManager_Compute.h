@@ -165,6 +165,10 @@ public:
     void SetGeometryInfo(u32 index_count) { m_index_count = index_count; }
     u32 GetIndexCount() const { return m_index_count; }
 
+    // Rendering parameters
+    void SetFadeRadius(float radius_meters);
+    float GetFadeRadius() const;
+
     // Placement pipeline
     void ResetInstanceAllocator(CBackend& cmd_list);
     void ProcessPlacementTiles(
@@ -256,6 +260,7 @@ private:
     // State
     bool m_initialized;
     bool m_needs_upload;  // Instances changed, need GPU upload
+    float m_fade_radius_override_sq;
 
     // Statistics
     Stats m_stats;

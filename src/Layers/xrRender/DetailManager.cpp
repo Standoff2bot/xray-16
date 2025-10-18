@@ -342,7 +342,18 @@ void CDetailManager::BuildGPUGrassOfflineData()
         m_gpu_residency.Initialize(&m_gpu_grass_asset);
         m_gpu_placement.Initialize(&m_gpu_grass_asset);
         if (m_compute_manager)
+        {
             m_compute_manager->EnsureTileStateCapacity(m_gpu_grass_asset.header.tile_count);
+
+            const auto& cfg = m_gpu_grass_asset.header.config;
+            const float clip_radius = cfg.tile_world_size * (cfg.ring_count + 1.f);
+            const float desired_radius = std::max(float(ps_r__detail_radius), clip_radius);
+            m_compute_manager->SetFadeRadius(desired_radius);
+            Msg("* [DetailManager] GPU grass fade radius set to %.2f m (clip %.2f m, detail %.2f m)",
+                desired_radius,
+                clip_radius,
+                float(ps_r__detail_radius));
+        }
         m_gpu_instance_list_dirty = true;
 
         float min_height = FLT_MAX;

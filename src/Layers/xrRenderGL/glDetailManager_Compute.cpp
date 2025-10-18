@@ -17,6 +17,7 @@ DetailComputeManager::DetailComputeManager()
     , m_max_instances(0)
     , m_initialized(false)
     , m_needs_upload(false)
+    , m_fade_radius_override_sq(0.f)
 {
     ZeroMemory(&m_gpu, sizeof(m_gpu));
     ZeroMemory(&m_stats, sizeof(m_stats));
@@ -25,6 +26,19 @@ DetailComputeManager::DetailComputeManager()
 DetailComputeManager::~DetailComputeManager()
 {
     Shutdown();
+}
+
+void DetailComputeManager::SetFadeRadius(float radius_meters)
+{
+    if (radius_meters > 0.f)
+        m_fade_radius_override_sq = radius_meters * radius_meters;
+    else
+        m_fade_radius_override_sq = 0.f;
+}
+
+float DetailComputeManager::GetFadeRadius() const
+{
+    return (m_fade_radius_override_sq > 0.f) ? std::sqrt(m_fade_radius_override_sq) : 0.f;
 }
 
 // ===========================

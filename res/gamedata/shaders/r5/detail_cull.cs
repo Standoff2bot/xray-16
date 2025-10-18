@@ -96,6 +96,10 @@ RWByteAddressBuffer g_indirect_args_still : register(u4);
 RWByteAddressBuffer g_indirect_args_wave1 : register(u5);
 RWByteAddressBuffer g_indirect_args_wave2 : register(u6);
 
+// Optional debug output (instance_idx, reason, vis_id, dist_sqr)
+// reason: 0=visible, 1=distance, 2=frustum, 3=ssa, 4=tileQuota, 5=globalQuota
+RWStructuredBuffer<uint4> g_debug_output : register(u7);
+
 // ===========================
 // Culling Functions
 // ===========================
@@ -139,18 +143,33 @@ float ComputeSSA(float3 world_pos, float radius, float scale)
 void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_GroupID)
 {
     uint instance_idx = dispatch_thread_id.x;
+    uint instance_global_idx = g_instance_base + instance_idx;
+
+    uint4 debug_data = uint4(instance_global_idx, 6, g_tile_instance_count, g_instance_count);
+    g_debug_output[instance_global_idx] = debug_data;
 
     // Early exit if beyond tile quota
     if (instance_idx >= g_tile_instance_count)
+    {
+        debug_data.y = 4;
+        g_debug_output[instance_global_idx] = debug_data;
         return;
-
-    uint instance_global_idx = g_instance_base + instance_idx;
+    }
 
     // Ensure all threads wait for initialization if any shared state were set (currently none)
     GroupMemoryBarrierWithGroupSync();
 
+    if (instance_global_idx >= g_instance_count)
+    {
+        debug_data.y = 5;
+        g_debug_output[instance_global_idx] = debug_data;
+        return;
+    }
+
     // Load instance data
     DetailInstanceGPU inst = g_instances[instance_global_idx];
+
+    debug_data = uint4(instance_global_idx, 0, inst.vis_id, 0);
 
     // =========================
     // Distance Culling
@@ -160,7 +179,12 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
 
     // Fade limit culling
     if (dist_sqr > g_fade_limit_sqr)
+    {
+        debug_data.y = 1;
+        debug_data.w = asuint(dist_sqr);
+        g_debug_output[instance_global_idx] = debug_data;
         return;  // Too far, cull
+    }
 
     // =========================
     // Frustum Culling
@@ -169,6 +193,9 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
     float world_radius = inst.bounds_radius * inst.scale;
     if (!FrustumCullSphere(inst.position, world_radius))
     {
+        debug_data.y = 2;
+        debug_data.w = asuint(dist_sqr);
+        g_debug_output[instance_global_idx] = debug_data;
         return;  // Outside frustum, cull
     }
 
@@ -177,7 +204,12 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
     // =========================
     float ssa = ComputeSSA(inst.position, inst.bounds_radius, inst.scale);
     if (ssa < g_r_ssa_discard)
+    {
+        debug_data.y = 3;
+        debug_data.w = asuint(dist_sqr);
+        g_debug_output[instance_global_idx] = debug_data;
         return;  // Too small, cull
+    }
 
     // =========================
     // Fade Factor (for future use)
@@ -225,4 +257,8 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
         uint original_value;
         g_indirect_args_wave2.InterlockedAdd(4, 1, original_value);
     }
+
+    debug_data.y = 0;
+    debug_data.w = asuint(dist_sqr);
+    g_debug_output[instance_global_idx] = debug_data;
 }
