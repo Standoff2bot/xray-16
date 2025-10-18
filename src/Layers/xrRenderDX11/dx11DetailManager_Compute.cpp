@@ -189,6 +189,16 @@ void DetailComputeManager::CreateBuffers(u32 max_instances)
         CHK_DX(device->CreateUnorderedAccessView(m_gpu.instance_buffer, &uav_desc, &m_gpu.instance_buffer_uav));
 
         Msg("    Instance buffer: %u bytes (%u instances)", instance_buffer_size, max_instances);
+
+        D3D_BUFFER_DESC readback_desc = desc;
+        readback_desc.BindFlags = 0;
+        readback_desc.CPUAccessFlags = D3D_CPU_ACCESS_READ;
+        readback_desc.Usage = D3D_USAGE_STAGING;
+        readback_desc.MiscFlags = 0;
+
+        ID3DBuffer* readback_buf = nullptr;
+        CHK_DX(device->CreateBuffer(&readback_desc, nullptr, &readback_buf));
+        m_gpu.instance_readback = readback_buf;
     }
 
     // ===========================
@@ -440,6 +450,7 @@ void DetailComputeManager::DestroyBuffers()
     _RELEASE(m_gpu.instance_buffer);
     _RELEASE(m_gpu.instance_buffer_srv);
     _RELEASE(m_gpu.instance_buffer_uav);
+    _RELEASE(m_gpu.instance_readback);
 
     for (int i = 0; i < 3; ++i)
     {
@@ -1752,6 +1763,145 @@ void DetailComputeManager::ReadDebugData()
     context->Unmap(counter_readback, 0);
 
 #endif // USE_DX11
+}
+
+void DetailComputeManager::DiffInstanceBuffer(const xr_vector<DetailInstanceGPU>* reference_instances)
+{
+    if (!m_initialized)
+    {
+        Msg("! [DetailComputeManager] DiffInstanceBuffer skipped - manager not initialized");
+        return;
+    }
+
+#if defined(USE_DX11)
+    auto* gpu_buffer = m_gpu.instance_buffer;
+    auto* readback_buffer = static_cast<ID3DBuffer*>(m_gpu.instance_readback);
+    if (!gpu_buffer || !readback_buffer)
+    {
+        Msg("! [DetailComputeManager] DiffInstanceBuffer skipped - readback buffers unavailable");
+        return;
+    }
+
+    auto* context = HW.get_context(CHW::IMM_CTX_ID);
+    context->CopyResource(readback_buffer, gpu_buffer);
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    if (FAILED(context->Map(readback_buffer, 0, D3D_MAP_READ, 0, &mapped)))
+    {
+        Msg("! [DetailComputeManager] DiffInstanceBuffer failed - Map() call unsuccessful");
+        return;
+    }
+
+    const DetailInstanceGPU* gpu_instances = static_cast<const DetailInstanceGPU*>(mapped.pData);
+    const xr_vector<DetailInstanceGPU>& cpu_instances = reference_instances ? *reference_instances : m_instance_staging;
+    const u32 gpu_count = m_instance_count;
+    const u32 cpu_count = static_cast<u32>(cpu_instances.size());
+    const u32 compare_count = std::min(gpu_count, cpu_count);
+
+    if (cpu_count == 0)
+        Msg("! [DetailComputeManager] DiffInstanceBuffer warning: CPU reference is empty");
+
+    auto nearlyEqual = [](float a, float b, float tol) -> bool
+    {
+        return std::fabs(a - b) <= tol;
+    };
+
+    auto logVecDiff = [](const char* label, const Fvector& a, const Fvector& b)
+    {
+        Msg("        %s CPU(%.5f, %.5f, %.5f) GPU(%.5f, %.5f, %.5f)",
+            label, a.x, a.y, a.z, b.x, b.y, b.z);
+    };
+
+    const float pos_tol = 1e-3f;
+    const float normal_tol = 2e-3f;
+    const float float_tol = 1e-3f;
+
+    u32 mismatch_count = 0;
+    for (u32 i = 0; i < compare_count; ++i)
+    {
+        const DetailInstanceGPU& cpu = cpu_instances[i];
+        const DetailInstanceGPU& gpu = gpu_instances[i];
+
+        bool mismatch = false;
+
+        if (!nearlyEqual(cpu.position.x, gpu.position.x, pos_tol) ||
+            !nearlyEqual(cpu.position.y, gpu.position.y, pos_tol) ||
+            !nearlyEqual(cpu.position.z, gpu.position.z, pos_tol))
+        {
+            mismatch = true;
+            if (mismatch_count < 16)
+                logVecDiff("position", cpu.position, gpu.position);
+        }
+
+        if (!nearlyEqual(cpu.scale, gpu.scale, float_tol) ||
+            !nearlyEqual(cpu.rotation_y, gpu.rotation_y, float_tol))
+            mismatch = true;
+
+        if (!nearlyEqual(cpu.c_hemi, gpu.c_hemi, float_tol) ||
+            !nearlyEqual(cpu.c_sun, gpu.c_sun, float_tol))
+            mismatch = true;
+
+        if (cpu.object_id != gpu.object_id ||
+            cpu.vis_id != gpu.vis_id ||
+            cpu.slot_x != gpu.slot_x ||
+            cpu.slot_z != gpu.slot_z ||
+            cpu.flags != gpu.flags)
+            mismatch = true;
+
+        if (!nearlyEqual(cpu.bounds_min.x, gpu.bounds_min.x, pos_tol) ||
+            !nearlyEqual(cpu.bounds_min.y, gpu.bounds_min.y, pos_tol) ||
+            !nearlyEqual(cpu.bounds_min.z, gpu.bounds_min.z, pos_tol))
+        {
+            mismatch = true;
+            if (mismatch_count < 16)
+                logVecDiff("bounds_min", cpu.bounds_min, gpu.bounds_min);
+        }
+
+        if (!nearlyEqual(cpu.bounds_max.x, gpu.bounds_max.x, pos_tol) ||
+            !nearlyEqual(cpu.bounds_max.y, gpu.bounds_max.y, pos_tol) ||
+            !nearlyEqual(cpu.bounds_max.z, gpu.bounds_max.z, pos_tol))
+        {
+            mismatch = true;
+            if (mismatch_count < 16)
+                logVecDiff("bounds_max", cpu.bounds_max, gpu.bounds_max);
+        }
+
+        if (!nearlyEqual(cpu.bounds_radius, gpu.bounds_radius, normal_tol) ||
+            !nearlyEqual(cpu.fade_distance_sqr, gpu.fade_distance_sqr, float_tol))
+            mismatch = true;
+
+        if (mismatch)
+        {
+            if (mismatch_count < 16)
+            {
+                Msg("    Mismatch at instance %u:", i);
+                Msg("        scale CPU %.5f GPU %.5f  rotY CPU %.5f GPU %.5f",
+                    cpu.scale, gpu.scale, cpu.rotation_y, gpu.rotation_y);
+                Msg("        lighting CPU (%.5f, %.5f) GPU (%.5f, %.5f)",
+                    cpu.c_hemi, cpu.c_sun, gpu.c_hemi, gpu.c_sun);
+                Msg("        ids CPU(obj=%u vis=%u slot=%u,%u flags=%u) GPU(obj=%u vis=%u slot=%u,%u flags=%u)",
+                    cpu.object_id, cpu.vis_id, cpu.slot_x, cpu.slot_z, cpu.flags,
+                    gpu.object_id, gpu.vis_id, gpu.slot_x, gpu.slot_z, gpu.flags);
+                Msg("        bounds radius CPU %.5f GPU %.5f  fade CPU %.5f GPU %.5f",
+                    cpu.bounds_radius, gpu.bounds_radius,
+                    cpu.fade_distance_sqr, gpu.fade_distance_sqr);
+            }
+            mismatch_count++;
+        }
+    }
+
+    context->Unmap(readback_buffer, 0);
+
+    if (gpu_count != cpu_count)
+        Msg("! [DetailComputeManager] DiffInstanceBuffer count mismatch - GPU %u vs CPU %u", gpu_count, cpu_count);
+
+    if (mismatch_count == 0 && gpu_count == cpu_count)
+        Msg("* [DetailComputeManager] DiffInstanceBuffer: GPU instances match CPU reference (%u entries)", gpu_count);
+    else
+        Msg("! [DetailComputeManager] DiffInstanceBuffer: %u differing instances (compared %u, GPU total %u)", mismatch_count, compare_count, gpu_count);
+#else
+    XR_UNUSED(reference_instances);
+#endif
 }
 
 // ===========================

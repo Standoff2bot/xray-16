@@ -712,7 +712,7 @@ void CDetailManager::Render(CBackend& cmd_list)
 
     ZoneScoped;
 
-    if (!ps_r__gpu_culling)
+    if (!ps_r__gpu_culling && m_calc_task)
         TaskScheduler->Wait(*m_calc_task);
 
     RImplementation.BasicStats.DetailRender.Begin();
@@ -723,6 +723,33 @@ void CDetailManager::Render(CBackend& cmd_list)
 
     cmd_list.set_CullMode(CULL_CCW);
     cmd_list.set_xform_world(Fidentity);
+
+    static int s_last_gpu_culling_state = ps_r__gpu_culling;
+    static bool s_pending_gpu_diff = false;
+    static bool s_have_cpu_baseline = false;
+    if (s_last_gpu_culling_state != ps_r__gpu_culling)
+    {
+        if (!ps_r__gpu_culling && m_compute_manager)
+        {
+            BuildGPUInstanceListCPU();
+            s_have_cpu_baseline = (m_compute_manager->GetInstanceCount() > 0);
+            Msg("~ [DetailManager] GPU culling toggled off - captured %u CPU instances",
+                m_compute_manager->GetInstanceCount());
+        }
+        else if (ps_r__gpu_culling && m_compute_manager)
+        {
+            if (s_have_cpu_baseline)
+            {
+                s_pending_gpu_diff = true;
+                Msg("~ [DetailManager] GPU culling toggled on - scheduling instance buffer diff");
+            }
+            else
+            {
+                Msg("! [DetailManager] GPU culling toggled on without CPU baseline - diff skipped");
+            }
+        }
+        s_last_gpu_culling_state = ps_r__gpu_culling;
+    }
 
     // GPU compute culling path
     if (ps_r__gpu_culling && m_compute_manager)
@@ -754,10 +781,7 @@ void CDetailManager::Render(CBackend& cmd_list)
 
         for (u32 iPass = 0; iPass < gpu_detail_shader->E[shader_element]->passes.size(); ++iPass)
         {
-            cmd_list.set_xform_view(Device.mView);
-            cmd_list.set_xform_project(Device.mProject);
             cmd_list.set_Textures(gpu_detail_shader->E[shader_element]->passes[iPass]._get()->T);
-
             cmd_list.set_Element(gpu_detail_shader->E[shader_element], iPass); // CLEARS CONSTANT BUFFERS AND GLOBALS!? Disabled for now.
 
             cmd_list.SRVSManager.Apply(cmd_list.context_id);
@@ -773,6 +797,13 @@ void CDetailManager::Render(CBackend& cmd_list)
         for (u32 vis_id = 0; vis_id < 3; vis_id++)
         {
             m_compute_manager->RenderIndirect(cmd_list, vis_id);
+        }
+
+        if (s_pending_gpu_diff)
+        {
+            m_compute_manager->DiffInstanceBuffer();
+            s_pending_gpu_diff = false;
+            s_have_cpu_baseline = false;
         }
     }
     else // CPU rendering path

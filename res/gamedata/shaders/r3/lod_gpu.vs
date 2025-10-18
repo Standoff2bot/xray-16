@@ -13,9 +13,7 @@ struct vv
 
 #include "common.h"
 
-float4x4 m_view;
-float4x4 m_project;
-float4x4 m_viewproject; 
+#define GPU_GRASS_DEBUG_PASSTHROUGH 1
 
 // Instance data structure (matches C++ DetailInstanceGPU - 112 bytes)
 struct DetailInstanceGPU
@@ -65,12 +63,20 @@ StructuredBuffer<DetailInstanceGPU> g_instances : register(t1);	// All instance 
 vf main(vv I, uint instance_id : SV_InstanceID)
 {
 	vf o;
-
-	// Read visible instance index
 	uint visible_idx = g_visible_indices[instance_id];
-
-	// Load instance data
 	DetailInstanceGPU inst = g_instances[visible_idx];
+	float3 world_pos3 = inst.position + I.pos * inst.scale;
+    float4 world_pos = float4(world_pos3, 1.0);
+	float3 view_pos = mul(m_V, world_pos);
+
+// Debug path: bypass instance transform and just place geometry at CPU-provided instance origins.
+#if defined(GPU_GRASS_DEBUG_PASSTHROUGH)
+	o.hpos = mul(m_VP, world_pos);
+	o.position = float4(view_pos, inst.c_hemi * L_SCALE);
+	o.tc = I.tc;
+	o.N = float3(0.0, 1.0, 0.0);
+	return o;
+#endif
 
 	// Build rotation matrix (Y-axis rotation)
 	float cos_y = cos(inst.rotation_y);
@@ -83,7 +89,6 @@ vf main(vv I, uint instance_id : SV_InstanceID)
 
 	// Transform vertex: rotate, scale, translate
 	float3 local_pos = mul(rot_matrix, I.pos * inst.scale);
-	float4 world_pos = float4(local_pos + inst.position, 1.0);
 
 	// Transform normal to world space
 	float3 world_normal = normalize(mul(rot_matrix, I.normal));
@@ -92,7 +97,6 @@ vf main(vv I, uint instance_id : SV_InstanceID)
 	o.hpos = mul(m_VP, world_pos);
 
 	// Position in view space (for pixel shader)
-	float3 view_pos = mul(m_V, world_pos);
 
 	// Texture coordinates
 	o.tc = I.tc;

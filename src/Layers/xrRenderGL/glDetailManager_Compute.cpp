@@ -222,4 +222,6 @@ DetailInstanceGPU ConvertToGPUInstance(
     return gpu_inst;
 }
 
+void DetailComputeManager::DiffInstanceBuffer(const xr_vector<DetailInstanceGPU>* reference_instances) {}
+
 } // namespace xray::render::RENDER_NAMESPACE

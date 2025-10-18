@@ -11,28 +11,13 @@ struct v2p
 
 f_deffer main(v2p I)
 {
-	// Sample base texture
-	float4 base_color = s_base.Sample(smp_base, I.tc);
+      // float4 base_color = s_base.Sample(smp_base, I.tc);
+      // clip(base_color.w - def_aref);
 
-	// Alpha test
-	clip(base_color.w - def_aref);
+      // Write something wildly saturated straight into the F-buffer
+      float4 norm = float4(0, 0, 1, 1);          // fake normal + hemi
+      float4 pos  = float4(I.position.xyz, 1);   // keep the view‑space position
+      float4 col  = float4(1, 0, 1, 1);          // hot pink albedo + gloss
 
-	// Extract hemi from position.w
-	float h = I.position.w;
-	float ms = xmaterial; // Material ID
-
-	// Normalize normal
-	float3 norm = normalize(I.N);
-
-	// Pack using standard gbuffer packer
-	// norm: normal + hemi
-	// pos: position + material
-	// col: albedo + gloss
-	f_deffer O = pack_gbuffer(
-		float4(norm, h),
-		float4(I.position.xyz + norm * def_virtualh / 2.0, ms),
-		float4(base_color.rgb, def_gloss)
-	);
-
-	return O;
+      return pack_gbuffer(norm, pos, col);
 }

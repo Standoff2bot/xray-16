@@ -202,6 +202,7 @@ public:
 
     // Debug
     void ReadDebugData();  // Read debug buffer and print culling statistics
+    void DiffInstanceBuffer(const xr_vector<DetailInstanceGPU>* reference_instances = nullptr); // Compare CPU vs GPU instances
 
 private:
     // GPU Resources
@@ -211,6 +212,7 @@ private:
         ID3DBuffer* instance_buffer;                   // All instances (input)
         ID3DShaderResourceView* instance_buffer_srv;   // SRV for reading in compute shader
         ID3DUnorderedAccessView* instance_buffer_uav;  // UAV for placement writes
+        ID3DBuffer* instance_readback;                 // Staging buffer for instance readback
 
         ID3DBuffer* visible_indices[3];                // Visible instance indices per vis_id (output)
         ID3DUnorderedAccessView* visible_indices_uav[3]; // UAV for writing

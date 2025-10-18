@@ -13,6 +13,8 @@ struct vv
 
 #include "common.h"
 
+#define GPU_GRASS_DEBUG_PASSTHROUGH 1
+
 // Instance data structure (matches C++ DetailInstanceGPU - 112 bytes)
 struct DetailInstanceGPU
 {
@@ -61,6 +63,22 @@ StructuredBuffer<DetailInstanceGPU> g_instances : register(t1);	// All instance 
 vf main(vv I, uint instance_id : SV_InstanceID)
 {
 	vf o;
+
+// Debug path: bypass instance transform and just place geometry at CPU-provided instance origins.
+#if defined(GPU_GRASS_DEBUG_PASSTHROUGH)
+	uint visible_idx = g_visible_indices[instance_id];
+	DetailInstanceGPU inst = g_instances[visible_idx];
+
+	float3 world_pos3 = inst.position + I.pos * inst.scale;
+	float4 world_pos = float4(world_pos3, 1.0);
+	o.hpos = mul(m_VP, world_pos);
+
+	float3 view_pos = mul(m_V, world_pos);
+	o.position = float4(view_pos, inst.c_hemi * L_SCALE);
+	o.tc = I.tc;
+	o.N = normalize(mul((float3x3)m_V, I.normal));
+	return o;
+#endif
 
 	// Read visible instance index
 	uint visible_idx = g_visible_indices[instance_id];
