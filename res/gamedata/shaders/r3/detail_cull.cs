@@ -2,6 +2,7 @@
 // Processes all detail instances and outputs visible indices for indirect drawing
 //
 #define SM_5_0
+#define FORCE_ALL_VISIBLE 1
 #include "common.h"
 
 // ===========================
@@ -172,44 +173,41 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
     debug_data = uint4(instance_global_idx, 0, inst.vis_id, 0);
 
     // =========================
-    // Distance Culling
+    // Distance / Frustum / SSA (optional)
     // =========================
     float3 to_camera = g_camera_pos - inst.position;
     float dist_sqr = dot(to_camera, to_camera);
 
-    // Fade limit culling
+#if !FORCE_ALL_VISIBLE
     if (dist_sqr > g_fade_limit_sqr)
     {
         debug_data.y = 1;
         debug_data.w = asuint(dist_sqr);
         g_debug_output[instance_global_idx] = debug_data;
-        return;  // Too far, cull
+        return;
     }
 
-    // =========================
-    // Frustum Culling
-    // =========================
-    // Use bounding sphere for conservative culling
     float world_radius = inst.bounds_radius * inst.scale;
     if (!FrustumCullSphere(inst.position, world_radius))
     {
         debug_data.y = 2;
         debug_data.w = asuint(dist_sqr);
         g_debug_output[instance_global_idx] = debug_data;
-        return;  // Outside frustum, cull
+        return;
     }
 
-    // =========================
-    // SSA (Screen Space Area) Culling
-    // =========================
     float ssa = ComputeSSA(inst.position, inst.bounds_radius, inst.scale);
     if (ssa < g_r_ssa_discard)
     {
         debug_data.y = 3;
         debug_data.w = asuint(dist_sqr);
         g_debug_output[instance_global_idx] = debug_data;
-        return;  // Too small, cull
+        return;
     }
+#else
+    float ssa = ComputeSSA(inst.position, inst.bounds_radius, inst.scale);
+    debug_data.y = 0;
+#endif
 
     // =========================
     // Fade Factor (for future use)

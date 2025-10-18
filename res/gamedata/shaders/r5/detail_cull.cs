@@ -2,6 +2,7 @@
 // Processes all detail instances and outputs visible indices for indirect drawing
 //
 #define SM_5_0
+#define FORCE_ALL_VISIBLE 1
 #include "common.h"
 
 // ===========================
@@ -172,11 +173,12 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
     debug_data = uint4(instance_global_idx, 0, inst.vis_id, 0);
 
     // =========================
-    // Distance Culling
+    // Distance / Culling (short-circuited when FORCE_ALL_VISIBLE)
     // =========================
     float3 to_camera = g_camera_pos - inst.position;
     float dist_sqr = dot(to_camera, to_camera);
 
+#if !FORCE_ALL_VISIBLE
     // Fade limit culling
     if (dist_sqr > g_fade_limit_sqr)
     {
@@ -186,10 +188,7 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
         return;  // Too far, cull
     }
 
-    // =========================
-    // Frustum Culling
-    // =========================
-    // Use bounding sphere for conservative culling
+    // Frustum test
     float world_radius = inst.bounds_radius * inst.scale;
     if (!FrustumCullSphere(inst.position, world_radius))
     {
@@ -199,9 +198,7 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
         return;  // Outside frustum, cull
     }
 
-    // =========================
-    // SSA (Screen Space Area) Culling
-    // =========================
+    // SSA culling
     float ssa = ComputeSSA(inst.position, inst.bounds_radius, inst.scale);
     if (ssa < g_r_ssa_discard)
     {
@@ -210,6 +207,10 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
         g_debug_output[instance_global_idx] = debug_data;
         return;  // Too small, cull
     }
+#else
+    float ssa = ComputeSSA(inst.position, inst.bounds_radius, inst.scale);
+    debug_data.y = 0;
+#endif
 
     // =========================
     // Fade Factor (for future use)
@@ -226,6 +227,9 @@ void main(uint3 dispatch_thread_id : SV_DispatchThreadID, uint3 group_id : SV_Gr
     // =========================
     uint output_idx = 0;
 
+#if FORCE_ALL_VISIBLE
+    debug_data.w = asuint(dist_sqr);
+#endif
     // Determine which output buffer based on vis_id
     if (inst.vis_id == 0)
     {

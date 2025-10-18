@@ -556,7 +556,7 @@ void CDetailManager::UpdateVisibleM()
 {
     ZoneScoped;
 
-    UpdateGPUGrassResidency(Device.vCameraPosition);
+    UpdateGPUGrassResidency(EYE);
 
     for (int i = 0; i != 3; ++i)
         for (auto& vis : m_visibles[i])
@@ -727,7 +727,8 @@ void CDetailManager::Render(CBackend& cmd_list)
     // GPU compute culling path
     if (ps_r__gpu_culling && m_compute_manager)
     {
-        UpdateGPUGrassResidency(Device.vCameraPosition);
+        EYE = Device.vCameraPosition;
+        UpdateGPUGrassResidency(EYE);
 
         // Build instance list ONLY when cache changes (not every frame!)
         // This was the major bottleneck - rebuilding millions of instances every frame

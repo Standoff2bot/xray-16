@@ -215,6 +215,7 @@ private:
         ID3DBuffer* visible_indices[3];                // Visible instance indices per vis_id (output)
         ID3DUnorderedAccessView* visible_indices_uav[3]; // UAV for writing
         ID3DShaderResourceView* visible_indices_srv[3];  // SRV for reading during draw
+        ID3DBuffer* visible_indices_readback[3];          // Staging copies for debugging
 
         ID3DBuffer* counter_buffer;                    // Atomic counters for visible instances
         ID3DUnorderedAccessView* counter_buffer_uav;   // UAV for atomic operations

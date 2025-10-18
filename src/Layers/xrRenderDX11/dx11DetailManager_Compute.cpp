@@ -225,6 +225,16 @@ void DetailComputeManager::CreateBuffers(u32 max_instances)
         srv_desc.Buffer.NumElements = max_instances;
 
         CHK_DX(device->CreateShaderResourceView(m_gpu.visible_indices[i], &srv_desc, &m_gpu.visible_indices_srv[i]));
+
+        D3D_BUFFER_DESC readback_desc = desc;
+        readback_desc.BindFlags = 0;
+        readback_desc.CPUAccessFlags = D3D_CPU_ACCESS_READ;
+        readback_desc.Usage = D3D_USAGE_STAGING;
+        readback_desc.MiscFlags = 0;
+
+        ID3DBuffer* readback_buf = nullptr;
+        CHK_DX(device->CreateBuffer(&readback_desc, nullptr, &readback_buf));
+        m_gpu.visible_indices_readback[i] = readback_buf;
     }
     Msg("    Visible indices buffers (x3): %u bytes each", index_buffer_size);
 
@@ -436,6 +446,12 @@ void DetailComputeManager::DestroyBuffers()
         _RELEASE(m_gpu.visible_indices[i]);
         _RELEASE(m_gpu.visible_indices_uav[i]);
         _RELEASE(m_gpu.visible_indices_srv[i]);
+        if (m_gpu.visible_indices_readback[i])
+        {
+            auto* buf = static_cast<ID3DBuffer*>(m_gpu.visible_indices_readback[i]);
+            _RELEASE(buf);
+            m_gpu.visible_indices_readback[i] = nullptr;
+        }
         _RELEASE(m_gpu.indirect_args[i]);
         _RELEASE(m_gpu.indirect_args_uav[i]);
     }
@@ -1521,6 +1537,25 @@ void DetailComputeManager::DispatchCulling(CBackend& cmd_list, const Fmatrix& vi
                     args->base_vertex,
                     args->start_instance);
                 context->Unmap(args_readback, 0);
+            }
+        }
+        for (u32 vis = 0; vis < 3; ++vis)
+        {
+            if (!m_gpu.visible_indices_readback[vis])
+                continue;
+
+            auto* readback = static_cast<ID3DBuffer*>(m_gpu.visible_indices_readback[vis]);
+            context->CopyResource(readback, m_gpu.visible_indices[vis]);
+
+            D3D11_MAPPED_SUBRESOURCE mapped_vis = {};
+            if (SUCCEEDED(context->Map(readback, 0, D3D11_MAP_READ, 0, &mapped_vis)))
+            {
+                const u32* indices = static_cast<const u32*>(mapped_vis.pData);
+                Msg("~ [DetailComputeManager] Visible indices snapshot vis=%u", vis);
+                const u32 dump_count = 16;
+                for (u32 i = 0; i < dump_count; ++i)
+                    Msg("    [%02u] = %u", i, indices[i]);
+                context->Unmap(readback, 0);
             }
         }
     }
