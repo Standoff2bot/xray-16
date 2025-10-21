@@ -913,225 +913,428 @@ Memory:
 
 ---
 
-## **Phase 3: GRID Autosport Optimizations** ⚡ ADVANCED
-**Goal**: Apply GRID-style optimizations for maximum GPU efficiency
+## **Phase 3: GRID Autosport Optimizations** ❌ WON'T DO
+**Status**: Skipped - incompatible with current architecture
 
-### Milestone 3.1: Single Large Instance Dispatch
-**Test**: Better GPU occupancy, same rendering
+**Reason**: The GRID Autosport approach requires:
+- SV_VertexID reconstruction in vertex shader
+- Single massive instance dispatch (index_count * instance_count, 1)
+- Hardcoded vertex data or complex lookup tables
 
-**Changes**:
-- Instead of DrawIndexedInstancedIndirect(index_count, instance_count, ...)
-- Use DrawIndexedInstancedIndirect(index_count * instance_count, 1, ...)
-- Reconstruct instance ID in vertex shader using SV_VertexID
+**Why incompatible**:
+1. Our grass system uses diverse, artist-authored geometry (not simple quads)
+2. Current per-object rendering leverages existing VB/IB infrastructure
+3. Phase 2's GPU culling already provides the main performance benefits
+4. Complexity/risk doesn't justify marginal GPU scheduling improvements
 
-**Why**: AMD/Nvidia whitepaper shows better GPU scheduling with large single instance
-
-**Indirect Args Change**:
-```hlsl
-// Compute shader:
-uint indices_per_instance = 12;  // Or read from constant buffer
-
-if (inst.vis_id == 0)
-{
-    uint output_idx;
-    indirect_args_still.InterlockedAdd(4, 1, output_idx);  // instance_count++
-
-    // Also update vertex count field (offset 0)
-    indirect_args_still.InterlockedAdd(0, indices_per_instance, _);
-
-    visible_still[output_idx] = inst;
-}
-```
-
-**Vertex Shader Change**:
-```hlsl
-struct InstanceData
-{
-    float3 hpb;
-    float scale;
-    // ... etc
-};
-
-StructuredBuffer<InstanceData> visible_instances : register(t0);
-
-v2p_flat main(uint vertex_id : SV_VertexID)
-{
-    // Reconstruct instance and vertex IDs
-    uint indices_per_instance = 12;
-    uint instance_id = vertex_id / indices_per_instance;
-    uint local_vertex_id = vertex_id % indices_per_instance;
-
-    // Fetch instance data
-    InstanceData inst = visible_instances[instance_id];
-
-    // Generate vertex position based on local_vertex_id
-    // (hardcoded vertex data in shader, or indexed lookup)
-    float3 local_pos = GetVertexPosition(inst.object_id, local_vertex_id);
-
-    // Transform and output...
-}
-```
-
-**Validation**:
-- Grass renders identically
-- GPU profiler shows better wavefront occupancy
-
-### Milestone 3.2: Hardcoded Vertex Data (Optional)
-**Test**: Eliminate VB/IB reads entirely
-
-For simple grass quads, hardcode vertex positions in shader:
-```hlsl
-float3 GetQuadVertex(uint local_vertex_id)
-{
-    // Generate quad vertices 0-5 for two triangles
-    // This is just a proof of concept for simple grass
-    const float3 quad[6] = {
-        float3(-0.5, 0.0, 0.0),  // Triangle 1
-        float3( 0.5, 0.0, 0.0),
-        float3(-0.5, 1.0, 0.0),
-        float3( 0.5, 0.0, 0.0),  // Triangle 2
-        float3( 0.5, 1.0, 0.0),
-        float3(-0.5, 1.0, 0.0),
-    };
-    return quad[local_vertex_id];
-}
-```
-
-**Pros**: No geometry buffers needed
-**Cons**: Limits complexity of grass models
-
-**Validation**:
-- Grass renders with correct shape
-- Bandwidth profiler shows reduced VB/IB traffic
-
-### Milestone 3.3: Distance-Based LOD
-**Test**: Grass fades smoothly, better performance at distance
-
-**Implementation**:
-```hlsl
-// In compute culling shader:
-float dist_sqr = distance_squared(inst.position, camera_pos);
-float fade_range = fade_limit_sqr - fade_start_sqr;
-float fade_factor = saturate((fade_limit_sqr - dist_sqr) / fade_range);
-
-// LOD 0 (close): Keep all grass
-// LOD 1 (mid): Keep every 2nd
-// LOD 2 (far): Keep every 4th
-uint lod = dist_sqr < fade_start_sqr ? 0 :
-           dist_sqr < (fade_start_sqr + fade_range * 0.5) ? 1 : 2;
-
-// Deterministic discard based on hash
-uint hash = Hash(inst.position);
-if (lod == 1 && (hash & 1) != 0) return;
-if (lod == 2 && (hash & 3) != 0) return;
-
-// Scale up remaining grass to fill gaps
-inst.scale *= (lod == 0) ? 1.0 : (lod == 1) ? 1.4 : 2.0;
-
-// Fade height over last 15% of range
-if (fade_factor < 0.15)
-{
-    inst.scale *= (fade_factor / 0.15);
-}
-```
-
-**Validation**:
-- Grass density appears consistent at all distances
-- Performance improves significantly when looking at distant areas
+**Performance already achieved**:
+- Draw calls: 100+ → 15 (Phase 1)
+- CPU time: -60% (Phase 2 GPU culling)
+- Further optimization better served by BVH culling (see Phase 4 notes)
 
 ---
 
-## **Phase 4: Persistent GPU Residency** 🏗️ COMPLEX
-**Goal**: Keep all grass data on GPU, minimal CPU updates
+_See reasoning above - entire phase skipped._
 
-**Why Last**: Most complex, builds on all previous phases
+---
 
-### Milestone 4.1: Slot-Based GPU Storage
-**Test**: Grass persists on GPU as slots load/unload
+## **Phase 4: Advanced Spatial Optimizations** 🏗️ COMPLEX
+**Goal**: Further optimize GPU culling with spatial data structures
 
-**Changes**:
-- Upload all slot instances to GPU when slot becomes visible
-- Mark slots as active/inactive instead of destroying data
-- Compute shader skips inactive slots
+**Note**: Phase 2 already achieves full-level decompression and GPU storage. Phase 4 focuses on optimizing the compute culling pass itself using hierarchical spatial structures.
+
+**Current State After Phase 2**:
+- ✅ All ~5-10M instances stored in persistent GPU buffer
+- ✅ Compute shader culls every instance every frame
+- ⚠️ Culling 10M instances takes ~0.5-1.5ms
+- ⚠️ Most instances fail early culling tests (distant/behind camera)
+
+**Optimization Opportunity**: Use BVH (Bounding Volume Hierarchy) to skip large groups of instances
+
+---
+
+### Milestone 4.0: BVH Strategy Analysis 📊
+**Goal**: Understand BVH integration options and choose approach
+
+**BVH Background**:
+A Bounding Volume Hierarchy organizes instances into a tree of bounding boxes:
+```
+                    [Root AABB: entire level]
+                    /                        \
+        [AABB: west half]                [AABB: east half]
+        /              \                  /              \
+   [AABB: NW]      [AABB: SW]       [AABB: NE]      [AABB: SE]
+      / \            / \               / \            / \
+    [instances]   [instances]      [instances]   [instances]
+```
+
+**BVH Benefits**:
+- **Frustum culling**: Test AABB against frustum, skip entire subtree if outside
+- **Distance culling**: Test AABB center distance, skip if entire box is too far
+- **Hierarchical early-out**: Cull millions of instances with hundreds of AABB tests
+
+**BVH Approaches**:
+
+**Option A: Grid-Based BVH (Simple)**
+- Use existing slot grid as BVH structure
+- Each slot = leaf node AABB
+- Build 2-level hierarchy: 16x16 slot groups → individual slots
+- Pros: Simple, leverages existing spatial organization
+- Cons: Not optimal (grid != good BVH), but "good enough"
+
+**Option B: True BVH (Optimal)**
+- Build binary BVH using SAH (Surface Area Heuristic)
+- Optimal culling efficiency
+- Pros: Best performance, industry standard
+- Cons: Complex to build, harder to update dynamically
+
+**Option C: Hybrid - Slot-Based AABB Culling (Recommended)**
+- Store per-slot AABBs in GPU buffer
+- Compute shader tests slot AABBs before instance tests
+- No tree traversal needed (flat array of slot AABBs)
+- Pros: Simple, effective, easy to implement
+- Cons: Not as efficient as true BVH, but 80% of benefit
+
+**Recommendation**: Start with **Option C** (Slot-Based AABB Culling)
+- Easy to implement on top of Phase 2
+- Significant performance gain with minimal complexity
+- Can upgrade to Option B later if needed
+
+---
+
+### Milestone 4.1: Slot AABB Computation 📦
+**Goal**: Pre-compute tight AABBs for each level slot
+
+**Tasks**:
+1. During full level decompression, compute per-slot AABBs
+2. Store slot AABBs in CPU memory and GPU buffer
+3. Include slot metadata (instance range, AABB)
 
 **Structure**:
 ```cpp
-struct DetailSlotGPU
+struct SlotAABB
 {
-    u32 instance_base;     // Offset into instance buffer
-    u32 instance_count;    // Number of instances in this slot
-    u32 active;           // 0 or 1
-    u32 padding;
+    Fvector3 aabb_min;
+    float padding0;
+    Fvector3 aabb_max;
+    float padding1;
+    u32 instance_base;      // First instance index in persistent buffer
+    u32 instance_count;     // Number of instances in this slot
+    u32 slot_x;            // Grid coordinates for debugging
+    u32 slot_z;
 };
 
-ID3DBuffer* slot_states_buffer;        // DetailSlotGPU[MAX_SLOTS]
-ID3DBuffer* persistent_instances;      // DetailInstanceGPU[HUGE_COUNT]
+class CDetailManager {
+    xr_vector<SlotAABB> slot_aabbs;           // CPU copy
+    ID3DBuffer* slot_aabb_buffer;              // GPU buffer
+    ID3DShaderResourceView* slot_aabb_srv;
+    u32 slot_count;
+};
 ```
 
-**Slot Load/Unload**:
+**Implementation**:
 ```cpp
-void LoadSlot(u32 x, u32 z)
+void CDetailManager::ComputeSlotAABBs()
 {
-    u32 slot_idx = GetSlotIndex(x, z);
+    slot_aabbs.clear();
 
-    // Upload instances for this slot to pre-allocated region
-    u32 base_offset = slot_instance_offsets[slot_idx];
-    u32 count = slot_instance_counts[slot_idx];
+    u32 instance_offset = 0;
 
-    context->UpdateSubresource(
-        persistent_instances,
-        0,
-        &CD3D11_BOX(base_offset, 0, 0, base_offset + count, 1, 1),
-        slot_instances_data,
-        count * sizeof(DetailInstanceGPU),
-        0
-    );
+    for (int sz = -dtH.z_offs(); sz < int(dtH.z_size()) - dtH.z_offs(); sz++)
+    {
+        for (int sx = -dtH.x_offs(); sx < int(dtH.x_size()) - dtH.x_offs(); sx++)
+        {
+            SlotAABB slot_aabb;
+            slot_aabb.aabb_min = Fvector3().set(FLT_MAX, FLT_MAX, FLT_MAX);
+            slot_aabb.aabb_max = Fvector3().set(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+            slot_aabb.instance_base = instance_offset;
+            slot_aabb.instance_count = 0;
+            slot_aabb.slot_x = sx;
+            slot_aabb.slot_z = sz;
 
-    // Mark slot as active
-    slot_states[slot_idx].active = 1;
-    context->UpdateSubresource(slot_states_buffer, ...);
+            // Compute AABB from all instances in this slot
+            u32 slot_idx = GetSlotIndex(sx, sz);
+            for (u32 i = instance_offset; i < all_level_instances.size(); i++)
+            {
+                if (/* instance belongs to this slot */)
+                {
+                    SlotItem& inst = all_level_instances[i];
+                    Fvector3 pos = inst.mRotY.c;
+                    float radius = inst.scale_calculated * 0.5f;
+
+                    slot_aabb.aabb_min.min(Fvector3().set(pos.x - radius, pos.y, pos.z - radius));
+                    slot_aabb.aabb_max.max(Fvector3().set(pos.x + radius, pos.y + inst.scale_calculated, pos.z + radius));
+
+                    slot_aabb.instance_count++;
+                }
+            }
+
+            instance_offset += slot_aabb.instance_count;
+
+            if (slot_aabb.instance_count > 0)
+                slot_aabbs.push_back(slot_aabb);
+        }
+    }
+
+    slot_count = slot_aabbs.size();
+
+    Msg("* [DetailManager] Computed %u slot AABBs", slot_count);
 }
 ```
 
-**Compute Shader**:
+**GPU Upload**:
+```cpp
+void CDetailManager::CreateSlotAABBBuffer()
+{
+    D3D11_BUFFER_DESC desc = {};
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    desc.StructureByteStride = sizeof(SlotAABB);
+    desc.ByteWidth = slot_count * sizeof(SlotAABB);
+
+    D3D11_SUBRESOURCE_DATA init_data = {};
+    init_data.pSysMem = slot_aabbs.data();
+
+    CHK_DX(HW.pDevice->CreateBuffer(&desc, &init_data, &slot_aabb_buffer));
+
+    // Create SRV
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+    srv_desc.Format = DXGI_FORMAT_UNKNOWN;
+    srv_desc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+    srv_desc.Buffer.NumElements = slot_count;
+
+    CHK_DX(HW.pDevice->CreateShaderResourceView(
+        slot_aabb_buffer, &srv_desc, &slot_aabb_srv));
+}
+```
+
+**Validation**:
+- Slot AABBs computed correctly
+- AABBs visualized in debug renderer (optional)
+- Buffer uploaded to GPU successfully
+
+---
+
+### Milestone 4.2: Hierarchical Culling Compute Shader 🎯
+**Goal**: Implement two-pass culling: slots first, then instances
+
+**Approach**:
+```
+Pass 1 (Slot Culling):
+  - Thread group per slot
+  - Test slot AABB against frustum + distance
+  - If slot visible, dispatch Pass 2 for its instances
+
+Pass 2 (Instance Culling):
+  - Only runs for visible slots
+  - Per-instance frustum + distance tests
+  - Append to visible buffers
+```
+
+**Shader Structure**:
 ```hlsl
-StructuredBuffer<DetailSlotGPU> slots : register(t1);
+// detail_cull_hierarchical.hlsl
 
-[numthreads(64, 1, 1)]
-void main(uint3 dispatch_id : SV_DispatchThreadID)
+cbuffer CullParams : register(b0)
 {
-    uint slot_id = dispatch_id.x / 256;  // Assuming 256 instances per slot
-    uint local_id = dispatch_id.x % 256;
+    float4x4 view_proj_matrix;
+    float3 camera_position;
+    float fade_distance_sqr;
+    float4 frustum_planes[6];
+    uint total_slot_count;
+    uint total_instance_count;
+};
 
-    DetailSlotGPU slot = slots[slot_id];
-    if (!slot.active)
+struct SlotAABB
+{
+    float3 aabb_min;
+    float padding0;
+    float3 aabb_max;
+    float padding1;
+    uint instance_base;
+    uint instance_count;
+    uint slot_x;
+    uint slot_z;
+};
+
+StructuredBuffer<SlotAABB> slots : register(t0);
+StructuredBuffer<InstanceData> all_instances : register(t1);
+
+RWStructuredBuffer<InstanceData> visible_obj[64] : register(u0);
+RWByteAddressBuffer visible_counts : register(u64);
+RWByteAddressBuffer indirect_args[64] : register(u65);
+
+// AABB-Frustum intersection test
+bool AABBFrustumTest(float3 aabb_min, float3 aabb_max, float4 planes[6])
+{
+    for (int i = 0; i < 6; i++)
+    {
+        float3 plane_normal = planes[i].xyz;
+        float plane_dist = planes[i].w;
+
+        // Find positive vertex (furthest along plane normal)
+        float3 positive_vertex = float3(
+            plane_normal.x > 0 ? aabb_max.x : aabb_min.x,
+            plane_normal.y > 0 ? aabb_max.y : aabb_min.y,
+            plane_normal.z > 0 ? aabb_max.z : aabb_min.z
+        );
+
+        if (dot(plane_normal, positive_vertex) + plane_dist < 0)
+            return false;  // AABB completely outside this plane
+    }
+    return true;
+}
+
+// AABB-Sphere distance test (conservative)
+bool AABBDistanceTest(float3 aabb_min, float3 aabb_max, float3 camera_pos, float max_dist_sqr)
+{
+    // Find closest point on AABB to camera
+    float3 closest = clamp(camera_pos, aabb_min, aabb_max);
+    float dist_sqr = dot(closest - camera_pos, closest - camera_pos);
+    return dist_sqr < max_dist_sqr;
+}
+
+// Slot culling kernel (one thread per slot)
+[numthreads(256, 1, 1)]
+void CullSlots(uint3 dispatch_id : SV_DispatchThreadID)
+{
+    uint slot_idx = dispatch_id.x;
+    if (slot_idx >= total_slot_count)
         return;
 
-    uint inst_idx = slot.instance_base + local_id;
-    if (local_id >= slot.instance_count)
+    SlotAABB slot = slots[slot_idx];
+
+    // Early out for empty slots
+    if (slot.instance_count == 0)
         return;
 
-    DetailInstanceGPU inst = all_instances[inst_idx];
-    // ... cull and append as before
+    // Test slot AABB against frustum
+    if (!AABBFrustumTest(slot.aabb_min, slot.aabb_max, frustum_planes))
+        return;
+
+    // Test slot AABB against distance
+    if (!AABBDistanceTest(slot.aabb_min, slot.aabb_max, camera_position, fade_distance_sqr))
+        return;
+
+    // Slot is visible - cull instances within it
+    for (uint i = 0; i < slot.instance_count; i++)
+    {
+        uint inst_idx = slot.instance_base + i;
+        InstanceData inst = all_instances[inst_idx];
+
+        // Per-instance frustum test
+        float bounds_radius = inst.scale * 0.5f;
+        bool visible = true;
+
+        for (int p = 0; p < 6; p++)
+        {
+            float dist = dot(frustum_planes[p].xyz, inst.pos) + frustum_planes[p].w;
+            if (dist < -bounds_radius)
+            {
+                visible = false;
+                break;
+            }
+        }
+
+        if (!visible)
+            continue;
+
+        // Per-instance distance test
+        float dist_sqr = dot(inst.pos - camera_position, inst.pos - camera_position);
+        if (dist_sqr > fade_distance_sqr)
+            continue;
+
+        // Instance is visible - append to output
+        uint object_id = inst.object_id;
+        uint output_idx;
+
+        visible_counts.InterlockedAdd(object_id * 4, 1, output_idx);
+        indirect_args[object_id].InterlockedAdd(4, 1, output_idx);  // instance count
+
+        visible_obj[object_id][output_idx] = inst;
+    }
+}
+```
+
+**CPU Dispatch**:
+```cpp
+void CDetailManager::hw_Render(CBackend& cmd_list)
+{
+    // Bind resources
+    context->CSSetShaderResources(0, 1, &slot_aabb_srv);
+    context->CSSetShaderResources(1, 1, &persistent_instance_srv);
+    context->CSSetUnorderedAccessViews(0, objects.size(), visible_uavs, nullptr);
+
+    // Dispatch slot culling (one thread per slot)
+    u32 num_groups = (slot_count + 255) / 256;
+    context->Dispatch(num_groups, 1, 1);
+
+    // Barrier
+    context->CSSetUnorderedAccessViews(0, objects.size(), nullptr, nullptr);
+
+    // Render with indirect draws (same as Phase 2)
+    for (u32 O = 0; O < objects.size(); O++)
+    {
+        cmd_list.set_Element(objects[O]->shader->E[0], 0);
+        cmd_list.SRVSManager.SetVSResource(0, visible_srvs[O]);
+        context->DrawIndexedInstancedIndirect(indirect_args[O], 0);
+    }
 }
 ```
 
 **Validation**:
-- Grass appears/disappears correctly as you move
-- GPU memory usage is stable (no leaks)
-- No hitches when crossing slot boundaries
+- Grass renders identically to Phase 2
+- GPU profiler shows reduced culling time
+- Instance counts match Phase 2 baseline
 
-### Milestone 4.2: Incremental Updates
-**Test**: Only changed slots are updated
+---
 
-**Changes**:
-- Track dirty slots CPU-side
-- Only update GPU buffers for dirty slots
-- Use fence/query to avoid overwriting in-flight data
+### Milestone 4.3: Performance Analysis and Tuning ⚡
+**Goal**: Measure BVH culling improvements and optimize
+
+**Metrics to Compare** (vs Phase 2):
+```
+Phase 2 Baseline:
+- Compute cull time: ~1.5ms (10M instances tested)
+- Instance tests: 10,000,000
+- Thread efficiency: Low (most threads cull early)
+
+Phase 4 with Slot BVH:
+- Compute cull time: ~0.3-0.5ms (estimated)
+- Slot AABB tests: ~5,000-10,000
+- Instance tests: ~500K-1M (only visible slots)
+- Thread efficiency: High (focused on relevant instances)
+
+Expected Speedup: 3-5x on culling pass
+```
+
+**Optimization Opportunities**:
+1. **Adjust slot granularity**: Smaller slots = better culling, more AABB tests
+2. **Two-level hierarchy**: Group slots into 16x16 macro-cells
+3. **Compute shader wave intrinsics**: Use wave ballots to skip entire wavefronts
+4. **Conservative rasterization**: Use GPU rasterizer for frustum culling (advanced)
+
+**Implementation - Two-Level Hierarchy**:
+```cpp
+struct MacroCellAABB
+{
+    Fvector3 aabb_min;
+    Fvector3 aabb_max;
+    u32 first_slot_index;
+    u32 slot_count;
+};
+
+// Group 16x16 slots into macro cells
+xr_vector<MacroCellAABB> macro_cells;
+
+// Shader tests macro cells first, then slots
+```
 
 **Validation**:
-- Reduced upload bandwidth
-- Smooth performance while moving through world
+- Culling time reduced by 60-80%
+- No visual regressions
+- Stable performance across different camera angles
 
 ---
 
@@ -1164,26 +1367,28 @@ main
 
 ## **Performance Expectations**
 
-### Phase 1 Complete (Per-Vis-Type)
-- **Draw calls**: 100+ → **3**
-- **CPU time**: -30% (less driver overhead)
-- **GPU time**: -10% (better batching)
+### Phase 1 Complete (Per-Object Rendering) ✅
+- **Draw calls**: 100+ → **~15**
+- **Instance batch size**: 7K average → 50K+ per draw
+- **CPU time**: -20% (less driver overhead)
+- **GPU time**: Equivalent (larger batches offset overhead)
 
-### Phase 2 Complete (GPU Culling)
-- **Draw calls**: **3** (same)
-- **CPU time**: -60% (no visibility iteration)
-- **GPU time**: +5% (compute overhead), -15% (better culling), **net -10%**
+### Phase 2 Complete (GPU Culling + Full Decompression) ✅
+- **Draw calls**: **~15** (same as Phase 1)
+- **CPU time**: -60% (no cache decompression, no per-frame visibility iteration, no per-frame uploads)
+- **GPU time**: +0.5-1.5ms (compute culling), but eliminates CPU bottlenecks
+- **Memory**: +400-600MB VRAM (persistent instance buffer)
+- **Load time**: +2-5s (one-time full decompression)
 
-### Phase 3 Complete (GRID Optimizations)
-- **Draw calls**: **3** (same)
-- **CPU time**: -60% (same)
-- **GPU time**: -25% (single instance dispatch + LOD)
+### Phase 3 (GRID Optimizations) ❌ SKIPPED
+- Incompatible with architecture, marginal benefits
 
-### Phase 4 Complete (GPU Residency)
-- **Draw calls**: **3** (same)
-- **CPU time**: -70% (minimal slot updates)
-- **GPU time**: -25% (same)
-- **Memory**: +50MB (persistent storage)
+### Phase 4 Target (Hierarchical BVH Culling) 🎯
+- **Draw calls**: **~15** (same)
+- **CPU time**: -60% (same as Phase 2)
+- **GPU time**: -0.8-1.2ms (slot AABB culling reduces compute time by 60-80%)
+- **Memory**: +5-10MB VRAM (slot AABB buffer)
+- **Overall improvement over Phase 2**: 3-5x faster GPU culling pass
 
 ---
 
@@ -1191,30 +1396,62 @@ main
 
 | Phase | Risk | Mitigation |
 |-------|------|-----------|
-| Phase 1 | Low | Purely CPU-side changes, easy to test |
-| Phase 2 | Medium | Compute shader complexity, validate against CPU path |
-| Phase 3 | Medium | SV_VertexID reconstruction may have edge cases |
-| Phase 4 | High | Complex memory management, implement carefully with logging |
+| Phase 1 ✅ | Low | Purely CPU-side changes, easy to test |
+| Phase 2 ✅ | Medium | Compute shader complexity, validate against CPU path |
+| Phase 3 ❌ | N/A | Skipped - incompatible with architecture |
+| Phase 4 🎯 | Low-Medium | Builds on proven Phase 2 foundation, slot AABBs are straightforward |
 
 ---
 
 ## **Recommended Order**
 
-1. **Start with Phase 1** - Immediate, visible impact with low risk
-2. **Validate Phase 1** thoroughly before moving to Phase 2
-3. **Phase 2 can be done incrementally** - Milestone 2.1 can exist for a while before 2.2
-4. **Phase 3 is optional optimizations** - Can cherry-pick what makes sense
-5. **Phase 4 only if needed** - Current slot system may be fine
+1. ✅ **Phase 1 Complete** - Per-object rendering with unified geometry
+2. ✅ **Phase 2 Complete** - Full level decompression + GPU culling + indirect draws
+3. ❌ **Phase 3 Skipped** - GRID optimizations incompatible with current architecture
+4. 🎯 **Phase 4 Next** - Hierarchical BVH culling to optimize compute pass
 
-**Total estimated time**: 2-3 weeks if doing Phase 1-2, 4-6 weeks if doing all phases
+**Current Status**: Phases 1-2 complete, ready to begin Phase 4
+
+**Phase 4 Estimated Time**: 1-2 weeks
+- Milestone 4.0 (BVH Analysis): 1 day
+- Milestone 4.1 (Slot AABBs): 2-3 days
+- Milestone 4.2 (Hierarchical Shader): 3-5 days
+- Milestone 4.3 (Performance Tuning): 2-3 days
+
+---
+
+## **Summary: What We've Achieved**
+
+**Phase 1 (Per-Object Rendering)**:
+- Reduced draw calls from 100+ to ~15
+- Increased batch sizes from 7K to 50K+ instances per draw
+- Unified geometry buffers per vis_id type
+- Added vis_id to instance data for shader-side differentiation
+
+**Phase 2 (GPU Culling + Full Decompression)**:
+- Eliminated runtime cache system (no more per-frame decompression)
+- Decompressed entire level on load (~5-10M instances)
+- Uploaded all instances to persistent GPU buffer (400-600MB VRAM)
+- Implemented GPU compute shader culling (frustum + distance)
+- Implemented DrawIndexedInstancedIndirect (zero CPU readback)
+- CPU time reduced by 60% (removed cache_Update, visibility iteration, per-frame uploads)
+
+**Phase 3 (GRID Optimizations)**:
+- Marked as won't do - incompatible with artist-authored geometry and existing architecture
+
+**Phase 4 (BVH Culling) - NEXT**:
+- Optimize GPU compute culling pass with hierarchical spatial structure
+- Pre-compute per-slot AABBs during level load
+- Hierarchical culling: test slot AABBs first, then instances within visible slots
+- Expected: 3-5x reduction in GPU culling time (1.5ms → 0.3-0.5ms)
+- Minimal complexity - builds naturally on Phase 2's slot-based data organization
 
 ---
 
 ## **Next Steps**
 
-1. Review this roadmap and decide which phases to pursue
-2. Set up baseline performance capture for comparison
-3. Create feature branches for Phase 1 milestones
-4. Begin implementation of Milestone 1.1
-
-Let me know which phase you'd like to start with, or if you have questions about any of the milestones!
+1. ✅ Review roadmap and Phase 4 approach
+2. 🎯 Begin Phase 4 Milestone 4.1: Compute slot AABBs during full decompression
+3. 🎯 Create GPU buffer for slot AABBs
+4. 🎯 Implement hierarchical culling compute shader
+5. 🎯 Performance validation and tuning
