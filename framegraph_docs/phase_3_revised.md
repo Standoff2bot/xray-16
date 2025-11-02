@@ -1,0 +1,1844 @@
+# 🎯 X-Ray Renderer Modernization: Weeks 11-16 Master Implementation Guide
+
+## 📋 Executive Summary
+
+**Weeks Covered**: 11-16 (Phase 3: Basic Geometry Rendering + Phase 4: Multi-Phase Architecture)
+
+**Goals**:
+- Week 11-12: Prove FrameGraph works with basic geometry rendering
+- Week 13: Make passes flexible (configurable RT outputs)
+- Week 14: Add centralized Render Target Registry
+- Week 15: Implement shader reflection for automatic RT binding detection
+- Week 16: Dynamic pass routing based on material requirements
+
+**Architecture Evolution**:
+```
+Week 11-12: Hardcoded Passes (Simple) WE HAVE THIS WORKING ALREADY!!! We are able to render trees, see their normals, and albedos and render it to the screen.
+    ↓
+Week 13: Flexible Pass Configs (Configurable)
+    ↓
+Week 14: RT Registry (Centralized)
+    ↓
+Week 15: Shader Reflection (Automated)
+    ↓
+Week 16: Dynamic Routing (Production-Ready)
+```
+
+---
+
+# 📐 Phase 3: Basic Geometry Rendering (Weeks 11-12)
+
+## Overview
+
+Now we have a working FrameGraph system. Let's use it for real rendering: G-Buffer generation and deferred lighting.
+
+**Goals:**
+- Prove FrameGraph handles multi-pass rendering
+- Validate automatic barrier insertion
+- Test resource lifetime tracking
+
+---
+
+## Milestone 3.1: G-Buffer Pass
+
+### Objective
+Render scene geometry to multiple render targets (albedo, normal, depth) using FrameGraph.
+
+### Implementation
+
+```cpp
+// xrRender/FrameGraph/GBufferPass.cpp
+#include "stdafx.h"
+#include "FrameGraph.h"
+#include "../RenderContext/RenderDevice.h"
+#include "../RenderContext/PipelineState.h"
+
+namespace xray::render::framegraph {
+
+void SetupGBufferPass(FrameGraph& fg, 
+                      RenderDevice* device,
+                      u32 width, u32 height) {
+    
+    Msg("! [GBufferPass] Setting up...");
+    
+    // ═══════════════════════════════════════════════════
+    //  CREATE G-BUFFER RESOURCES
+    // ═══════════════════════════════════════════════════
+    
+    // Albedo (RGBA8)
+    ResourceDesc albedoDesc;
+    albedoDesc.type = ResourceDesc::Texture2D;
+    albedoDesc.width = width;
+    albedoDesc.height = height;
+    albedoDesc.format = nvrhi::Format::RGBA8_UNORM;
+    albedoDesc.isRenderTarget = true;
+    albedoDesc.debugName = "GBuffer.Albedo";
+    
+    VirtualResourceHandle gbufferAlbedo = 
+        fg.CreateTexture("GBuffer.Albedo", albedoDesc);
+    
+    // Normal (RGBA16F for precision)
+    ResourceDesc normalDesc;
+    normalDesc.type = ResourceDesc::Texture2D;
+    normalDesc.width = width;
+    normalDesc.height = height;
+    normalDesc.format = nvrhi::Format::RGBA16_FLOAT;
+    normalDesc.isRenderTarget = true;
+    normalDesc.debugName = "GBuffer.Normal";
+    
+    VirtualResourceHandle gbufferNormal = 
+        fg.CreateTexture("GBuffer.Normal", normalDesc);
+    
+    // Depth/Stencil (D24S8)
+    ResourceDesc depthDesc;
+    depthDesc.type = ResourceDesc::Texture2D;
+    depthDesc.width = width;
+    depthDesc.height = height;
+    depthDesc.format = nvrhi::Format::D24S8;
+    depthDesc.isDepthStencil = true;
+    depthDesc.debugName = "GBuffer.Depth";
+    
+    VirtualResourceHandle gbufferDepth = 
+        fg.CreateTexture("GBuffer.Depth", depthDesc);
+    
+    // ═══════════════════════════════════════════════════
+    //  CREATE G-BUFFER PASS
+    // ═══════════════════════════════════════════════════
+    
+    PassHandle gbufferPass = fg.AddPass("GBufferPass");
+    
+    // Declare outputs
+    fg.PassWrite(gbufferPass, gbufferAlbedo, 
+        RenderContext::ResourceState::RenderTarget);
+    fg.PassWrite(gbufferPass, gbufferNormal,
+        RenderContext::ResourceState::RenderTarget);
+    fg.PassWrite(gbufferPass, gbufferDepth,
+        RenderContext::ResourceState::DepthWrite);
+    
+    // ═══════════════════════════════════════════════════
+    //  EXECUTION CALLBACK
+    // ═══════════════════════════════════════════════════
+    
+    fg.SetPassCallback(gbufferPass,
+        [gbufferAlbedo, gbufferNormal, gbufferDepth, device]
+        (RenderContext& ctx, const FrameGraph& fg) {
+            
+            Msg("!   [GBufferPass] Executing...");
+            
+            // Get physical resources
+            TextureHandle albedo = fg.GetPhysicalTexture(gbufferAlbedo);
+            TextureHandle normal = fg.GetPhysicalTexture(gbufferNormal);
+            TextureHandle depth = fg.GetPhysicalTexture(gbufferDepth);
+            
+            // Clear
+            float clearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            ctx.ClearRenderTarget(albedo, clearColor);
+            ctx.ClearRenderTarget(normal, clearColor);
+            ctx.ClearDepthStencil(depth, 1.0f, 0);
+            
+            // Set render targets
+            TextureHandle rts[] = {albedo, normal};
+            ctx.SetRenderTargets(rts, 2, depth);
+            
+            // Set viewport
+            const auto& albedoDesc = device->GetTextureDesc(albedo);
+            ctx.SetViewport(0, 0, albedoDesc.width, albedoDesc.height);
+            
+            // TODO: Render geometry here
+            // For now, just clearing is enough to test the pass
+            
+            // Example geometry rendering (pseudo-code):
+            /*
+            for (auto* mesh : visibleMeshes) {
+                ctx.SetPipeline(mesh->gbufferPipeline);
+                ctx.SetConstantBuffer(0, mesh->constantBuffer);
+                ctx.SetVertexBuffer(0, mesh->vertexBuffer);
+                ctx.SetIndexBuffer(mesh->indexBuffer, 
+                    RenderContext::IndexFormat::UInt32);
+                ctx.DrawIndexed(mesh->indexCount);
+            }
+            */
+            
+            Msg("!   [GBufferPass] Complete");
+        });
+}
+
+} // namespace xray::render::framegraph
+```
+
+---
+
+### Success Criteria
+
+- ✅ Three G-Buffer textures created (albedo, normal, depth)
+- ✅ Pass writes to all three render targets
+- ✅ FrameGraph automatically allocates transient textures
+- ✅ Clearing works without errors
+- ✅ Ready for geometry rendering (stubbed for now)
+
+### Performance Metrics
+
+- **G-Buffer Memory**: ~24MB for 1920x1080 (RGBA8 + RGBA16F + D24S8)
+- **Clear Time**: <0.5ms for all three RTs
+- **Pass Overhead**: <0.1ms (FrameGraph orchestration)
+
+---
+
+## Milestone 3.2: Lighting Pass
+
+### Objective
+Add deferred lighting pass that reads G-Buffer and outputs lit HDR image.
+
+### Implementation
+
+```cpp
+// xrRender/FrameGraph/LightingPass.cpp
+#include "stdafx.h"
+#include "FrameGraph.h"
+
+namespace xray::render::framegraph {
+
+void SetupLightingPass(FrameGraph& fg,
+                       VirtualResourceHandle gbufferAlbedo,
+                       VirtualResourceHandle gbufferNormal,
+                       VirtualResourceHandle gbufferDepth,
+                       VirtualResourceHandle backbuffer) {
+    
+    Msg("! [LightingPass] Setting up...");
+    
+    // ═══════════════════════════════════════════════════
+    //  CREATE HDR BUFFER (Optional intermediate)
+    // ═══════════════════════════════════════════════════
+    
+    // For this test, we'll render directly to backbuffer
+    // In production, you'd render to HDR buffer then tonemap
+    
+    // ═══════════════════════════════════════════════════
+    //  CREATE LIGHTING PASS
+    // ═══════════════════════════════════════════════════
+    
+    PassHandle lightingPass = fg.AddPass("LightingPass");
+    
+    // Declare inputs (G-Buffer textures)
+    fg.PassRead(lightingPass, gbufferAlbedo,
+        RenderContext::ResourceState::ShaderResource);
+    fg.PassRead(lightingPass, gbufferNormal,
+        RenderContext::ResourceState::ShaderResource);
+    fg.PassRead(lightingPass, gbufferDepth,
+        RenderContext::ResourceState::DepthRead);
+    
+    // Declare output (backbuffer)
+    fg.PassWrite(lightingPass, backbuffer,
+        RenderContext::ResourceState::RenderTarget);
+    
+    // ═══════════════════════════════════════════════════
+    //  EXECUTION CALLBACK
+    // ═══════════════════════════════════════════════════
+    
+    fg.SetPassCallback(lightingPass,
+        [gbufferAlbedo, gbufferNormal, gbufferDepth, backbuffer]
+        (RenderContext& ctx, const FrameGraph& fg) {
+            
+            Msg("!   [LightingPass] Executing...");
+            
+            // Get physical resources
+            TextureHandle albedo = fg.GetPhysicalTexture(gbufferAlbedo);
+            TextureHandle normal = fg.GetPhysicalTexture(gbufferNormal);
+            TextureHandle depth = fg.GetPhysicalTexture(gbufferDepth);
+            TextureHandle output = fg.GetPhysicalTexture(backbuffer);
+            
+            // Set render target
+            ctx.SetRenderTargets(&output, 1, TextureHandle{});
+            
+            // Bind G-Buffer as shader inputs
+            ctx.SetTexture(0, albedo);
+            ctx.SetTexture(1, normal);
+            ctx.SetTexture(2, depth);
+            
+            // TODO: Set lighting pipeline
+            // ctx.SetPipeline(deferredLightingPipeline);
+            
+            // TODO: Set light data constant buffer
+            // ctx.SetConstantBuffer(0, lightDataBuffer);
+            
+            // Render fullscreen triangle (covers entire screen)
+            // ctx.Draw(3, 0);
+            
+            // For now, just clear to show pass executes
+            float clearColor[4] = {0.2f, 0.3f, 0.4f, 1.0f};
+            ctx.ClearRenderTarget(output, clearColor);
+            
+            Msg("!   [LightingPass] Complete");
+        });
+}
+
+} // namespace xray::render::framegraph
+```
+
+---
+
+### Test: Complete G-Buffer + Lighting Pipeline
+
+```cpp
+// xrRender/FrameGraph/FrameGraphGeometryTest.cpp
+#include "stdafx.h"
+#include "FrameGraph.h"
+
+namespace xray::render::framegraph::test {
+
+void TestGBufferLighting() {
+    using namespace xray::render;
+    using namespace xray::render::framegraph;
+    
+    Msg("! [FG Test] G-Buffer + Lighting test...");
+    
+    // Setup device
+    RenderDevice device;
+    if (!device.InitializeD3D11(HW.pDevice, HW.pContext)) {
+        Msg("! [FG Test] ❌ Device init failed");
+        return;
+    }
+    
+    // Create FrameGraph
+    FrameGraph fg(&device);
+    
+    // ═══════════════════════════════════════════════════
+    //  IMPORT BACKBUFFER
+    // ═══════════════════════════════════════════════════
+    
+    RenderDevice::TextureDesc bbDesc;
+    bbDesc.width = Device.dwWidth;
+    bbDesc.height = Device.dwHeight;
+    bbDesc.format = nvrhi::Format::RGBA8_UNORM;
+    bbDesc.isRenderTarget = true;
+    bbDesc.debugName = "Backbuffer";
+    
+    TextureHandle physicalBB = 
+        device.CreateTextureFromD3D11(HW.pBaseRT, bbDesc);
+    
+    ResourceDesc backbufferDesc;
+    backbufferDesc.type = ResourceDesc::Texture2D;
+    backbufferDesc.width = Device.dwWidth;
+    backbufferDesc.height = Device.dwHeight;
+    backbufferDesc.format = nvrhi::Format::RGBA8_UNORM;
+    backbufferDesc.isRenderTarget = true;
+    backbufferDesc.lifetimeHint = ResourceDesc::LifetimeHint::External;
+    backbufferDesc.debugName = "Backbuffer";
+    
+    VirtualResourceHandle backbuffer = 
+        fg.ImportTexture("Backbuffer", physicalBB, backbufferDesc);
+    
+    // ═══════════════════════════════════════════════════
+    //  SETUP PASSES
+    // ═══════════════════════════════════════════════════
+    
+    // Create G-Buffer resources and pass
+    SetupGBufferPass(fg, &device, Device.dwWidth, Device.dwHeight);
+    
+    // Get G-Buffer virtual handles (need to lookup by name)
+    VirtualResourceHandle gbufferAlbedo = 
+        fg.GetResourceByName("GBuffer.Albedo");
+    VirtualResourceHandle gbufferNormal = 
+        fg.GetResourceByName("GBuffer.Normal");
+    VirtualResourceHandle gbufferDepth = 
+        fg.GetResourceByName("GBuffer.Depth");
+    
+    // Setup lighting pass
+    SetupLightingPass(fg, gbufferAlbedo, gbufferNormal, gbufferDepth, backbuffer);
+    
+    // ═══════════════════════════════════════════════════
+    //  COMPILE AND EXECUTE
+    // ═══════════════════════════════════════════════════
+    
+    if (!fg.Compile()) {
+        Msg("! [FG Test] ❌ Compilation failed");
+        return;
+    }
+    
+    fg.Execute();
+    
+    // ═══════════════════════════════════════════════════
+    //  VALIDATE
+    // ═══════════════════════════════════════════════════
+    
+    const auto& stats = fg.GetStatistics();
+    
+    VERIFY(stats.totalPasses == 2);      // GBuffer + Lighting
+    VERIFY(stats.executedPasses == 2);
+    VERIFY(stats.totalResources == 4);   // Albedo + Normal + Depth + Backbuffer
+    
+    Msg("! [FG Test] ✅ G-Buffer + Lighting test complete");
+    
+    // Print graph stats
+    fg.PrintStatistics();
+    
+    // Cleanup
+    fg.Reset();
+    device.DestroyTexture(physicalBB);
+}
+
+} // namespace xray::render::framegraph::test
+```
+
+**Console Command:**
+
+```cpp
+Console->AddCommand(new CCC_Custom("fg_test_lighting", 
+    []() {
+        xray::render::framegraph::test::TestGBufferLighting();
+    }), "fg_test_lighting");
+```
+
+---
+
+### Success Criteria
+
+- ✅ Two passes execute in correct order (GBuffer → Lighting)
+- ✅ FrameGraph automatically inserts barriers between passes
+- ✅ G-Buffer textures transition: Write → Read
+- ✅ Backbuffer receives final output
+- ✅ Memory aliasing works (if G-Buffer not needed after lighting)
+- ✅ Compilation detects dependency (Lighting depends on GBuffer)
+
+### Performance Metrics
+
+- **Total Frame Time**: <2ms (2 clear passes, no geometry yet)
+- **Barrier Insertion**: 3 barriers (Albedo RT→SR, Normal RT→SR, Depth W→R)
+- **Memory Usage**: ~24MB (G-Buffer), potentially aliasable after lighting
+
+### Validation
+
+```cpp
+// Expected execution order
+Msg("Pass Order:");
+Msg("  0: GBufferPass");
+Msg("  1: LightingPass");
+
+// Expected dependencies
+Msg("LightingPass depends on GBufferPass: ✅");
+
+// Expected barriers
+Msg("Barriers:");
+Msg("  GBuffer.Albedo: RenderTarget → ShaderResource");
+Msg("  GBuffer.Normal: RenderTarget → ShaderResource");
+Msg("  GBuffer.Depth: DepthWrite → DepthRead");
+```
+
+---
+
+### Week 11-12 Summary
+
+**Achievements:**
+- ✅ FrameGraph handles multi-pass rendering correctly
+- ✅ Automatic dependency detection works
+- ✅ Barrier insertion validated
+- ✅ Resource lifetime tracking functional
+- ✅ Ready for actual geometry rendering
+
+**Known Limitations:**
+- ⚠️ Passes are hardcoded (albedo, normal specific)
+- ⚠️ No integration with X-Ray's phase system
+- ⚠️ Manual RT binding in callbacks
+
+**Next Steps:** Make passes flexible (Week 13)
+
+---
+
+# 🎨 Phase 4: Multi-Phase Architecture (Weeks 13-16)
+
+## Problem Analysis (From Design Document)
+
+### Root Problem
+
+We're hardcoding everything to a single "GBufferPass" that outputs to albedo/normal/material, but vanilla renderer has multiple phases that output to different render targets:
+- **Geometry phase** → GBuffer (rt_Position, rt_Normal, rt_Color)
+- **Lighting phase** → Accumulator (rt_Accumulator)
+- **Combine phase** → Generic RTs (rt_Generic_0, rt_Generic_1)
+- **Post-processing** → Bloom, tonemapping, etc.
+
+Our current architecture can't handle this diversity.
+
+### Solution Overview
+
+Multi-Phase FrameGraph Architecture with:
+1. Dynamic RT creation for all vanilla RTs
+2. Flexible passes accepting any RT configuration
+3. Shader reflection to extract RT bindings
+4. Dynamic pass routing based on material requirements
+
+---
+
+## Week 13: Flexible Pass Configurations
+
+### Objective
+Transform hardcoded passes into configurable passes that accept any render target configuration.
+
+### Phase 1: Flexible Pass Outputs
+
+#### Implementation
+
+```cpp
+// xrRender/FrameGraph/GeometryPass.h
+#pragma once
+
+#include "FrameGraph.h"
+
+namespace xray::render::framegraph {
+
+// ═══════════════════════════════════════════════════
+//  GEOMETRY PASS CONFIGURATION
+// ═══════════════════════════════════════════════════
+
+struct GeometryPassConfig {
+    struct RenderTarget {
+        VirtualResourceHandle handle;
+        const char* semanticName;  // "COLOR", "NORMAL", "POSITION"
+        
+        RenderTarget() : semanticName(nullptr) {}
+        RenderTarget(VirtualResourceHandle h, const char* name)
+            : handle(h), semanticName(name) {}
+    };
+    
+    xr_vector<RenderTarget> renderTargets;  // Up to 8 MRTs
+    VirtualResourceHandle depthStencil;
+    
+    // Viewport/scissor
+    u32 width = 0;
+    u32 height = 0;
+    
+    // Clear colors (optional)
+    struct ClearValue {
+        bool enabled = false;
+        float color[4] = {0, 0, 0, 0};
+    };
+    xr_vector<ClearValue> clearValues;
+    
+    bool clearDepth = true;
+    float depthClearValue = 1.0f;
+    u8 stencilClearValue = 0;
+};
+
+// ═══════════════════════════════════════════════════
+//  GEOMETRY PASS (Flexible)
+// ═══════════════════════════════════════════════════
+
+class GeometryPass {
+public:
+    GeometryPass() = default;
+    ~GeometryPass() = default;
+    
+    // Setup pass in FrameGraph
+    void Setup(FrameGraph& fg, const GeometryPassConfig& config);
+    
+    // Called during execution (internal)
+    void Execute(RenderContext& ctx, const FrameGraph& fg);
+    
+private:
+    GeometryPassConfig m_config;
+    PassHandle m_passHandle;
+};
+
+} // namespace xray::render::framegraph
+```
+
+```cpp
+// xrRender/FrameGraph/GeometryPass.cpp
+#include "stdafx.h"
+#include "GeometryPass.h"
+
+namespace xray::render::framegraph {
+
+void GeometryPass::Setup(FrameGraph& fg, const GeometryPassConfig& config) {
+    m_config = config;
+    
+    Msg("! [GeometryPass] Setting up with %u render targets", 
+        config.renderTargets.size());
+    
+    // ═══════════════════════════════════════════════════
+    //  CREATE PASS
+    // ═══════════════════════════════════════════════════
+    
+    m_passHandle = fg.AddPass("GeometryPass");
+    
+    // ═══════════════════════════════════════════════════
+    //  DECLARE OUTPUTS
+    // ═══════════════════════════════════════════════════
+    
+    // Render targets
+    for (const auto& rt : config.renderTargets) {
+        fg.PassWrite(m_passHandle, rt.handle,
+            RenderContext::ResourceState::RenderTarget);
+        
+        Msg("!   Output RT: %s", rt.semanticName);
+    }
+    
+    // Depth/stencil
+    if (config.depthStencil.IsValid()) {
+        fg.PassWrite(m_passHandle, config.depthStencil,
+            RenderContext::ResourceState::DepthWrite);
+        
+        Msg("!   Depth/Stencil bound");
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  SET EXECUTION CALLBACK
+    // ═══════════════════════════════════════════════════
+    
+    fg.SetPassCallback(m_passHandle,
+        [this](RenderContext& ctx, const FrameGraph& fg) {
+            this->Execute(ctx, fg);
+        });
+}
+
+void GeometryPass::Execute(RenderContext& ctx, const FrameGraph& fg) {
+    Msg("!   [GeometryPass] Executing...");
+    
+    // ═══════════════════════════════════════════════════
+    //  GET PHYSICAL RESOURCES
+    // ═══════════════════════════════════════════════════
+    
+    xr_vector<TextureHandle> physicalRTs;
+    for (const auto& rt : m_config.renderTargets) {
+        TextureHandle physical = fg.GetPhysicalTexture(rt.handle);
+        physicalRTs.push_back(physical);
+    }
+    
+    TextureHandle physicalDepth;
+    if (m_config.depthStencil.IsValid()) {
+        physicalDepth = fg.GetPhysicalTexture(m_config.depthStencil);
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  CLEAR (Optional)
+    // ═══════════════════════════════════════════════════
+    
+    for (u32 i = 0; i < physicalRTs.size(); i++) {
+        if (i < m_config.clearValues.size() && 
+            m_config.clearValues[i].enabled) {
+            ctx.ClearRenderTarget(physicalRTs[i], 
+                m_config.clearValues[i].color);
+        }
+    }
+    
+    if (physicalDepth.IsValid() && m_config.clearDepth) {
+        ctx.ClearDepthStencil(physicalDepth, 
+            m_config.depthClearValue, 
+            m_config.stencilClearValue);
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  SET RENDER TARGETS
+    // ═══════════════════════════════════════════════════
+    
+    ctx.SetRenderTargets(physicalRTs.data(), 
+        (u32)physicalRTs.size(), 
+        physicalDepth);
+    
+    // ═══════════════════════════════════════════════════
+    //  SET VIEWPORT
+    // ═══════════════════════════════════════════════════
+    
+    ctx.SetViewport(0, 0, m_config.width, m_config.height);
+    
+    // ═══════════════════════════════════════════════════
+    //  RENDER GEOMETRY
+    // ═══════════════════════════════════════════════════
+    
+    // TODO: Iterate over render batches and draw
+    // for (const auto& batch : m_batches) {
+    //     DrawBatch(ctx, batch);
+    // }
+    
+    Msg("!   [GeometryPass] Complete");
+}
+
+} // namespace xray::render::framegraph
+```
+
+---
+
+#### Usage Example
+
+```cpp
+// xrRender/FrameGraph/r_FrameGraphRenderer.cpp
+void FrameGraphRenderer::BuildFrameGraph() {
+    // Create render targets
+    auto fg_rt_Position = m_frameGraph.CreateTexture("rt_Position", {...});
+    auto fg_rt_Normal = m_frameGraph.CreateTexture("rt_Normal", {...});
+    auto fg_rt_Albedo = m_frameGraph.CreateTexture("rt_Albedo", {...});
+    auto fg_rt_Depth = m_frameGraph.CreateTexture("rt_Depth", {...});
+    
+    // Configure geometry pass
+    GeometryPassConfig gbufferConfig;
+    gbufferConfig.renderTargets = {
+        {fg_rt_Position, "POSITION"},
+        {fg_rt_Normal, "NORMAL"},
+        {fg_rt_Albedo, "COLOR"}
+    };
+    gbufferConfig.depthStencil = fg_rt_Depth;
+    gbufferConfig.width = Device.dwWidth;
+    gbufferConfig.height = Device.dwHeight;
+    
+    // Setup clear values
+    gbufferConfig.clearValues.resize(3);
+    for (auto& clear : gbufferConfig.clearValues) {
+        clear.enabled = true;
+    }
+    
+    // Create pass
+    m_geometryPass->Setup(m_frameGraph, gbufferConfig);
+}
+```
+
+---
+
+### Success Criteria (Week 13)
+
+- ✅ GeometryPass accepts arbitrary RT configurations
+- ✅ No hardcoded RT names in pass implementation
+- ✅ Can create multiple geometry passes with different outputs
+- ✅ Maintains compatibility with Week 11-12 tests
+
+### Performance Impact
+
+- **Memory**: No change (same RTs allocated)
+- **CPU**: <0.1ms overhead for configuration
+- **Flexibility**: Can now handle any RT layout
+
+---
+
+## Week 14: Render Target Registry
+
+### Objective
+Create centralized registry for all render targets, enabling lookup by name (matching X-Ray shader conventions).
+
+### Phase 2: Render Target Registry
+
+#### Implementation
+
+```cpp
+// xrRender/FrameGraph/RenderTargetRegistry.h
+#pragma once
+
+#include "FGResource.h"
+
+namespace xray::render::framegraph {
+
+// ═══════════════════════════════════════════════════
+//  RENDER TARGET REGISTRY
+// ═══════════════════════════════════════════════════
+
+class RenderTargetRegistry {
+public:
+    RenderTargetRegistry() = default;
+    ~RenderTargetRegistry() = default;
+    
+    // ═══════════════════════════════════════════════════
+    //  REGISTRATION
+    // ═══════════════════════════════════════════════════
+    
+    // Register a render target with a name
+    void RegisterRT(const char* name, VirtualResourceHandle handle) {
+        shared_str key = name;
+        
+        // Check for duplicates (debug only)
+        #ifdef DEBUG
+        auto it = m_registry.find(key);
+        if (it != m_registry.end()) {
+            Msg("! [RTRegistry] ⚠️ Warning: Overwriting RT '%s'", name);
+        }
+        #endif
+        
+        m_registry[key] = handle;
+        Msg("! [RTRegistry] Registered: %s", name);
+    }
+    
+    // Register multiple aliases for same RT
+    void RegisterAliases(VirtualResourceHandle handle, 
+                        const xr_vector<const char*>& names) {
+        for (const char* name : names) {
+            RegisterRT(name, handle);
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  LOOKUP
+    // ═══════════════════════════════════════════════════
+    
+    // Get RT by name (asserts if not found)
+    VirtualResourceHandle GetRT(const char* name) const {
+        shared_str key = name;
+        auto it = m_registry.find(key);
+        
+        VERIFY2(it != m_registry.end(), 
+                make_string("RT not found: %s", name));
+        
+        return it->second;
+    }
+    
+    // Try get RT (returns invalid handle if not found)
+    VirtualResourceHandle TryGetRT(const char* name) const {
+        shared_str key = name;
+        auto it = m_registry.find(key);
+        
+        if (it != m_registry.end()) {
+            return it->second;
+        }
+        
+        return VirtualResourceHandle{};  // Invalid
+    }
+    
+    // Check if RT exists
+    bool HasRT(const char* name) const {
+        shared_str key = name;
+        return m_registry.find(key) != m_registry.end();
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  ENUMERATION
+    // ═══════════════════════════════════════════════════
+    
+    // Get all registered names (for debugging)
+    xr_vector<shared_str> GetAllNames() const {
+        xr_vector<shared_str> names;
+        for (const auto& pair : m_registry) {
+            names.push_back(pair.first);
+        }
+        return names;
+    }
+    
+    // Print all registered RTs
+    void PrintRegistry() const {
+        Msg("! [RTRegistry] Registered render targets:");
+        for (const auto& pair : m_registry) {
+            Msg("!   %s -> Handle[%u]", 
+                pair.first.c_str(), 
+                pair.second.index);
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  RESET
+    // ═══════════════════════════════════════════════════
+    
+    void Clear() {
+        m_registry.clear();
+        Msg("! [RTRegistry] Cleared");
+    }
+    
+private:
+    xr_map<shared_str, VirtualResourceHandle> m_registry;
+};
+
+} // namespace xray::render::framegraph
+```
+
+---
+
+#### Integration with FrameGraph
+
+```cpp
+// xrRender/FrameGraph/FrameGraph.h
+class FrameGraph {
+public:
+    // ... existing methods ...
+    
+    // Access RT registry
+    RenderTargetRegistry& GetRTRegistry() { return m_rtRegistry; }
+    const RenderTargetRegistry& GetRTRegistry() const { return m_rtRegistry; }
+    
+    // Convenience: lookup RT by name
+    VirtualResourceHandle GetResourceByName(const char* name) const {
+        return m_rtRegistry.GetRT(name);
+    }
+    
+private:
+    RenderTargetRegistry m_rtRegistry;
+    // ... existing fields ...
+};
+```
+
+---
+
+#### Usage Example
+
+```cpp
+// xrRender/FrameGraph/r_FrameGraphRenderer.cpp
+void FrameGraphRenderer::BuildFrameGraph() {
+    // ═══════════════════════════════════════════════════
+    //  CREATE ALL VANILLA RENDER TARGETS
+    // ═══════════════════════════════════════════════════
+    
+    // GBuffer targets
+    auto fg_rt_Position = m_frameGraph.CreateTexture("rt_Position", {
+        .width = Device.dwWidth,
+        .height = Device.dwHeight,
+        .format = nvrhi::Format::RGBA16_FLOAT,
+        .isRenderTarget = true
+    });
+    
+    auto fg_rt_Normal = m_frameGraph.CreateTexture("rt_Normal", {
+        .width = Device.dwWidth,
+        .height = Device.dwHeight,
+        .format = nvrhi::Format::RGBA16_FLOAT,
+        .isRenderTarget = true
+    });
+    
+    auto fg_rt_Albedo = m_frameGraph.CreateTexture("rt_Albedo", {
+        .width = Device.dwWidth,
+        .height = Device.dwHeight,
+        .format = nvrhi::Format::RGBA8_UNORM,
+        .isRenderTarget = true
+    });
+    
+    auto fg_rt_Depth = m_frameGraph.CreateTexture("rt_Depth", {
+        .width = Device.dwWidth,
+        .height = Device.dwHeight,
+        .format = nvrhi::Format::D24S8,
+        .isDepthStencil = true
+    });
+    
+    // Lighting targets
+    auto fg_rt_Accumulator = m_frameGraph.CreateTexture("rt_Accumulator", {
+        .width = Device.dwWidth,
+        .height = Device.dwHeight,
+        .format = nvrhi::Format::RGBA16_FLOAT,
+        .isRenderTarget = true
+    });
+    
+    // Post-processing targets
+    auto fg_rt_Generic0 = m_frameGraph.CreateTexture("rt_Generic0", {
+        .width = Device.dwWidth,
+        .height = Device.dwHeight,
+        .format = nvrhi::Format::RGBA16_FLOAT,
+        .isRenderTarget = true
+    });
+    
+    auto fg_rt_Generic1 = m_frameGraph.CreateTexture("rt_Generic1", {
+        .width = Device.dwWidth,
+        .height = Device.dwHeight,
+        .format = nvrhi::Format::RGBA16_FLOAT,
+        .isRenderTarget = true
+    });
+    
+    // ═══════════════════════════════════════════════════
+    //  REGISTER IN RT REGISTRY
+    // ═══════════════════════════════════════════════════
+    
+    auto& registry = m_frameGraph.GetRTRegistry();
+    
+    // Register with RT names (for pass configuration)
+    registry.RegisterRT("rt_Position", fg_rt_Position);
+    registry.RegisterRT("rt_Normal", fg_rt_Normal);
+    registry.RegisterRT("rt_Albedo", fg_rt_Albedo);
+    registry.RegisterRT("rt_Depth", fg_rt_Depth);
+    registry.RegisterRT("rt_Accumulator", fg_rt_Accumulator);
+    registry.RegisterRT("rt_Generic0", fg_rt_Generic0);
+    registry.RegisterRT("rt_Generic1", fg_rt_Generic1);
+    
+    // Register shader sampler aliases (for shader binding)
+    registry.RegisterAliases(fg_rt_Position, {
+        "s_position",
+        "s_pos"
+    });
+    
+    registry.RegisterAliases(fg_rt_Normal, {
+        "s_normal",
+        "s_nmap"
+    });
+    
+    registry.RegisterAliases(fg_rt_Albedo, {
+        "s_diffuse",
+        "s_image",
+        "s_base"
+    });
+    
+    registry.RegisterAliases(fg_rt_Accumulator, {
+        "s_accumulator",
+        "s_acc"
+    });
+    
+    // Debug: print registry
+    registry.PrintRegistry();
+}
+```
+
+---
+
+### Success Criteria (Week 14)
+
+- ✅ RT registry stores all vanilla render targets
+- ✅ Lookup by name works correctly
+- ✅ Multiple aliases supported (s_position = s_pos = rt_Position)
+- ✅ Debug printing shows all registered RTs
+- ✅ Integration with FrameGraph seamless
+
+### Performance Impact
+
+- **Memory**: ~1KB (string map overhead)
+- **Lookup**: O(log n) per name (map lookup)
+- **Registration**: O(log n) per RT
+
+---
+
+## Week 15: Shader Reflection System
+
+### Objective
+Automatically extract render target bindings from shaders using D3D11 reflection, eliminating manual configuration.
+
+### Phase 3: Shader Reflection for RT Bindings
+
+#### Implementation
+
+```cpp
+// xrRender/FrameGraph/ShaderReflection.h
+#pragma once
+
+#include <d3d11shader.h>
+#include <d3dcompiler.h>
+
+namespace xray::render::framegraph {
+
+// ═══════════════════════════════════════════════════
+//  RENDER PHASE TYPES
+// ═══════════════════════════════════════════════════
+
+enum class RenderPhase {
+    Geometry,      // Outputs to GBuffer (rt_Position, rt_Normal, rt_Color)
+    Lighting,      // Outputs to rt_Accumulator
+    Combine,       // Outputs to rt_Generic_0/1
+    PostProcess,   // Various outputs (bloom, tonemap, etc.)
+    Shadow,        // Shadow map generation
+    Custom         // User-defined
+};
+
+// ═══════════════════════════════════════════════════
+//  SHADER RT BINDINGS
+// ═══════════════════════════════════════════════════
+
+struct ShaderRTBindings {
+    RenderPhase phase = RenderPhase::Custom;
+    
+    // ─── Input Textures (SRVs) ───
+    struct InputTexture {
+        shared_str name;       // "s_position", "s_normal", etc.
+        u32 slot;              // Texture slot (t0, t1, ...)
+        
+        InputTexture() : slot(0) {}
+        InputTexture(const char* n, u32 s) : name(n), slot(s) {}
+    };
+    xr_vector<InputTexture> inputTextures;
+    
+    // ─── Output RTs (RTVs) ───
+    struct OutputRT {
+        u32 slot;              // SV_Target index
+        shared_str inferredName; // Inferred from phase + signature
+        
+        OutputRT() : slot(0) {}
+        OutputRT(u32 s) : slot(s) {}
+    };
+    xr_vector<OutputRT> outputRTs;
+    
+    // ─── Depth Output ───
+    bool hasDepthOutput = false;
+    
+    // ─── Debug Info ───
+    shared_str shaderName;
+};
+
+// ═══════════════════════════════════════════════════
+//  SHADER REFLECTOR
+// ═══════════════════════════════════════════════════
+
+class ShaderReflector {
+public:
+    // Analyze pixel shader and extract RT bindings
+    static ShaderRTBindings AnalyzePixelShader(
+        ID3D11PixelShader* ps, 
+        ID3DBlob* bytecode);
+    
+    // Infer render phase from shader bindings
+    static RenderPhase InferPhase(const ShaderRTBindings& bindings);
+    
+    // Get typical RT names for a phase
+    static xr_vector<const char*> GetPhaseRTNames(RenderPhase phase);
+    
+private:
+    // Helper: check if texture name matches pattern
+    static bool MatchesPattern(const char* name, const char* pattern);
+};
+
+} // namespace xray::render::framegraph
+```
+
+```cpp
+// xrRender/FrameGraph/ShaderReflection.cpp
+#include "stdafx.h"
+#include "ShaderReflection.h"
+
+namespace xray::render::framegraph {
+
+ShaderRTBindings ShaderReflector::AnalyzePixelShader(
+    ID3D11PixelShader* ps,
+    ID3DBlob* bytecode) {
+    
+    VERIFY(ps);
+    VERIFY(bytecode);
+    
+    ShaderRTBindings bindings;
+    
+    // ═══════════════════════════════════════════════════
+    //  GET SHADER REFLECTION INTERFACE
+    // ═══════════════════════════════════════════════════
+    
+    ID3D11ShaderReflection* reflection = nullptr;
+    HRESULT hr = D3DReflect(
+        bytecode->GetBufferPointer(),
+        bytecode->GetBufferSize(),
+        IID_ID3D11ShaderReflection,
+        (void**)&reflection
+    );
+    
+    if (FAILED(hr)) {
+        Msg("! [ShaderReflector] ❌ Failed to create reflection interface");
+        return bindings;
+    }
+    
+    D3D11_SHADER_DESC shaderDesc;
+    reflection->GetDesc(&shaderDesc);
+    
+    // ═══════════════════════════════════════════════════
+    //  ENUMERATE INPUT RESOURCES (Textures)
+    // ═══════════════════════════════════════════════════
+    
+    for (u32 i = 0; i < shaderDesc.BoundResources; i++) {
+        D3D11_SHADER_INPUT_BIND_DESC bindDesc;
+        reflection->GetResourceBindingDesc(i, &bindDesc);
+        
+        // Only care about textures (SRVs)
+        if (bindDesc.Type == D3D_SIT_TEXTURE) {
+            ShaderRTBindings::InputTexture input;
+            input.name = bindDesc.Name;  // "s_position", "s_normal", etc.
+            input.slot = bindDesc.BindPoint;  // t0, t1, ...
+            
+            bindings.inputTextures.push_back(input);
+            
+            Msg("!   Input texture: %s (slot %u)", 
+                input.name.c_str(), input.slot);
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  ENUMERATE OUTPUT PARAMETERS (Render Targets)
+    // ═══════════════════════════════════════════════════
+    
+    for (u32 i = 0; i < shaderDesc.OutputParameters; i++) {
+        D3D11_SIGNATURE_PARAMETER_DESC paramDesc;
+        reflection->GetOutputParameterDesc(i, &paramDesc);
+        
+        if (xr_strcmp(paramDesc.SemanticName, "SV_Target") == 0) {
+            ShaderRTBindings::OutputRT output;
+            output.slot = paramDesc.SemanticIndex;  // SV_Target0, SV_Target1, ...
+            
+            bindings.outputRTs.push_back(output);
+            
+            Msg("!   Output RT: SV_Target%u", output.slot);
+            
+        } else if (xr_strcmp(paramDesc.SemanticName, "SV_Depth") == 0) {
+            bindings.hasDepthOutput = true;
+            Msg("!   Output: SV_Depth");
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  INFER RENDER PHASE
+    // ═══════════════════════════════════════════════════
+    
+    bindings.phase = InferPhase(bindings);
+    
+    Msg("! [ShaderReflector] Inferred phase: %d", (int)bindings.phase);
+    
+    // ═══════════════════════════════════════════════════
+    //  CLEANUP
+    // ═══════════════════════════════════════════════════
+    
+    reflection->Release();
+    
+    return bindings;
+}
+
+RenderPhase ShaderReflector::InferPhase(const ShaderRTBindings& bindings) {
+    // ═══════════════════════════════════════════════════
+    //  HEURISTIC 1: Reads from GBuffer → Lighting Phase
+    // ═══════════════════════════════════════════════════
+    
+    bool readsGBuffer = false;
+    for (const auto& input : bindings.inputTextures) {
+        if (MatchesPattern(input.name.c_str(), "s_position") ||
+            MatchesPattern(input.name.c_str(), "s_pos") ||
+            MatchesPattern(input.name.c_str(), "s_normal") ||
+            MatchesPattern(input.name.c_str(), "s_diffuse") ||
+            MatchesPattern(input.name.c_str(), "s_image")) {
+            readsGBuffer = true;
+            break;
+        }
+    }
+    
+    if (readsGBuffer) {
+        // If reads accumulator too → Combine phase
+        for (const auto& input : bindings.inputTextures) {
+            if (MatchesPattern(input.name.c_str(), "s_accumulator")) {
+                return RenderPhase::Combine;
+            }
+        }
+        
+        return RenderPhase::Lighting;
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  HEURISTIC 2: Multiple Outputs → Geometry Phase
+    // ═══════════════════════════════════════════════════
+    
+    if (bindings.outputRTs.size() > 1) {
+        return RenderPhase::Geometry;
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  HEURISTIC 3: Single Output + Depth → Shadow Phase
+    // ═══════════════════════════════════════════════════
+    
+    if (bindings.hasDepthOutput && bindings.outputRTs.empty()) {
+        return RenderPhase::Shadow;
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  DEFAULT: Custom Phase
+    // ═══════════════════════════════════════════════════
+    
+    return RenderPhase::Custom;
+}
+
+bool ShaderReflector::MatchesPattern(const char* name, const char* pattern) {
+    // Simple case-insensitive substring match
+    shared_str nameLower = name;
+    shared_str patternLower = pattern;
+    
+    nameLower.make_lower();
+    patternLower.make_lower();
+    
+    return nameLower.find(patternLower.c_str()) != shared_str::npos;
+}
+
+xr_vector<const char*> ShaderReflector::GetPhaseRTNames(RenderPhase phase) {
+    switch (phase) {
+        case RenderPhase::Geometry:
+            return {"rt_Position", "rt_Normal", "rt_Albedo"};
+            
+        case RenderPhase::Lighting:
+            return {"rt_Accumulator"};
+            
+        case RenderPhase::Combine:
+            return {"rt_Generic0", "rt_Generic1"};
+            
+        case RenderPhase::Shadow:
+            return {"rt_ShadowMap"};
+            
+        default:
+            return {};
+    }
+}
+
+} // namespace xray::render::framegraph
+```
+
+---
+
+#### Integration with MaterialPSO
+
+```cpp
+// xrRender/MaterialPSO.h
+struct MaterialPSO {
+    // ... existing fields (shaders, etc.) ...
+    
+    // ─── RT Bindings (Extracted from Shader) ───
+    ShaderRTBindings rtBindings;
+    
+    // ─── Phase (Determines which pass to use) ───
+    RenderPhase GetPhase() const { 
+        return rtBindings.phase; 
+    }
+    
+    // ─── Required Input RTs ───
+    const xr_vector<ShaderRTBindings::InputTexture>& GetInputTextures() const {
+        return rtBindings.inputTextures;
+    }
+    
+    // ─── Output RT Count ───
+    u32 GetOutputRTCount() const {
+        return (u32)rtBindings.outputRTs.size();
+    }
+};
+```
+
+```cpp
+// xrRender/MaterialCache.cpp - Add to shader compilation
+void MaterialCache::CompileMaterial(MaterialPSO* material) {
+    // ... existing shader compilation ...
+    
+    // After pixel shader is compiled:
+    if (material->pixelShader && material->psBlob) {
+        // Extract RT bindings via reflection
+        material->rtBindings = ShaderReflector::AnalyzePixelShader(
+            material->pixelShader,
+            material->psBlob
+        );
+        
+        Msg("! [MaterialCache] Material '%s' uses phase: %d",
+            material->name.c_str(),
+            (int)material->GetPhase());
+    }
+}
+```
+
+---
+
+### Success Criteria (Week 15)
+
+- ✅ Shader reflection extracts input textures automatically
+- ✅ Shader reflection detects output RT count
+- ✅ Phase inference works for common cases (Geometry, Lighting, Combine)
+- ✅ MaterialPSO stores RT bindings
+- ✅ Manual override available for edge cases
+
+### Performance Impact
+
+- **Compilation**: +1-2ms per shader (reflection overhead)
+- **Runtime**: 0ms (reflection done once at load time)
+- **Memory**: ~200 bytes per material (RT bindings storage)
+
+---
+
+## Week 16: Dynamic Pass Routing
+
+### Objective
+Dynamically create and route passes based on material requirements, eliminating hardcoded pass assumptions.
+
+### Phase 4: Dynamic Pass Creation
+
+#### Implementation
+
+```cpp
+// xrRender/FrameGraph/r_FrameGraphRenderer.h
+class FrameGraphRenderer {
+public:
+    // ... existing methods ...
+    
+    void BuildFrameGraph();
+    
+private:
+    // ═══════════════════════════════════════════════════
+    //  RENDER PASSES
+    // ═══════════════════════════════════════════════════
+    
+    xr_unique_ptr<GeometryPass> m_geometryPass;
+    xr_unique_ptr<LightingPass> m_lightingPass;
+    xr_unique_ptr<CombinePass> m_combinePass;
+    // ... more passes as needed ...
+    
+    // ═══════════════════════════════════════════════════
+    //  DYNAMIC ROUTING
+    // ═══════════════════════════════════════════════════
+    
+    // Scan materials to determine required phases
+    xr_set<RenderPhase> ScanRequiredPhases() const;
+    
+    // Create passes based on required phases
+    void CreatePhasePass(RenderPhase phase);
+    
+    // Route batches to appropriate passes
+    void RouteBatchesToPasses();
+};
+```
+
+```cpp
+// xrRender/FrameGraph/r_FrameGraphRenderer.cpp
+void FrameGraphRenderer::BuildFrameGraph() {
+    Msg("! [FrameGraphRenderer] Building FrameGraph...");
+    
+    // ═══════════════════════════════════════════════════
+    //  CREATE ALL VANILLA RENDER TARGETS
+    // ═══════════════════════════════════════════════════
+    
+    // (Same as Week 14 - omitted for brevity)
+    // Creates: rt_Position, rt_Normal, rt_Albedo, rt_Depth,
+    //          rt_Accumulator, rt_Generic0, rt_Generic1
+    
+    auto& registry = m_frameGraph.GetRTRegistry();
+    // ... register all RTs ...
+    
+    // ═══════════════════════════════════════════════════
+    //  SCAN MATERIALS FOR REQUIRED PHASES
+    // ═══════════════════════════════════════════════════
+    
+    xr_set<RenderPhase> requiredPhases = ScanRequiredPhases();
+    
+    Msg("! [FrameGraphRenderer] Required phases:");
+    for (RenderPhase phase : requiredPhases) {
+        Msg("!   Phase: %d", (int)phase);
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  CREATE PASSES DYNAMICALLY
+    // ═══════════════════════════════════════════════════
+    
+    for (RenderPhase phase : requiredPhases) {
+        CreatePhasePass(phase);
+    }
+    
+    // ═══════════════════════════════════════════════════
+    //  ROUTE BATCHES TO PASSES
+    // ═══════════════════════════════════════════════════
+    
+    RouteBatchesToPasses();
+    
+    // ═══════════════════════════════════════════════════
+    //  COMPILE FRAMEGRAPH
+    // ═══════════════════════════════════════════════════
+    
+    FrameGraph::CompileOptions options;
+    options.enableMemoryAliasing = true;
+    options.enablePassCulling = true;
+    
+    if (!m_frameGraph.Compile(options)) {
+        Msg("! [FrameGraphRenderer] ❌ FrameGraph compilation failed");
+    }
+}
+
+xr_set<RenderPhase> FrameGraphRenderer::ScanRequiredPhases() const {
+    xr_set<RenderPhase> phases;
+    
+    // Scan all render batches
+    for (const auto& batch : m_renderBatches) {
+        if (batch.materialPSO) {
+            RenderPhase phase = batch.materialPSO->GetPhase();
+            phases.insert(phase);
+        }
+    }
+    
+    return phases;
+}
+
+void FrameGraphRenderer::CreatePhasePass(RenderPhase phase) {
+    auto& registry = m_frameGraph.GetRTRegistry();
+    
+    switch (phase) {
+        // ═══════════════════════════════════════════════════
+        //  GEOMETRY PHASE
+        // ═══════════════════════════════════════════════════
+        case RenderPhase::Geometry: {
+            Msg("! [FrameGraphRenderer] Creating Geometry pass");
+            
+            GeometryPassConfig config;
+            config.renderTargets = {
+                {registry.GetRT("rt_Position"), "POSITION"},
+                {registry.GetRT("rt_Normal"), "NORMAL"},
+                {registry.GetRT("rt_Albedo"), "COLOR"}
+            };
+            config.depthStencil = registry.GetRT("rt_Depth");
+            config.width = Device.dwWidth;
+            config.height = Device.dwHeight;
+            
+            // Setup clear values
+            config.clearValues.resize(3);
+            for (auto& clear : config.clearValues) {
+                clear.enabled = true;
+            }
+            config.clearDepth = true;
+            
+            m_geometryPass = xr_make_unique<GeometryPass>();
+            m_geometryPass->Setup(m_frameGraph, config);
+            break;
+        }
+        
+        // ═══════════════════════════════════════════════════
+        //  LIGHTING PHASE
+        // ═══════════════════════════════════════════════════
+        case RenderPhase::Lighting: {
+            Msg("! [FrameGraphRenderer] Creating Lighting pass");
+            
+            LightingPassConfig config;
+            config.inputs = {
+                registry.GetRT("rt_Position"),
+                registry.GetRT("rt_Normal"),
+                registry.GetRT("rt_Albedo"),
+                registry.GetRT("rt_Depth")
+            };
+            config.output = registry.GetRT("rt_Accumulator");
+            config.width = Device.dwWidth;
+            config.height = Device.dwHeight;
+            
+            m_lightingPass = xr_make_unique<LightingPass>();
+            m_lightingPass->Setup(m_frameGraph, config);
+            break;
+        }
+        
+        // ═══════════════════════════════════════════════════
+        //  COMBINE PHASE
+        // ═══════════════════════════════════════════════════
+        case RenderPhase::Combine: {
+            Msg("! [FrameGraphRenderer] Creating Combine pass");
+            
+            CombinePassConfig config;
+            config.inputs = {
+                registry.GetRT("rt_Albedo"),
+                registry.GetRT("rt_Accumulator")
+            };
+            config.outputs = {
+                registry.GetRT("rt_Generic0"),
+                registry.GetRT("rt_Generic1")
+            };
+            config.width = Device.dwWidth;
+            config.height = Device.dwHeight;
+            
+            m_combinePass = xr_make_unique<CombinePass>();
+            m_combinePass->Setup(m_frameGraph, config);
+            break;
+        }
+        
+        // ═══════════════════════════════════════════════════
+        //  OTHER PHASES (Shadow, PostProcess, etc.)
+        // ═══════════════════════════════════════════════════
+        default:
+            Msg("! [FrameGraphRenderer] ⚠️ Unsupported phase: %d", (int)phase);
+            break;
+    }
+}
+
+void FrameGraphRenderer::RouteBatchesToPasses() {
+    // Group batches by phase
+    xr_map<RenderPhase, xr_vector<RenderBatch*>> batchesByPhase;
+    
+    for (auto& batch : m_renderBatches) {
+        if (batch.materialPSO) {
+            RenderPhase phase = batch.materialPSO->GetPhase();
+            batchesByPhase[phase].push_back(&batch);
+        }
+    }
+    
+    // Assign batches to passes
+    if (m_geometryPass) {
+        m_geometryPass->SetBatches(batchesByPhase[RenderPhase::Geometry]);
+    }
+    
+    if (m_lightingPass) {
+        m_lightingPass->SetBatches(batchesByPhase[RenderPhase::Lighting]);
+    }
+    
+    if (m_combinePass) {
+        m_combinePass->SetBatches(batchesByPhase[RenderPhase::Combine]);
+    }
+}
+```
+
+---
+
+### Phase 5: Material-to-Pass Routing in Execute
+
+```cpp
+// xrRender/FrameGraph/GeometryPass.cpp - Update Execute()
+void GeometryPass::Execute(RenderContext& ctx, const FrameGraph& fg) {
+    Msg("!   [GeometryPass] Executing...");
+    
+    // ... existing RT setup code ...
+    
+    // ═══════════════════════════════════════════════════
+    //  RENDER BATCHES
+    // ═══════════════════════════════════════════════════
+    
+    for (const auto& batch : m_batches) {
+        // Verify batch belongs to this phase
+        if (batch->materialPSO->GetPhase() != RenderPhase::Geometry) {
+            continue;  // Skip (shouldn't happen if routing is correct)
+        }
+        
+        // Set pipeline
+        ctx.SetPipeline(batch->materialPSO->pipelineState);
+        
+        // Bind textures (input SRVs)
+        for (const auto& input : batch->materialPSO->GetInputTextures()) {
+            // Lookup texture in RT registry
+            VirtualResourceHandle rtHandle = 
+                fg.GetResourceByName(input.name.c_str());
+            
+            if (rtHandle.IsValid()) {
+                TextureHandle physical = fg.GetPhysicalTexture(rtHandle);
+                ctx.SetTexture(input.slot, physical);
+            }
+        }
+        
+        // Bind constants
+        ctx.SetConstantBuffer(0, batch->constantBuffer);
+        
+        // Bind geometry
+        ctx.SetVertexBuffer(0, batch->vertexBuffer, batch->vertexStride);
+        ctx.SetIndexBuffer(batch->indexBuffer, 
+            RenderContext::IndexFormat::UInt32);
+        
+        // Draw
+        ctx.DrawIndexed(batch->indexCount, 0, 0);
+    }
+    
+    Msg("!   [GeometryPass] Drew %u batches", m_batches.size());
+}
+```
+
+---
+
+### Phase 6: Texture Name → FrameGraph Resource Mapping
+
+This is already handled by the RT Registry in Week 14! The registry maps shader texture names (like "s_position") to FrameGraph virtual handles.
+
+**Usage in pass execution:**
+```cpp
+// In any pass callback:
+for (const auto& input : material->GetInputTextures()) {
+    // "s_position" → fg_rt_Position handle
+    VirtualResourceHandle rtHandle = 
+        fg.GetRTRegistry().GetRT(input.name.c_str());
+    
+    // Virtual handle → Physical texture
+    TextureHandle physical = fg.GetPhysicalTexture(rtHandle);
+    
+    // Bind to shader slot
+    ctx.SetTexture(input.slot, physical);
+}
+```
+
+---
+
+### Phase 7: Quick Fix for Immediate Testing
+
+```cpp
+// xrRender/FrameGraph/r_FrameGraphRenderer.cpp
+void FrameGraphRenderer::BuildFrameGraph() {
+    // ═══════════════════════════════════════════════════
+    //  TEMPORARY: Simplified Pipeline for Testing
+    // ═══════════════════════════════════════════════════
+    
+    #ifdef TESTING_MODE
+    
+    // Only create geometry pass
+    auto fg_rt_Albedo = m_frameGraph.CreateTexture("rt_Albedo", {...});
+    auto fg_rt_Depth = m_frameGraph.CreateTexture("rt_Depth", {...});
+    
+    GeometryPassConfig config;
+    config.renderTargets = {{fg_rt_Albedo, "COLOR"}};
+    config.depthStencil = fg_rt_Depth;
+    
+    m_geometryPass->Setup(m_frameGraph, config);
+    
+    // Present albedo directly to backbuffer
+    PassHandle presentPass = m_frameGraph.AddPass("Present");
+    m_frameGraph.PassRead(presentPass, fg_rt_Albedo);
+    m_frameGraph.PassWrite(presentPass, m_backbuffer);
+    
+    m_frameGraph.SetPassCallback(presentPass,
+        [fg_rt_Albedo, this](RenderContext& ctx, const FrameGraph& fg) {
+            TextureHandle src = fg.GetPhysicalTexture(fg_rt_Albedo);
+            TextureHandle dst = fg.GetPhysicalTexture(m_backbuffer);
+            
+            // Copy albedo to backbuffer (fullscreen blit)
+            ctx.SetRenderTargets(&dst, 1, TextureHandle{});
+            ctx.SetTexture(0, src);
+            ctx.SetPipeline(m_blitPipeline);  // Fullscreen triangle
+            ctx.Draw(3, 0);
+        });
+    
+    // Comment out lighting/tonemap passes
+    // m_lightingPass->Setup(...);  // DISABLED
+    // m_tonemapPass->Setup(...);   // DISABLED
+    
+    #endif
+}
+```
+
+---
+
+### Success Criteria (Week 16)
+
+- ✅ Passes created dynamically based on material requirements
+- ✅ Batches routed to correct pass based on shader phase
+- ✅ Texture bindings resolved automatically via RT registry
+- ✅ Can add new phases without code changes (data-driven)
+- ✅ Quick fix mode allows testing geometry without lighting
+
+### Performance Impact
+
+- **Compile Time**: +2-5ms (phase scanning + dynamic pass creation)
+- **Runtime**: 0ms (routing done once at frame start)
+- **Flexibility**: Full support for X-Ray's multi-phase system
+
+---
+
+## 📊 Implementation Timeline Summary
+
+| **Week** | **Phase** | **Deliverable** | **Lines of Code** | **Risk** |
+|----------|-----------|-----------------|-------------------|----------|
+| **11-12** | Basic Geometry | G-Buffer + Lighting (hardcoded) | ~800 | Low |
+| **13** | Flexible Passes | GeometryPassConfig system | ~400 | Low |
+| **14** | RT Registry | Centralized RT lookup | ~200 | Low |
+| **15** | Shader Reflection | Automatic RT binding extraction | ~600 | Medium |
+| **16** | Dynamic Routing | Phase-based pass creation | ~500 | Medium |
+
+**Total**: ~2,500 lines of new code  
+**Total Time**: 6 weeks
+
+---
+
+## 🎯 Expected Results After Full Implementation
+
+### After Week 12 (Quick Fix):
+- ✅ See rendered geometry in correct colors (albedo)
+- ✅ Verify normals are in correct buffer (via RenderDoc)
+- ✅ No more black screen from missing lighting resources
+- ✅ FrameGraph proven to work for multi-pass rendering
+
+### After Week 16 (Full System):
+- ✅ Proper multi-phase rendering (geometry → lighting → combine → post-process)
+- ✅ Each shader outputs to correct RTs based on its purpose
+- ✅ Automatic dependency tracking via FrameGraph
+- ✅ Extensible architecture for adding new passes
+- ✅ No hardcoded assumptions about RT layouts
+- ✅ Matches X-Ray's existing phase system
+
+---
+
+## 🚀 Migration Path from Weeks 11-12 to Weeks 13-16
+
+### Step 1: Add GeometryPassConfig (Week 13)
+```cpp
+// Old (Week 11-12):
+SetupGBufferPass(fg, device, width, height);
+
+// New (Week 13):
+GeometryPassConfig config;
+config.renderTargets = {
+    {fg_rt_Position, "POSITION"},
+    {fg_rt_Normal, "NORMAL"},
+    {fg_rt_Albedo, "COLOR"}
+};
+m_geometryPass->Setup(fg, config);
+```
+
+### Step 2: Add RT Registry (Week 14)
+```cpp
+// Register RTs
+m_frameGraph.GetRTRegistry().RegisterRT("rt_Position", fg_rt_Position);
+m_frameGraph.GetRTRegistry().RegisterRT("s_position", fg_rt_Position);
+
+// Lookup by name
+VirtualResourceHandle pos = m_frameGraph.GetResourceByName("s_position");
+```
+
+### Step 3: Add Shader Reflection (Week 15)
+```cpp
+// In material compilation:
+material->rtBindings = ShaderReflector::AnalyzePixelShader(
+    material->pixelShader,
+    material->psBlob
+);
+```
+
+### Step 4: Dynamic Routing (Week 16)
+```cpp
+// Scan materials
+xr_set<RenderPhase> phases = ScanRequiredPhases();
+
+// Create passes dynamically
+for (RenderPhase phase : phases) {
+    CreatePhasePass(phase);
+}
+```
+
+---
+
+## 🔧 Debug Tools
+
+### FrameGraph Visualization
+```cpp
+// Export graph to HTML for visual inspection
+m_frameGraph.ExportVisualization("framegraph_debug.html");
+```
+
+### RT Registry Dump
+```cpp
+// Print all registered RTs
+m_frameGraph.GetRTRegistry().PrintRegistry();
+```
+
+### Shader Binding Validation
+```cpp
+// Check if material's inputs are available
+for (const auto& input : material->GetInputTextures()) {
+    if (!m_frameGraph.GetRTRegistry().HasRT(input.name.c_str())) {
+        Msg("⚠️ Material '%s' requires RT '%s' which is not registered",
+            material->name.c_str(),
+            input.name.c_str());
+    }
+}
+```
+
+---
+
+## ✅ Final Checklist
+
+### Week 11-12:
+- [ ] FrameGraph executes G-Buffer pass correctly
+- [ ] FrameGraph executes Lighting pass correctly
+- [ ] Automatic barrier insertion works
+- [ ] Memory aliasing reduces memory usage
+
+### Week 13:
+- [ ] GeometryPassConfig accepts arbitrary RT layouts
+- [ ] Can create multiple geometry passes with different configs
+- [ ] No hardcoded RT names in pass code
+
+### Week 14:
+- [ ] RT registry stores all vanilla RTs
+- [ ] Lookup by name works (rt_Position, s_position, etc.)
+- [ ] Debug print shows all registered RTs
+
+### Week 15:
+- [ ] Shader reflection extracts input textures
+- [ ] Shader reflection detects output RT count
+- [ ] Phase inference works for Geometry/Lighting/Combine
+- [ ] MaterialPSO stores RT bindings
+
+### Week 16:
+- [ ] Passes created dynamically based on materials
+- [ ] Batches routed to correct phase automatically
+- [ ] Texture bindings resolved via registry
+- [ ] Can add new phases without code changes
+
+---
+
+## 🎓 Architecture Benefits
+
+### Compared to Hardcoded Approach:
+| Aspect | Hardcoded | Dynamic |
+|--------|-----------|---------|
+| **Flexibility** | ❌ Fixed RT layout | ✅ Any RT layout |
+| **Extensibility** | ❌ Code changes for new passes | ✅ Data-driven |
+| **X-Ray Compatibility** | ⚠️ Must adapt existing shaders | ✅ Works with existing shaders |
+| **Debugging** | ✅ Simple, explicit | ⚠️ Requires reflection tools |
+| **Performance** | ✅ Zero overhead | ⚠️ +2ms compile time |
+
+### Why This Approach Wins:
+1. **Respects X-Ray's Architecture** - Works with existing shader system
+2. **Future-Proof** - New render techniques just work
+3. **Zero Asset Changes** - Existing shaders/materials work as-is
+4. **Maintainable** - RT bindings self-documenting via reflection
+
+---
+
+**END OF WEEKS 11-16 MASTER IMPLEMENTATION GUIDE**
