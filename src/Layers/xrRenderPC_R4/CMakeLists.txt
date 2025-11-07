@@ -32,7 +32,6 @@ list(REMOVE_ITEM XR_RENDERPC_R4_SHARED_SOURCES
 )
 
 set(XR_RENDERPC_R4_BLENDER_SOURCES
-    "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/Blender_Blur.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/Blender_BmmD_deferred.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/Blender_detail_still_deferred.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_bloom_build.cpp"
@@ -40,9 +39,6 @@ set(XR_RENDERPC_R4_BLENDER_SOURCES
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_deffer_aref.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_deffer_flat.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_deffer_model.cpp"
-    "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_dof.cpp"
-    "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_gasmask_drops.cpp"
-    "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_gasmask_dudv.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_light_direct.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_light_mask.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_light_occq.cpp"
@@ -50,7 +46,6 @@ set(XR_RENDERPC_R4_BLENDER_SOURCES
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_light_reflected.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_light_spot.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_luminance.cpp"
-    "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_nightvision.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/blender_ssao.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/dx11HDAOCSBlender.cpp"
     "${CMAKE_SOURCE_DIR}/src/Layers/xrRender/blenders/dx11MSAABlender.cpp"
