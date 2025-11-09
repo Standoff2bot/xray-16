@@ -1,37 +1,220 @@
-# 🚀 ModernResourceManager - Complete Implementation Roadmap
+# 🚀 FGResourceManager - Implementation Progress & Roadmap
 
-**Status:** 45% Complete
+**Status:** 75% Complete (Phase 1 Complete, Critical Issues Identified)
 **Goal:** Fully functional streaming resource system for FrameGraph renderer
-**Timeline:** ~5-6 working days (36-40 hours)
-**Last Updated:** 2025-01-08
+**Timeline:** ~2-3 working days remaining
+**Last Updated:** 2025-01-09
 
 ---
 
 ## 📊 Current State Assessment
 
 ### ✅ **COMPLETED INFRASTRUCTURE**
-- [x] ModernResourceManager integrated into RenderDevice
+- [x] FGResourceManager integrated into RenderDevice
 - [x] ps_r4_use_framegraph flag system working
-- [x] FrameGraph receives ModernResourceManager instance
+- [x] FrameGraph receives FGResourceManager instance
 - [x] Handle system (generational indices)
-- [x] AsyncIOManager (worker threads, file I/O)
-- [x] BufferManager structure (ring buffers)
-- [x] SamplerCache (hash-based deduplication)
-- [x] TextureManager skeleton
-- [x] StreamingManager skeleton
-- [x] DDSLoader (DDS parsing)
+- [x] TextureManager **FULLY FUNCTIONAL**
+- [x] DDSLoader (DDS parsing + multi-format support)
 - [x] FGResourcePool structure
+- [x] **Actual texture loading** (LoadTextureSync working!)
+- [x] Multi-VFS search ($game_textures$ + $level$)
+- [x] Video texture support (.ogm files via CTheoraSurface)
+- [x] 3D texture support (volumetric textures)
+- [x] UI texture rendering
+- [x] World texture rendering
+- [x] **UNIFIED TEXTURE PIPELINE** - All textures route through FGResourceManager!
 
-### ❌ **CRITICAL MISSING COMPONENTS**
-- [ ] **Actual texture loading** (LoadTextureSync, CreateTexture, ImportTexture)
-- [ ] **Memory budget enforcement** (eviction, LRU)
-- [ ] **Mip streaming upload** (GPU data transfer)
-- [ ] **FrameGraph resource aliasing** (memory optimization)
-- [ ] **Integration testing** (validation suite)
+### 🎯 **MAJOR MILESTONE ACHIEVED**
+**Main Menu → Loading Screen → In-Game WORKING!**
+- ✅ UI textures render correctly
+- ✅ World textures render correctly
+- ✅ All textures managed via FGResourceManager
+- ✅ Proper texture dimension handling (no NaN/Inf UVs)
+- ✅ Cross-renderer compatibility (GL builds successfully)
+
+### ❌ **CRITICAL BUGS TO FIX**
+
+#### 🔴 **Bug #1: Reference Count Underflow on Menu Close**
+**Status:** BLOCKER
+**Location:** `dx11SH_Texture.cpp:522` - `CTexture::Unload()`
+
+**Issue:**
+```
+D3D11: DeviceChild reference counter underflow.
+Release should not be called on objects with zero reference count.
+```
+
+**Root Cause:**
+- When FrameGraph mode is enabled, NVRHI owns the D3D11 texture
+- CTexture stores a raw pointer to the D3D11 texture via `getNativeObject()`
+- When CTexture::Unload() is called, it tries to `Release()` the D3D11 texture
+- But NVRHI already manages the ref count, so CTexture shouldn't call Release()
+
+**Solution:**
+Add FrameGraph mode check in CTexture::Unload() to skip Release() when NVRHI owns the texture.
+
+**Callstack:**
+```
+CTexture::~CTexture() → CTexture::Unload() → pSurface->Release() [ERROR: RefCount=0]
+```
 
 ---
 
-## 🎯 Implementation Plan
+#### 🟡 **Bug #2: Video Textures Don't Animate**
+**Status:** HIGH
+**Location:** `TextureManager::UpdateVideoTextures()`
+
+**Issue:**
+- .ogm video textures load and display first frame
+- But subsequent frames don't update (video is frozen)
+
+**Root Cause (Suspected):**
+- `UpdateVideoTextures()` is being called each frame
+- But video decoding or GPU upload may be failing silently
+- Need to verify:
+  - Is `DDSLoader::UpdateVideoFrame()` being called?
+  - Is frame data actually changing?
+  - Is `writeTexture()` succeeding?
+
+**Debug Steps:**
+1. Add logging to `UpdateVideoTextures()` to track frame updates
+2. Verify `CTheoraSurface::Update()` returns true
+3. Check if `needsUpdate` flag is being set
+4. Verify `writeTexture()` isn't failing
+
+---
+
+#### 🟡 **Bug #3: No Font Rendering**
+**Status:** HIGH
+**Location:** Font rendering system
+
+**Issue:**
+- Fonts don't render in UI
+- Need to route font rendering through FGResourceManager
+
+**Root Cause:**
+- `dxFontRender` likely uses legacy texture loading path
+- Needs to be updated to use FGResourceManager like `dxUIShader`
+
+**Solution:**
+Similar fix to what we did for `dxUIShader`:
+1. Check `ps_r4_use_framegraph` flag
+2. Route font texture loading through FGResourceManager
+3. Read dimensions from NVRHI textures
+
+---
+
+#### 🟡 **Bug #4: No Mouse/Cursor Rendering**
+**Status:** MEDIUM
+**Location:** Cursor rendering system
+
+**Issue:**
+- Mouse cursor doesn't render
+- Need to investigate how cursor rendering works
+
+**Research Needed:**
+1. Find where cursor textures are loaded
+2. Find where cursor is drawn
+3. Verify if it's using legacy or FrameGraph path
+
+---
+
+### ⚠️ **DEFERRED FEATURES**
+- [ ] Memory budget enforcement (eviction, LRU)
+- [ ] Mip streaming upload (progressive detail)
+- [ ] FrameGraph resource aliasing (memory optimization)
+- [ ] AsyncIOManager (async file loading)
+- [ ] StreamingManager (mip streaming)
+- [ ] Integration test suite
+
+**Rationale:** Core functionality works. These are optimizations that can be added incrementally.
+
+---
+
+## 🔧 **IMMEDIATE PRIORITIES**
+
+### Priority 1: Fix Reference Count Underflow (BLOCKER)
+**Estimated Time:** 30 minutes
+
+The ref count crash prevents menu from being closed properly. This is the highest priority fix.
+
+**Implementation:**
+```cpp
+// In dx11SH_Texture.cpp - CTexture::Unload()
+void CTexture::Unload() {
+    if (pSurface) {
+        // CRITICAL: In FrameGraph mode, NVRHI owns the texture
+        // CTexture just holds a raw pointer, so don't Release()
+        extern ENGINE_API int ps_r4_use_framegraph;
+        if (ps_r4_use_framegraph && RImplementation.m_renderDevice) {
+            // NVRHI manages the ref count - don't call Release()
+            pSurface = nullptr;
+            return;
+        }
+
+        // Legacy path - we own it, so Release()
+        pSurface->Release();
+        pSurface = nullptr;
+    }
+}
+```
+
+---
+
+### Priority 2: Debug Video Animation
+**Estimated Time:** 1-2 hours
+
+Add comprehensive logging to understand why video frames aren't updating.
+
+**Debug Logging:**
+```cpp
+// In TextureManager::UpdateVideoTextures()
+void TextureManager::UpdateVideoTextures() {
+    static u32 s_debugFrameCount = 0;
+    s_debugFrameCount++;
+
+    for (auto& meta : m_textures) {
+        if (!meta.isAlive || !meta.videoTextureData) continue;
+
+        Msg("! [DEBUG] Frame %u: Updating video texture: %s",
+            s_debugFrameCount, meta.filePath.c_str());
+
+        bool frameChanged = DDSLoader::UpdateVideoFrame(*meta.videoTextureData, Device.dwTimeContinual);
+
+        Msg("! [DEBUG] frameChanged=%s, needsUpdate=%s",
+            frameChanged ? "YES" : "NO",
+            meta.videoTextureData->videoState->needsUpdate ? "YES" : "NO");
+
+        // ... rest of function
+    }
+}
+```
+
+---
+
+### Priority 3: Font Rendering
+**Estimated Time:** 2-3 hours
+
+Investigate and fix font rendering similar to UI shader fix.
+
+**Tasks:**
+1. Find `dxFontRender` implementation
+2. Identify texture loading path
+3. Add FrameGraph mode check
+4. Route through FGResourceManager
+5. Update dimension reading
+
+---
+
+### Priority 4: Cursor Rendering
+**Estimated Time:** 1-2 hours
+
+Research and implement cursor rendering.
+
+---
+
+## 🎯 Implementation Plan (Original)
 
 We'll complete this in **4 focused phases**, building incrementally:
 
