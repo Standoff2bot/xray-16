@@ -43,6 +43,7 @@
 #include "ai_space.h"
 #include "xrScriptEngine/script_engine.hpp"
 #include "ai/monsters/anti_aim_ability.h"
+#include "date_time.h"
 
 // Lain: added
 #include "level_debug.h"
@@ -943,6 +944,17 @@ bool CBaseMonster::check_eated_corpse_draggable()
         }
     }
 
+    return false;
+}
+
+bool CBaseMonster::is_night()
+{
+    u32 year = 0, month = 0, day = 0, hours = 0, mins = 0, secs = 0, milisecs = 0;
+    split_time(Level().GetGameTime(), year, month, day, hours, mins, secs, milisecs);
+    if (hours <= db().m_dwDayTimeBegin || hours >= db().m_dwDayTimeEnd)
+    {
+        return true;
+    }
     return false;
 }
 

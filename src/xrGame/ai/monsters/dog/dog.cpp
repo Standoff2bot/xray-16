@@ -4,7 +4,6 @@
 #include "ai/monsters/monster_velocity_space.h"
 #include "ai/monsters/control_animation_base.h"
 #include "ai/monsters/control_movement_base.h"
-#include "date_time.h"
 #include "Include/xrRender/KinematicsAnimated.h"
 #include "ai/monsters/monster_home.h"
 #include "ai/monsters/ai_monster_squad.h"
@@ -192,17 +191,6 @@ void CAI_Dog::UpdateCL()
         b_anim_end = false;
         StateMan->update();
     }
-}
-
-bool CAI_Dog::is_night()
-{
-    u32 year = 0, month = 0, day = 0, hours = 0, mins = 0, secs = 0, milisecs = 0;
-    split_time(Level().GetGameTime(), year, month, day, hours, mins, secs, milisecs);
-    if (hours <= 6 || hours >= 21)
-    {
-        return true;
-    }
-    return false;
 }
 
 void CAI_Dog::CheckSpecParams(u32 spec_params)
