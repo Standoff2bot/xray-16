@@ -103,8 +103,11 @@ jobs:
         - { name: AppImage,  os: ubuntu-latest,    arch: amd64,   cc: gcc,   flags: "-DBUILD_SHARED_LIBS=OFF", linuxdeploy: linuxdeploy-x86_64.AppImage }
         - { name: AppImage,  os: ubuntu-24.04-arm, arch: arm64,   cc: gcc,   flags: "-DBUILD_SHARED_LIBS=OFF", linuxdeploy: linuxdeploy-aarch64.AppImage }
         # macOS images have tighter concurrency limits; keep the matrix minimal.
-        - { name: macOS,          os: macos-latest,    arch: arm64,  cc: clang, threads: 3, flags: "-DCPACK_GENERATOR=ZIP" }
-        - { name: macOS Intel,    os: macos-15-intel,  arch: x86_64, cc: clang, flags: "-DCMAKE_OSX_ARCHITECTURES=x86_64 -DCPACK_GENERATOR=ZIP" }
+        # https://docs.github.com/en/actions/reference/limits#job-concurrency-limits-for-github-hosted-runners
+        - { name: macOS 15,       os: macos-15,    arch: arm64,  cc: clang, threads: 3, flags: "-DCPACK_GENERATOR=ZIP" }
+        - { name: macOS 15 Intel, os: macos-15-intel,  arch: x86_64, cc: clang, flags: "-DCMAKE_OSX_ARCHITECTURES=x86_64 -DCPACK_GENERATOR=ZIP" }
+        - { name: macOS 26,       os: macos-26,    arch: arm64,  cc: clang, threads: 3, flags: "-DCPACK_GENERATOR=ZIP" }
+        - { name: macOS 26 Intel, os: macos-26-intel,  arch: x86_64, cc: clang, flags: "-DCMAKE_OSX_ARCHITECTURES=x86_64 -DCPACK_GENERATOR=ZIP" }
 
         configuration: [Debug, Mixed, Release, ReleaseMasterGold]
 
