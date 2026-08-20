@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Common/Platform.hpp"
 #include <cstdint>
 #include <limits>
 
