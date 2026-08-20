@@ -1,3 +1,6 @@
+// MUST be first: defines platform macros (XRCORE_API, IC, ICF, etc.)
+#include "Common/Platform.hpp"
+
 #include "pch_script.h"
 #include "ai_space.h"
 #include "object_factory.h"
