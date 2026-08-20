@@ -10,7 +10,7 @@
 #ifndef xrServer_SpaceH
 #define xrServer_SpaceH
 
-#if !defined(MASTER_GOLD) && !defined(ANDROID)
+#ifndef MASTER_GOLD
 #define SERVER_ENTITY_EDITOR_METHODS virtual void FillProps(LPCSTR pref, PropItemVec& values);
 #else
 #define SERVER_ENTITY_EDITOR_METHODS

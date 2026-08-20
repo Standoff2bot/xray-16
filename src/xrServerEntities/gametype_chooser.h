@@ -48,16 +48,14 @@ inline EGameIDs ParseStringToGameType(pcstr str)
     return eGameIDNoGame; //EGameIDs
 }
 
-#ifndef ANDROID
 class PropValue;
 class PropItem;
 using PropItemVec = xr_vector<PropItem*>;
-#endif
 
 struct GameTypeChooser
 {
     Flags16 m_GameType;
-#if !defined(MASTER_GOLD) && !defined(ANDROID)
+#ifndef MASTER_GOLD
     void FillProp(LPCSTR pref, PropItemVec& items);
 #endif
 
