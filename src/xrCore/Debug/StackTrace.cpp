@@ -7,7 +7,9 @@
 #ifdef XR_PLATFORM_WINDOWS
 #   include <DbgHelp.h>
 #elif defined(XR_PLATFORM_LINUX) || defined(XR_PLATFORM_APPLE) || defined(XR_PLATFORM_BSD)
-#   if __has_include(<execinfo.h>)
+#   if __has_include(<execinfo.h>) && !defined(ANDROID)
+        // Android Bionic libc has <execinfo.h> header but does NOT implement
+        // backtrace() and backtrace_symbols() functions - they are GNU libc specific
 #       include <execinfo.h>
 #       define BACKTRACE_AVAILABLE
 
