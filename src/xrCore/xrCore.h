@@ -1,5 +1,8 @@
 #pragma once
 
+// MUST be first: defines platform macros (XR_EXPORT, XR_IMPORT, IC, ICF, etc.)
+#include "Common/Platform.hpp"
+
 #define MACRO_TO_STRING_HELPER(a) #a
 #define MACRO_TO_STRING(a) MACRO_TO_STRING_HELPER(a)
 
