@@ -251,17 +251,27 @@ void xrCore::Initialize(pcstr _ApplicationName, pcstr commandLine, bool init_fs,
         struct passwd *pw = getpwuid(uid);
         if (pw)
         {
-            strncpy(UserName, pw->pw_gecos, sizeof(UserName) - 1);
-            if (UserName[0] == '\0')
+            // pw_gecos may be nullptr on Android, use pw_name as fallback
+            if (pw->pw_gecos && pw->pw_gecos[0] != '\0')
+                strncpy(UserName, pw->pw_gecos, sizeof(UserName) - 1);
+            else if (pw->pw_name && pw->pw_name[0] != '\0')
                 strncpy(UserName, pw->pw_name, sizeof(UserName) - 1);
+            else
+                strncpy(UserName, "android", sizeof(UserName) - 1);
         }
         else
-            Msg("! Failed to get user name");
+        {
+            Msg("! Failed to get user name, using default");
+            strncpy(UserName, "android", sizeof(UserName) - 1);
+        }
 
         if (gethostname(CompName, sizeof(CompName)) == 0)
             CompName[sizeof(CompName) - 1] = '\0';
         else
-            Msg("! Failed to get computer name");
+        {
+            Msg("! Failed to get computer name, using default");
+            strncpy(CompName, "android", sizeof(CompName) - 1);
+        }
 #else
 #   error Select or add implementation for your platform
 #endif
